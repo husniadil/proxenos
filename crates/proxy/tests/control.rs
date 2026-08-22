@@ -4514,9 +4514,12 @@ async fn the_rendered_usage_names_every_account() {
 
     let rendered = render::usage(&harness.call("usage").await.unwrap());
 
-    // The serving account has made no turn, and says so rather than borrowing
-    // the pinned account's figure.
-    assert!(rendered.contains("none has been made"), "{rendered}");
+    // No turn as the serving account has reached this daemon, and it says so
+    // rather than borrowing the pinned account's figure.
+    assert!(
+        rendered.contains("this daemon has recorded no turn"),
+        "{rendered}"
+    );
     assert!(rendered.contains("spare"), "{rendered}");
     assert!(rendered.contains("77% used"), "{rendered}");
     assert!(rendered.contains("rode a turn"), "{rendered}");
@@ -4935,5 +4938,82 @@ async fn a_usage_reason_names_the_provider_it_describes() {
             .unwrap()
             .starts_with("codex reports quota"),
         "{main}"
+    );
+}
+
+/// An absent figure is a statement about this daemon's record, not about the
+/// account.
+///
+/// A turn relayed by a CLI process reads the same quota headers the ingress
+/// path does, and that process exits with them. "None has been relayed as this
+/// account" is then false of the account while being true of the store, and
+/// the reader has no way to tell which one the sentence meant. Every reason
+/// for an absent figure says whose knowledge it is describing.
+#[tokio::test]
+async fn an_absent_figure_describes_the_store_not_the_account() {
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add(&grant("acct_main", "a-main"), Some("main"))
+        .unwrap();
+    harness
+        .store
+        .add_key("relay", "relay-secret", Provider::Anthropic)
+        .unwrap();
+
+    let usage = harness.call("usage").await.unwrap();
+    let accounts = usage["accounts"].as_array().expect("named figures");
+
+    for name in ["main", "relay"] {
+        let entry = accounts
+            .iter()
+            .find(|entry| entry["account"] == json!(name))
+            .unwrap_or_else(|| panic!("`{name}` should be reported: {usage}"))
+            .clone();
+        let detail = entry["detail"].as_str().unwrap_or_default().to_owned();
+        assert!(
+            detail.contains("this daemon"),
+            "the reason should name whose record it describes: {detail}"
+        );
+        assert!(
+            !detail.contains("has been relayed as this account")
+                && !detail.contains("has been made as this account"),
+            "the reason must not claim the account itself has spent nothing: {detail}"
+        );
+    }
+
+    // The rendered block is what the operator reads, and it is the sentence
+    // that has to be true.
+    let rendered = render::usage(&usage);
+    eprintln!("{rendered}");
+    assert!(
+        !rendered.contains("none has been relayed as this account"),
+        "{rendered}"
+    );
+}
+
+/// The daemon-wide line makes the same claim under the same limit.
+///
+/// It is the block a single-account daemon prints, so if it overclaims the
+/// per-account fix (`proxy-behavior.md` §6.1) reaches nobody.
+#[tokio::test]
+async fn the_daemon_wide_absence_describes_the_store_too() {
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add(&grant("acct_main", "a-main"), Some("main"))
+        .unwrap();
+
+    let usage = harness.call("usage").await.unwrap();
+    let detail = usage["detail"].as_str().unwrap_or_default().to_owned();
+
+    assert_eq!(usage["known"], json!(false), "{usage}");
+    assert!(
+        detail.contains("this daemon"),
+        "the reason should name whose record it describes: {detail}"
+    );
+    assert!(
+        !detail.contains("none has been made yet"),
+        "the reason must not claim nothing has been spent anywhere: {detail}"
     );
 }

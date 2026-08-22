@@ -619,6 +619,15 @@ becomes `cache_read_input_tokens`.
 no distinct write event to report. It stays zero rather than being synthesized
 into something plausible.
 
+**What was never observed is reported as unobserved, not as nothing.** The same
+rule reaches past a turn's own counters to the quota figures of §8.3: this
+daemon records the turns that pass through it, and a turn spent elsewhere —
+`doctor --live` relays one from a CLI process that exits holding its response
+headers — leaves it nothing. So an account with no figure reports that *this
+daemon* has recorded no turn as it, which is a claim the store can make. "None
+has been spent as this account" is a claim about the account, and the store has
+no standing to make it.
+
 ### 6.2 The two points that need an estimate
 
 `count_tokens` is a pre-flight call: nothing has been sent, and the Responses API
@@ -1279,7 +1288,9 @@ reported.
 
 **Absent stays absent.** A window a provider did not report is omitted rather
 than rendered as zero used, and an account with no figure at all reports that
-it has none. That covers every account of the second provider, whose quota
+it has none — as a statement about this daemon's record (§6.1), because a turn
+made outside the daemon is invisible here and reporting it as unspent would be
+wrong about the account. That covers every account of the second provider, whose quota
 endpoint is an open question (`roadmap.md` §L) — until it is answered, those
 accounts report unavailable rather than a plausible figure.
 

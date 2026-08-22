@@ -315,8 +315,13 @@ account it names (`proxy-behavior.md` §7.1), so a daemon can hold two live
 figures at once. Each is held under the account that earned it and reported
 beside the serving one, with how it was come by — riding a turn, or asked for
 over the socket — and the moment it was taken. An account with no figure says
-so, and says why: no turn made as it yet, a key holding no subscription
-entitlement, or a provider that does not report a quota to this proxy at all.
+so, and says why: no turn as it recorded by this daemon yet, a key holding no
+subscription entitlement, or a provider that does not report a quota to this
+proxy at all. That first reason is scoped to the daemon on purpose
+(`proxy-behavior.md` §6.1): a turn relayed by a CLI process — `doctor --live`
+makes one — reads the same quota headers and exits with them, so the account
+has spent something the daemon never saw, and a line claiming none had been
+spent would be false.
 
 **A second-provider account earns its figure the same way**, from the
 `anthropic-ratelimit-unified-*` headers on the response to a relayed turn
