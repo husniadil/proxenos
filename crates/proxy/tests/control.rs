@@ -3484,6 +3484,15 @@ async fn a_switch_the_target_account_cannot_serve_is_refused() {
         error.contains("a-model-this-account-has-not"),
         "the refusal should name the model: {error}"
     );
+    // The tier table is shared and a catalog is one account's menu (§7.0), so
+    // this recurs on every switch between accounts on different plans. Naming
+    // only the model reads as a broken mapping rather than as one belonging to
+    // a different account, and the operator hits it again on the way back.
+    assert!(
+        error.contains("acct_one") && error.contains("[accounts.acct_one.tiers]"),
+        "the refusal should say whose menu refused, and how to give that \
+         account its own mapping: {error}"
+    );
     assert_eq!(
         harness.store.load().unwrap().unwrap().access_token,
         "a-two",
@@ -4333,6 +4342,7 @@ fn quota(used_percent: f64) -> proxenos::usage::Snapshot {
             used_percent,
             window_minutes: Some(300),
             resets_at: Some(1_789_487_264),
+            ..proxenos::usage::Window::default()
         }],
     }
 }
@@ -4444,6 +4454,18 @@ async fn an_account_with_no_figure_reports_unavailable() {
         );
     }
     assert_eq!(by_name("main")["known"], json!(true));
+
+    // "None has been relayed" is a claim about the world; what this daemon can
+    // say is that none reached it. A turn relayed by `doctor --live` spends the
+    // account for real and dies with that process, so the two genuinely differ.
+    let relayed = by_name("relay")["detail"].as_str().unwrap().to_owned();
+    assert!(relayed.contains("through this daemon"), "{relayed}");
+
+    // A key is the one credential kind whose spend is metered per token, so an
+    // absence stated on its own reads as safety — the row that most deserves a
+    // number is the only one whose silence sounds reassuring.
+    let keyed = by_name("billing")["detail"].as_str().unwrap().to_owned();
+    assert!(keyed.contains("metered per token"), "{keyed}");
 }
 
 /// Why a second-provider account has no figure yet points at the turn that

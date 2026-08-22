@@ -224,6 +224,7 @@ fn snapshot(used_percent: f64) -> Snapshot {
             used_percent,
             window_minutes: Some(300),
             resets_at: Some(1_789_487_264),
+            ..proxenos::usage::Window::default()
         }],
     }
 }
@@ -456,4 +457,208 @@ fn a_rejected_status_reads_as_the_limit_reached() {
     let snapshot = Snapshot::from_headers(&headers).expect("a window was reported");
     assert!(snapshot.limit_reached);
     assert_eq!(snapshot.windows[0].used_percent, 100.0);
+}
+
+/// Headers captured from one live relayed turn, as a header map.
+fn relay_quota_headers() -> axum::http::HeaderMap {
+    let captured: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/upstream/relay-quota-headers.json"
+    ))
+    .expect("the fixture is JSON");
+
+    let mut headers = axum::http::HeaderMap::new();
+    for (name, value) in captured["headers"].as_object().expect("a header map") {
+        headers.insert(
+            axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            value.as_str().unwrap().parse().unwrap(),
+        );
+    }
+    headers
+}
+
+/// The provider attaches a status to each window, and `allowed_warning` is an
+/// account past the threshold the provider itself set on a turn that still went
+/// through. Dropping it at parse leaves the meter printing the number and none
+/// of the warning that came with it.
+#[test]
+fn a_per_window_warning_survives_the_parse() {
+    let snapshot = Snapshot::from_headers(&relay_quota_headers()).expect("a quota was reported");
+
+    let window = |minutes: u64| {
+        snapshot
+            .windows
+            .iter()
+            .find(|window| window.window_minutes == Some(minutes))
+            .unwrap_or_else(|| panic!("no {minutes}-minute window in {:?}", snapshot.windows))
+    };
+
+    assert_eq!(window(300).status.as_deref(), Some("allowed"));
+    assert_eq!(window(300).surpassed_threshold, None);
+    assert_eq!(window(10080).status.as_deref(), Some("allowed_warning"));
+    assert_eq!(window(10080).surpassed_threshold, Some(0.75));
+    // The turn went through. A warning is not a refusal, and reading it as one
+    // would show a limit the account has not hit.
+    assert!(!snapshot.limit_reached);
+}
+
+/// The provider names which window decides whether the account is about to be
+/// cut off. With `5h` at 13% and `7d` at 93%, a reader taking the first line
+/// reads the reassuring one.
+#[test]
+fn the_representative_window_is_the_one_the_provider_names() {
+    let snapshot = Snapshot::from_headers(&relay_quota_headers()).expect("a quota was reported");
+
+    let representative: Vec<Option<u64>> = snapshot
+        .windows
+        .iter()
+        .filter(|window| window.representative)
+        .map(|window| window.window_minutes)
+        .collect();
+    assert_eq!(representative, vec![Some(10080)]);
+}
+
+/// The overage window is a real window with a real figure. Dropping it at parse
+/// is not the same as deciding it does not belong on the meter.
+#[test]
+fn the_overage_window_is_kept() {
+    let snapshot = Snapshot::from_headers(&relay_quota_headers()).expect("a quota was reported");
+
+    let overage = snapshot
+        .windows
+        .iter()
+        .find(|window| window.label.as_deref() == Some("overage"))
+        .unwrap_or_else(|| panic!("no overage window in {:?}", snapshot.windows));
+    assert_eq!(overage.used_percent, 0.0);
+    assert_eq!(overage.resets_at, Some(1_788_220_800));
+    assert_eq!(overage.status.as_deref(), Some("allowed"));
+    // It has no duration on the wire, and inventing one would name a window the
+    // provider never named.
+    assert_eq!(overage.window_minutes, None);
+    assert!(!overage.representative);
+}
+
+/// A window whose reset has passed is a figure about a window that is over.
+/// Whether that is so is a property of one window, never of the snapshot: a
+/// stored snapshot can hold a five-hour window that has turned over beside a
+/// seven-day one that has not.
+#[test]
+fn staleness_is_a_property_of_one_window() {
+    let snapshot = Snapshot::from_headers(&relay_quota_headers()).expect("a quota was reported");
+
+    let window = |minutes: u64| {
+        snapshot
+            .windows
+            .iter()
+            .find(|window| window.window_minutes == Some(minutes))
+            .expect("the window is in the fixture")
+    };
+
+    // Between the 5h reset and the 7d one, which is exactly the case marking
+    // the whole snapshot would get wrong in both directions at once.
+    let between = 1_787_350_000;
+    assert!(window(300).is_stale_at(between));
+    assert!(!window(10080).is_stale_at(between));
+
+    // Before either reset, both figures still describe the window they came
+    // from.
+    assert!(!window(300).is_stale_at(1_787_338_000));
+    assert!(!window(10080).is_stale_at(1_787_338_000));
+
+    // After both, both have turned over.
+    assert!(window(300).is_stale_at(1_787_400_000));
+    assert!(window(10080).is_stale_at(1_787_400_000));
+}
+
+/// A window the provider stated no reset for cannot be said to have turned
+/// over. Guessing it has would hide a figure that is still true.
+#[test]
+fn a_window_with_no_reset_is_never_called_stale() {
+    let window = proxenos::usage::Window {
+        used_percent: 42.0,
+        window_minutes: Some(300),
+        ..proxenos::usage::Window::default()
+    };
+    assert!(!window.is_stale_at(u64::MAX));
+}
+
+/// The meter renders a window against a clock, so a figure whose window has
+/// since turned over can say so. Rendering it silently reads as spend the
+/// account has not made, which is what sends an operator to switch accounts
+/// they did not need to switch.
+#[test]
+fn a_window_that_has_reset_says_so_on_the_meter() {
+    let snapshot = Snapshot::from_headers(&relay_quota_headers()).expect("a quota was reported");
+    let mut result = snapshot.to_json();
+    result["accounts"] = serde_json::json!([]);
+
+    // Between the 5h reset and the 7d one.
+    let rendered = proxenos::render::usage_at(&result, 1_787_350_000);
+    let five_hour = rendered
+        .lines()
+        .find(|line| line.starts_with("5h"))
+        .unwrap_or_else(|| panic!("no 5h line in:\n{rendered}"));
+    let seven_day = rendered
+        .lines()
+        .find(|line| line.starts_with("7d"))
+        .unwrap_or_else(|| panic!("no 7d line in:\n{rendered}"));
+
+    assert!(five_hour.contains("window has since reset"), "{rendered}");
+    assert!(
+        !seven_day.contains("window has since reset"),
+        "the seven-day figure is still true:\n{rendered}"
+    );
+
+    // Before either reset, neither figure has outlived its window.
+    let fresh = proxenos::render::usage_at(&result, 1_787_338_000);
+    assert!(!fresh.contains("window has since reset"), "{fresh}");
+}
+
+/// The provider's own warning, its own threshold, and its own answer to which
+/// window decides — all three are on the wire of every relayed turn, and a
+/// meter printing the number alone drops each of them.
+#[test]
+fn the_meter_carries_the_providers_own_words() {
+    let snapshot = Snapshot::from_headers(&relay_quota_headers()).expect("a quota was reported");
+    let mut result = snapshot.to_json();
+    result["accounts"] = serde_json::json!([]);
+
+    let rendered = proxenos::render::usage_at(&result, 1_787_338_000);
+    let line = |prefix: &str| {
+        rendered
+            .lines()
+            .find(|line| line.starts_with(prefix))
+            .unwrap_or_else(|| panic!("no {prefix} line in:\n{rendered}"))
+            .to_owned()
+    };
+
+    // The seven-day window is the one the provider named, and the one it
+    // warned about.
+    assert!(line("7d").contains("decides"), "{rendered}");
+    assert!(line("7d").contains("past the provider's 75%"), "{rendered}");
+    // The five-hour window was allowed with no warning, and saying nothing is
+    // the accurate thing to say about it.
+    assert!(!line("5h").contains("decides"), "{rendered}");
+    assert!(!line("5h").contains("past the provider's"), "{rendered}");
+    // The overage window is named by the provider's word for it, because it
+    // has no duration to be named by.
+    assert!(line("overage").contains("0% used"), "{rendered}");
+}
+
+/// One `accounts --use` moves every unpinned turn onto that account's provider
+/// and its subscription. The operator asked for it; the command reads smaller
+/// than what it does, and the provider is the half a name does not state.
+#[test]
+fn selecting_an_account_says_which_provider_now_serves() {
+    let rendered = proxenos::render::selected_account(&serde_json::json!({
+        "selected": "personal-relay",
+        "provider": "anthropic",
+    }));
+    assert!(rendered.contains("personal-relay"), "{rendered}");
+    assert!(rendered.contains("anthropic"), "{rendered}");
+    assert!(rendered.contains("subscription"), "{rendered}");
+
+    // A daemon that could not name the provider says the part it knows and
+    // invents nothing.
+    let quiet = proxenos::render::selected_account(&serde_json::json!({ "selected": "spare" }));
+    assert_eq!(quiet, "serving turns as spare");
 }

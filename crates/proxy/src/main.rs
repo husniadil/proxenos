@@ -325,6 +325,14 @@ async fn store_key(
         );
     };
 
+    // Silence while reading a tty reads as a hang: nothing has been printed,
+    // and the only hint that ctrl-d is wanted arrives after an empty read —
+    // once the operator has already guessed. Said to stderr and only where a
+    // person is typing, so a piped key stays exactly as it was.
+    if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        eprintln!("Paste the {} key, then press ctrl-d:", provider.as_str());
+    }
+
     let mut key = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut key)
         .map_err(|error| anyhow::anyhow!("could not read the key from stdin: {error}"))?;

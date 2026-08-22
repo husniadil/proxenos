@@ -220,10 +220,21 @@ pub fn forgotten_account(result: &Value) -> String {
 /// What a switch says it did. The name, because the caller may have typed a
 /// label and the daemon is the side that resolved it.
 pub fn selected_account(result: &Value) -> String {
-    match field(result, "selected").and_then(Value::as_str) {
-        Some(name) => format!("serving turns as {name}"),
-        None => "no account selected".to_owned(),
+    let Some(name) = field(result, "selected").and_then(Value::as_str) else {
+        return "no account selected".to_owned();
+    };
+
+    let mut lines = vec![format!("serving turns as {name}")];
+    // What one `accounts --use` actually moves. Every unpinned turn now goes
+    // to that account's provider, and spends that provider's subscription —
+    // asked for, but the command reads smaller than its blast radius, and the
+    // provider is the half a name does not state.
+    if let Some(provider) = field(result, "provider").and_then(Value::as_str) {
+        lines.push(format!(
+            "  every unpinned turn now goes to {provider}, on that account's subscription"
+        ));
     }
+    lines.join("\n")
 }
 
 pub fn status(result: &Value) -> String {
@@ -497,6 +508,25 @@ pub fn models(result: &Value) -> String {
 /// caller wanting this every few seconds is building. `--json` is there for the
 /// second case; this is the first.
 pub fn usage(result: &Value) -> String {
+    usage_at(result, now())
+}
+
+/// Epoch seconds. A meter that says a window has turned over needs a clock to
+/// say it against.
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
+/// The meter, rendered against a stated clock.
+///
+/// Separate from [`usage`] because window staleness is the one thing here that
+/// is not a pure function of the answer: the same snapshot reads differently an
+/// hour later, and a test asserting that cannot be at the mercy of the wall
+/// clock.
+#[must_use]
+pub fn usage_at(result: &Value, now: u64) -> String {
     let mut lines = Vec::new();
 
     if field(result, "known").and_then(Value::as_bool) != Some(true) {
@@ -509,7 +539,7 @@ pub fn usage(result: &Value) -> String {
         // Not a return. Another account may hold a figure, and a daemon that
         // printed nothing but "none yet" would hide the pinned tier's quota
         // from the one place a person looks for it.
-        lines.extend(per_account(result));
+        lines.extend(per_account(result, now));
         return lines.join("\n");
     }
 
@@ -532,14 +562,14 @@ pub fn usage(result: &Value) -> String {
         let used = field(window, "used_percent")
             .and_then(Value::as_f64)
             .unwrap_or_default();
-        let span = field(window, "window_minutes")
-            .and_then(Value::as_u64)
-            .map(describe_window)
-            .unwrap_or_else(|| "unknown window".to_owned());
-        lines.push(format!("{span:<10} {used:.0}% used"));
+        lines.push(format!(
+            "{:<10} {used:.0}% used{}",
+            name_window(window),
+            notes(window, now)
+        ));
     }
 
-    lines.extend(per_account(result));
+    lines.extend(per_account(result, now));
     lines.join("\n")
 }
 
@@ -548,7 +578,7 @@ pub fn usage(result: &Value) -> String {
 /// A single account's figure is the block above, and repeating it under its own
 /// name says nothing. Two accounts can serve one session, and then whose figure
 /// is whose is the whole question.
-fn per_account(result: &Value) -> Vec<String> {
+fn per_account(result: &Value, now: u64) -> Vec<String> {
     let accounts = field(result, "accounts")
         .and_then(Value::as_array)
         .cloned()
@@ -588,11 +618,11 @@ fn per_account(result: &Value) -> Vec<String> {
                     let used = field(window, "used_percent")
                         .and_then(Value::as_f64)
                         .unwrap_or_default();
-                    let span = field(window, "window_minutes")
-                        .and_then(Value::as_u64)
-                        .map(describe_window)
-                        .unwrap_or_else(|| "unknown window".to_owned());
-                    format!("{span} {used:.0}% used")
+                    format!(
+                        "{} {used:.0}% used{}",
+                        name_window(window),
+                        notes(window, now)
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join(" · ")
@@ -607,6 +637,62 @@ fn per_account(result: &Value) -> Vec<String> {
         format!("{marker} {name:<24} {figures}   {source}")
     }));
     lines
+}
+
+/// What to call a window.
+///
+/// Duration where the provider stated one, and the provider's own name where it
+/// did not — an overage window has a figure and a reset and no length at all,
+/// and "unknown window" says less than the word the provider used.
+fn name_window(window: &Value) -> String {
+    if let Some(minutes) = field(window, "window_minutes").and_then(Value::as_u64) {
+        return describe_window(minutes);
+    }
+    field(window, "label")
+        .and_then(Value::as_str)
+        .map_or_else(|| "unknown window".to_owned(), str::to_owned)
+}
+
+/// Everything the provider said about a window beyond its number.
+///
+/// All of it rides the same headers the figure does, and a meter printing the
+/// number alone drops the provider's own warning, its own threshold, and its
+/// own answer to which window decides. Each is said only where the provider
+/// said it; nothing here is inferred from the percentage.
+fn notes(window: &Value, now: u64) -> String {
+    let mut notes = Vec::new();
+
+    // A figure whose window has turned over describes a window that is back to
+    // zero. It errs toward overstating — spend shown against an empty window
+    // sends an operator to switch accounts they did not need to switch — so it
+    // is said first.
+    let resets_at = field(window, "resets_at").and_then(Value::as_u64);
+    if resets_at.is_some_and(|resets_at| now >= resets_at) {
+        notes.push("window has since reset".to_owned());
+    }
+
+    // The provider names one window as the one that decides whether the
+    // account is about to be cut off. With one window near empty and another
+    // near full, a reader taking the first line reads the reassuring one.
+    if field(window, "representative").and_then(Value::as_bool) == Some(true) {
+        notes.push("decides".to_owned());
+    }
+
+    // A turn that went through can still carry a warning the provider attached
+    // to it, against a threshold the provider itself set.
+    if field(window, "status").and_then(Value::as_str) == Some("allowed_warning") {
+        notes.push(
+            match field(window, "surpassed_threshold").and_then(Value::as_f64) {
+                Some(threshold) => format!("past the provider's {:.0}%", threshold * 100.0),
+                None => "the provider warns on this window".to_owned(),
+            },
+        );
+    }
+
+    if notes.is_empty() {
+        return String::new();
+    }
+    format!("   ({})", notes.join(", "))
 }
 
 /// A window length in the units a person would say it in.

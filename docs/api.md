@@ -778,11 +778,11 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 | `status` | connection state, whether the grant has been **refused**, plan and which source reported it, the tier mapping and the effort ceiling, any mapped model the catalog withholds, whether the catalog was authoritative, the client policy in effect, and the build and `instance` serving the socket | yes |
 | `accounts.forget` | forgets one account — the selected one, or `{"account": name}` — and answers with the name it cleared and the one serving turns afterwards; the rest stay usable, and an idle account's removal leaves the serving grant's quota alone | no — was `disconnect` |
 | `accounts` | every stored account, what kind of credential each holds, and which one serves turns; no tokens | no — v0.3 |
-| `accounts.select` | `{"account": name}`, the account every following turn is made as, whether the catalog was refetched for it, and the tier mapping now in force; refuses, and moves nothing, where that account's mapping names a model its catalog does not have | no — v0.3 |
+| `accounts.select` | `{"account": name}`, the account every following turn is made as, the `provider` it is on — one select moves every unpinned turn onto that provider's subscription — whether the catalog was refetched for it, and the tier mapping now in force; refuses, and moves nothing, where that account's mapping names a model its catalog does not have, naming whose menu refused and how to give that account its own mapping | no — v0.3 |
 | `accounts.rename` | `{"account": from, "name": to}`, the name this daemon calls an account by, and whether an account section moved with it; the grant and the account id are untouched | no — v0.3 |
 | `models` | catalog, whether it is the fallback list, and whether it was fetched for an account other than the one serving turns | yes |
 | `tiers` | tier mapping | no — was `tiers.get` |
-| `usage` | the serving account's quota as of its last turn, or that no turn has been made, plus `models` — the ids this daemon serves — and `accounts`, one entry per stored account with its own figure, its freshness, and `unavailable` where it has none | yes |
+| `usage` | the serving account's quota as of its last turn, or that no turn has been made, plus `models` — the ids this daemon serves — and `accounts`, one entry per stored account with its own figure, its freshness, and `unavailable` where it has none. Each window carries `used_percent`, `window_minutes`, `resets_at`, and — where the provider stated them — `status`, `surpassed_threshold`, `representative`, and `label` for a window no duration identifies | yes |
 | `usage.refresh` | asks the backend for a figure now, for a front-end with nothing to show on a daemon that has served no turn | yes |
 | `env` | the §2.2 block: `variables`, and `settings` always present | yes |
 | `shutdown` | `{"stopping": true, "version": ...}`, then the process goes once the answer is written | yes |
@@ -991,6 +991,22 @@ matching. A join takes the running flow's label along with its URL, and the
 answer states the label in force rather than echoing the one asked for: a
 caller that could not tell would go looking for an account that was never going
 to exist. An abandoned flow releases the port after ten minutes.
+
+**A window states more than a percentage where the provider stated more.** Each
+window carries its reset epoch, and — where the provider gives them — its own
+status, the threshold behind that status, whether the provider named it the
+representative window, and a label for a window duration cannot identify (an
+overage window has no length). `usage` renders each of those beside the figure,
+and marks a window whose reset has already passed: the figure is real but
+describes a window that has since turned over, and nothing else in the answer
+would say so. Staleness is per window — one snapshot can hold a five-hour window
+that has turned over beside a seven-day one that has not — and a window with no
+reset stated is never marked.
+
+**`accounts --use` says which provider now serves.** One select moves every
+unpinned turn onto that account's provider and spends that provider's
+subscription. The operator asked for it, but a name does not state a provider,
+and only the daemon holds the answer.
 
 **`usage.refresh` is not the primary path and does not replace it.** The backend
 volunteers a snapshot at the head of every stream; that one is free, rides a turn

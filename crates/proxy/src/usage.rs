@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::sync::Mutex;
 
 /// One quota window as the backend reports it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Window {
     pub used_percent: f64,
     /// How long the window is. The backend has changed which windows it
@@ -21,6 +21,49 @@ pub struct Window {
     pub window_minutes: Option<u64>,
     /// Epoch seconds.
     pub resets_at: Option<u64>,
+    /// The provider's own name for a window whose length does not identify it.
+    ///
+    /// An overage window has a figure and a reset and no duration at all, so
+    /// duration cannot be what names it. Absent where the duration already
+    /// does the naming.
+    pub label: Option<String>,
+    /// The provider's own word on this window — `allowed`, `allowed_warning`,
+    /// `rejected`.
+    ///
+    /// A turn that went through can still carry a warning the provider
+    /// attached to it, and the number alone does not say so.
+    pub status: Option<String>,
+    /// The fraction at which the provider itself starts warning, where it said
+    /// one. A threshold nobody stated is absent rather than assumed.
+    pub surpassed_threshold: Option<f64>,
+    /// Whether the provider named this window as the one that speaks for the
+    /// account.
+    ///
+    /// With one window near empty and another near full in the same snapshot,
+    /// this is the provider's own answer to which decides whether the account
+    /// is about to be cut off.
+    pub representative: bool,
+}
+
+impl Window {
+    /// Whether this window's figure describes a window that has since turned
+    /// over.
+    ///
+    /// **A property of one window, never of a snapshot.** One snapshot can
+    /// hold a five-hour window whose reset has passed beside a seven-day one
+    /// whose has not, and marking the snapshot would be wrong in both
+    /// directions at once — hiding a figure that is still true, or passing one
+    /// that is not.
+    ///
+    /// A window the provider stated no reset for is never called stale.
+    /// Guessing it has turned over would drop a figure on no evidence, and the
+    /// error this exists to prevent is the opposite one: a spent figure shown
+    /// against an empty window sends an operator to switch accounts they did
+    /// not need to switch.
+    #[must_use]
+    pub fn is_stale_at(&self, now: u64) -> bool {
+        self.resets_at.is_some_and(|resets_at| now >= resets_at)
+    }
 }
 
 /// The account's quota, as of one turn.
@@ -144,19 +187,39 @@ impl Snapshot {
     pub fn from_headers(headers: &axum::http::HeaderMap) -> Option<Self> {
         let read = |name: &str| headers.get(name)?.to_str().ok()?.parse::<f64>().ok();
 
-        let windows: Vec<Window> = [(FIVE_HOURS, "5h"), (SEVEN_DAYS, "7d")]
-            .into_iter()
-            .filter_map(|(nominal, slot)| {
-                let utilization = read(&format!("anthropic-ratelimit-unified-{slot}-utilization"))?;
-                Some(Window {
-                    used_percent: (utilization * 100.0).clamp(0.0, 100.0),
-                    window_minutes: Some(nominal),
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    resets_at: read(&format!("anthropic-ratelimit-unified-{slot}-reset"))
-                        .map(|reset| reset as u64),
-                })
+        let text = |name: &str| Some(headers.get(name)?.to_str().ok()?.to_owned());
+
+        // Which window the provider says speaks for the account. Its own
+        // vocabulary, not a duration, so it is matched to a slot by name.
+        let representative = text("anthropic-ratelimit-unified-representative-claim");
+        let representative = representative.as_deref();
+
+        // The overage window carries a figure and a reset and no duration at
+        // all, so it is named rather than measured. Dropping it silently is
+        // not the same as deciding it does not belong.
+        let windows: Vec<Window> = [
+            (Some(FIVE_HOURS), None, "5h", "five_hour"),
+            (Some(SEVEN_DAYS), None, "7d", "seven_day"),
+            (None, Some("overage"), "overage", "overage"),
+        ]
+        .into_iter()
+        .filter_map(|(nominal, label, slot, claim)| {
+            let utilization = read(&format!("anthropic-ratelimit-unified-{slot}-utilization"))?;
+            Some(Window {
+                used_percent: (utilization * 100.0).clamp(0.0, 100.0),
+                window_minutes: nominal,
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                resets_at: read(&format!("anthropic-ratelimit-unified-{slot}-reset"))
+                    .map(|reset| reset as u64),
+                label: label.map(str::to_owned),
+                status: text(&format!("anthropic-ratelimit-unified-{slot}-status")),
+                surpassed_threshold: read(&format!(
+                    "anthropic-ratelimit-unified-{slot}-surpassed-threshold"
+                )),
+                representative: representative == Some(claim),
             })
-            .collect();
+        })
+        .collect();
 
         if windows.is_empty() {
             return None;
@@ -239,6 +302,10 @@ impl Snapshot {
                 "used_percent": window.used_percent,
                 "window_minutes": window.window_minutes,
                 "resets_at": window.resets_at,
+                "label": window.label,
+                "status": window.status,
+                "surpassed_threshold": window.surpassed_threshold,
+                "representative": window.representative,
             })).collect::<Vec<_>>(),
         })
     }
@@ -253,6 +320,7 @@ fn parse_window(value: &Value) -> Option<Window> {
         used_percent: used_percent.clamp(0.0, 100.0),
         window_minutes: value.get("window_minutes").and_then(Value::as_u64),
         resets_at: value.get("reset_at").and_then(Value::as_u64),
+        ..Window::default()
     })
 }
 
@@ -271,6 +339,7 @@ fn parse_rest_window(value: &Value) -> Option<Window> {
             .and_then(Value::as_u64)
             .map(|seconds| seconds / 60),
         resets_at: value.get("reset_at").and_then(Value::as_u64),
+        ..Window::default()
     })
 }
 

@@ -480,7 +480,8 @@ fn unavailable(account: &crate::auth::store::Account) -> String {
         // scope. So the reader is one turn away from a figure, and saying the
         // provider reports none would send them looking for a feature instead.
         return format!(
-            "{provider} states quota on every turn; none has been relayed as this account yet"
+            "{provider} states quota on every turn; none has been relayed through this daemon \
+             as this account yet"
         );
     }
     if account.provider != crate::auth::store::Provider::Codex.as_str() {
@@ -492,9 +493,35 @@ fn unavailable(account: &crate::auth::store::Account) -> String {
     if account.kind == "key" {
         // §8.2 — the figure is a subscription entitlement, and a key is not
         // one.
-        return "a key holds no subscription quota".to_owned();
+        // True about quota, and it is only half of what the reader needs: a key
+        // is the one credential kind whose spend is metered per token, so an
+        // absence stated on its own reads as safety. What this proxy cannot do
+        // is say how much — the figure is a subscription entitlement and a key
+        // holds none, and the per-token spend is the provider's ledger, not
+        // one any turn reports back.
+        return "a key holds no subscription quota; its spend is metered per token \
+                and is not reported to this proxy"
+            .to_owned();
     }
     format!("{provider} reports quota when a turn is made; none has been made as this account yet")
+}
+
+/// Say why a mapping that served one account is refused by another.
+///
+/// The tier table is shared and a catalog is one account's menu (§7.0), so a
+/// tier mapped to a model only one plan offers is refused on every switch to an
+/// account on another plan. The refusal is correct — serving that mapping would
+/// fail one turn later, upstream, saying nothing about tier mapping — but on
+/// its own it reads as a broken mapping rather than as one belonging to a
+/// different account, and the operator hits it again on the next switch back.
+fn per_account_mapping_hint(refusal: ProxyError, account: &str) -> ProxyError {
+    ProxyError::invalid_request(format!(
+        "{refusal}\n\nThat catalog is `{account}`'s own menu, and the tier mapping it was \
+         checked against is the shared one. Where the two accounts are on different plans \
+         this recurs on every switch: give `{account}` its own mapping, either with \
+         `tiers.set` carrying {{\"account\": \"{account}\"}} or as an \
+         `[accounts.{account}.tiers]` section, and the shared table keeps serving the rest."
+    ))
 }
 
 /// `docs/api.md` §2.1 — the environment Claude Code needs.
@@ -1269,7 +1296,7 @@ async fn select_account(state: &ControlState, params: Option<&Value>) -> Result<
             && state.credentials.select(&previous).is_ok()
         {
             refresh_catalog(state).await;
-            return Err(refusal);
+            return Err(per_account_mapping_hint(refusal, name));
         }
         return Err(ProxyError::invalid_request(format!(
             "{refusal}\n\nThe previous account could not be restored, so this daemon is \
@@ -1292,6 +1319,17 @@ async fn select_account(state: &ControlState, params: Option<&Value>) -> Result<
 
     Ok(json!({
         "selected": name,
+        // §9.4 — which provider the selected account is on. One `accounts
+        // --use` moves *every* unpinned turn onto that provider and its
+        // subscription; the operator asked for it, but the command reads
+        // smaller than what it does, and only the daemon knows the answer.
+        "provider": state
+            .credentials
+            .accounts()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|account| account.name == name)
+            .map(|account| account.provider),
         // The catalog is one account's menu (`proxy-behavior.md` §7.0), so it
         // is asked for again as the account now serving. Said out loud because
         // a fetch that failed leaves the previous account's list in force, and

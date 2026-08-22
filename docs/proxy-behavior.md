@@ -1247,6 +1247,12 @@ A key is stored from **stdin**, never from an argument, and under a name the
 operator gives — a command line is visible to every process on the machine and
 lands in shell history, and a key carries no id to be named by.
 
+Reading stdin from a terminal **says what it is waiting for before it waits**.
+An unprompted read is indistinguishable from a hang, and the only hint that
+ctrl-d is wanted arrives after an empty read — once the operator has already
+guessed. The prompt goes to stderr and only where a person is typing, so a piped
+key is byte-for-byte what it was.
+
 Neither kind can be stored over the other. A key written where a grant is
 would retire that grant with nothing said, and a rotation whose account is no
 longer stored is refused rather than appended — appending it would create an
@@ -1282,6 +1288,46 @@ than rendered as zero used, and an account with no figure at all reports that
 it has none. That covers every account of the second provider, whose quota
 endpoint is an open question (`roadmap.md` §L) — until it is answered, those
 accounts report unavailable rather than a plausible figure.
+
+**A window carries the provider's own words, not only its number.** Where the
+provider states a per-window status, the threshold it set for that status, or
+which window it considers representative of the account, each is parsed and
+reported. None is inferred from the percentage. An account can sit at 93% on a
+window the provider has already flagged `allowed_warning` past a threshold it
+published, on a turn that still went through — `limit_reached` stays false,
+because only an outright refusal is the limit being reached, and the warning is
+carried beside the figure rather than folded into it. Where the provider names
+one window as the one that decides, that window is marked: with one window near
+empty and another near full in the same snapshot, an unmarked list reads
+whichever line comes first, and that is the reassuring one.
+
+**A window the provider named rather than measured is kept under its name.** An
+overage window has a figure and a reset and no duration at all, so duration
+cannot identify it; it is carried with the provider's own word for it. Dropping
+it at parse is not the same as deciding it does not belong on a meter — the one
+is silent, and the figure was in hand.
+
+**Staleness is a property of a window, never of a snapshot.** A stored figure
+outlives the window it describes: the provider resets on a schedule and this
+proxy learns a new figure only when a turn is made, so after a reset with no
+turn since, the last figure still describes a window that is back to zero. One
+snapshot can hold a five-hour window whose reset has passed beside a seven-day
+one whose has not, so marking the snapshot would be wrong in both directions at
+once — hiding a seven-day figure that is still true, or passing a five-hour one
+that is not. It is stated per window, against the reset epoch the provider
+already gave, and a window the provider stated no reset for is never called
+stale. The error this exists to prevent is the overstating one: spend shown
+against an empty window sends an operator to switch accounts they did not need
+to switch.
+
+**An absence says how far this daemon can see.** "No turn has been relayed as
+this account" is a claim about the world; what a daemon can say is that none
+reached it. A turn relayed outside it — `doctor --live --probe relay` builds its
+own store and spends the account for real — leaves no figure here, and the two
+genuinely differ. And a key account's absence is stated with what it does not
+cover: the figure is a subscription entitlement and a key holds none, but a key
+is the one credential kind whose spend is metered per token, so an absence
+stated alone is the row that most deserves a number reading as safety.
 
 **What a select and a removal invalidate.** With every figure held under a name,
 a **select** invalidates nothing that is named: each figure still describes the
