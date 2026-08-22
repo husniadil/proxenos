@@ -619,6 +619,22 @@ becomes `cache_read_input_tokens`.
 no distinct write event to report. It stays zero rather than being synthesized
 into something plausible.
 
+**The same counts are tallied per account, and never become a cost.** A
+completed turn's input and output counts are added to the account that served
+it — the pinned account where a tier pinned one, the serving account otherwise
+(§8.3) — so a metered account can be told how much has been spent through this
+daemon. Nothing here knows a price list, and none is inferred: the tally is a
+quantity of tokens and stays one. A turn upstream reported no usage for adds
+nothing rather than zero, and a turn no account can be named for is not counted
+at all, because filing it under whoever happens to be serving would put one
+account's spend under another's name.
+
+**It is a floor, not the account's spend.** The tally starts at zero when the
+daemon starts, nothing persists across a restart, and turns made anywhere else
+are invisible to it. Everywhere it is reported it says so, because a figure
+that reads as the whole of an account's spend is wrong in the reassuring
+direction.
+
 ### 6.2 The two points that need an estimate
 
 `count_tokens` is a pre-flight call: nothing has been sent, and the Responses API
@@ -1227,6 +1243,18 @@ speaking it, so there is no socket to fall back from. And a key account has
 **no quota to report**: the figure is a subscription entitlement, so asking for
 one with a key is the same refusal rather than a request spent to be told so.
 
+**That absence is not the same absence as the others, and is not reported as
+one.** Every other reason an account has no figure is a figure pending — make a
+turn, or wait for a provider to answer. A key's is permanent, and it is
+permanent *because there is no ceiling*: a key is metered per token, so the row
+with no percentage is the row whose spend nothing bounds. Reported as "no
+subscription quota" alone, the only account that bills for every token is the
+one rendered as having nothing to watch, beside a subscription showing a number.
+So the row states the absence of a ceiling rather than the absence of a figure,
+and carries the one quantity that can honestly stand beside it: the tokens this
+daemon has served as the account (§6.1), as a count, with no cost stated or
+estimated.
+
 A fourth follows from the catalog rather than the pairing. The key endpoint's
 model list is real and authoritative — it answers with every model the key can
 reach — and it carries no window and no supported efforts for any of them. So
@@ -1277,6 +1305,12 @@ carries how it was come by and the moment it was taken. Neither is corrected,
 recomputed, or aged into an estimate: what the provider said is what is
 reported.
 
+**The daemon-wide line answers for the account being asked about.** Where a
+single account is held, nothing is repeated under its own name, so that line is
+the whole answer — and a generic "no turn has been made yet" under a lone key
+account promises a figure that will never arrive. The reason given is the
+serving account's own, by the same rules as its row.
+
 **Absent stays absent.** A window a provider did not report is omitted rather
 than rendered as zero used, and an account with no figure at all reports that
 it has none. That covers every account of the second provider, whose quota
@@ -1289,8 +1323,9 @@ account it was taken from, and reporting it as that account is right whether or
 not that account is the one serving now. What a select does drop is a figure no
 account could be named for, which is reported where the daemon-wide figure is
 reported and would otherwise read as the newly selected account's headroom. A
-**removal** drops the removed account's figure, whether or not it was the one
-serving: the entitlement belongs to an account this daemon can no longer spend.
+**removal** drops the removed account's figure and the tally of what was served
+as it, whether or not it was the one serving: both belong to an account this
+daemon can no longer spend.
 
 ---
 

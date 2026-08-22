@@ -315,8 +315,21 @@ account it names (`proxy-behavior.md` §7.1), so a daemon can hold two live
 figures at once. Each is held under the account that earned it and reported
 beside the serving one, with how it was come by — riding a turn, or asked for
 over the socket — and the moment it was taken. An account with no figure says
-so, and says why: no turn made as it yet, a key holding no subscription
-entitlement, or a provider that does not report a quota to this proxy at all.
+so, and says why: no turn made as it yet, a key that has no ceiling to report,
+or a provider that does not report a quota to this proxy at all.
+
+**A key's row states the absence of a ceiling, not the absence of a figure.** A
+key is metered per token, so it is the one account whose spend accrues with
+every turn — and it is the one with no percentage to show. Reported only as
+holding no subscription quota, that row reads as the one with nothing to watch,
+beside a subscription showing a number. It states instead that nothing bounds
+its spend, followed by the one quantity available without a price list: the
+tokens this daemon has served as the account, summed from the counts upstream
+put on each completed turn. No cost is stated and none is estimated. The count
+starts at zero when the daemon starts and cannot see a turn made anywhere else,
+so it is a floor under the account's real spend and the row says so. Where a key
+is the only account held, the same reason is what the daemon-wide line gives,
+since nothing is repeated under its own name below it.
 
 **A second-provider account earns its figure the same way**, from the
 `anthropic-ratelimit-unified-*` headers on the response to a relayed turn

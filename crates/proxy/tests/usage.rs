@@ -457,3 +457,57 @@ fn a_rejected_status_reads_as_the_limit_reached() {
     assert!(snapshot.limit_reached);
     assert_eq!(snapshot.windows[0].used_percent, 100.0);
 }
+
+/// Tokens served are tallied under the account that served them, the same way
+/// a quota figure is — the point of the tally is a metered account's own
+/// spend, and one account's tokens under another's name would misstate both.
+#[test]
+fn tokens_served_are_tallied_under_the_account_that_served_them() {
+    let store = store_serving("main");
+
+    store.record_spend(None, 100, 20);
+    store.record_spend(None, 5, 1);
+    store.record_spend(Some("spare"), 900, 90);
+
+    let main = store.spent_for("main");
+    assert_eq!((main.input, main.output), (105, 21));
+    assert_eq!(main.total(), 126);
+
+    let spare = store.spent_for("spare");
+    assert_eq!((spare.input, spare.output), (900, 90));
+}
+
+/// An account nothing has been served as reports zero rather than nothing:
+/// "this daemon has served no tokens as it" is a true statement about spend,
+/// where a quota figure of zero would be an invented entitlement.
+#[test]
+fn an_account_nothing_was_served_as_has_served_nothing() {
+    let store = store_serving("main");
+    assert_eq!(store.spent_for("main"), proxenos::usage::Spent::default());
+    assert_eq!(store.spent_for("main").total(), 0);
+}
+
+/// A turn no account can be named for is not counted at all. Attributing it to
+/// whoever happens to be serving would put one account's spend under another's
+/// name, which is the error the whole keying exists to stop.
+#[test]
+fn a_turn_no_account_can_be_named_for_is_not_tallied() {
+    let store = proxenos::usage::UsageStore::default();
+    store.record_spend(None, 100, 20);
+    assert_eq!(store.spent_for("main").total(), 0);
+}
+
+/// Forgetting an account drops what was served as it, along with its figure:
+/// the tally answers "how much has this account spent through this daemon",
+/// and there is no such account.
+#[test]
+fn forgetting_an_account_drops_what_was_served_as_it() {
+    let store = store_serving("main");
+    store.record_spend(None, 100, 20);
+    store.record_spend(Some("spare"), 900, 90);
+
+    store.forget("spare");
+
+    assert_eq!(store.spent_for("spare").total(), 0);
+    assert_eq!(store.spent_for("main").total(), 120);
+}

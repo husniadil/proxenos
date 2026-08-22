@@ -391,9 +391,14 @@ fn tier_map(state: &ControlState) -> Value {
 fn usage(state: &ControlState) -> Value {
     let mut answer = match state.usage.latest() {
         Some(snapshot) => snapshot.to_json(),
+        // Why, in the terms of the account being asked about. A single
+        // account's figure is this block and nothing is repeated under its own
+        // name below (§8.3), so a generic "none has been made yet" is the only
+        // thing a lone key account's operator ever reads — and for that
+        // account no turn will ever produce one.
         None => json!({
             "known": false,
-            "detail": "the backend reports quota when a turn is made; none has been made yet",
+            "detail": serving_unavailable(state),
         }),
     };
 
@@ -453,7 +458,7 @@ fn per_account(state: &ControlState) -> Vec<Value> {
                 // sends whoever reads it somewhere different.
                 None => json!({
                     "known": false,
-                    "detail": unavailable(&account),
+                    "detail": unavailable(state, &account),
                 }),
             };
 
@@ -467,8 +472,22 @@ fn per_account(state: &ControlState) -> Vec<Value> {
         .collect()
 }
 
+/// Why the account serving turns has no figure, where one can be named.
+fn serving_unavailable(state: &ControlState) -> String {
+    state
+        .credentials
+        .accounts()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|account| account.selected)
+        .map_or_else(
+            || "the backend reports quota when a turn is made; none has been made yet".to_owned(),
+            |account| unavailable(state, &account),
+        )
+}
+
 /// Why an account has no figure.
-fn unavailable(account: &crate::auth::store::Account) -> String {
+fn unavailable(state: &ControlState, account: &crate::auth::store::Account) -> String {
     // Every reason names the provider it is about. The block prints one row
     // per account and the providers differ between rows, so "this provider"
     // leaves the reader to work out which one the sentence means.
@@ -491,8 +510,29 @@ fn unavailable(account: &crate::auth::store::Account) -> String {
     }
     if account.kind == "key" {
         // §8.2 — the figure is a subscription entitlement, and a key is not
-        // one.
-        return "a key holds no subscription quota".to_owned();
+        // one. But "no quota" is the one absence on this list that is not a
+        // figure pending: a key has no ceiling because it is metered per
+        // token, so the row with no percentage is the row whose spend is
+        // unbounded. Saying only that it holds no quota renders exactly that
+        // row as the one with nothing to watch.
+        //
+        // No cost is stated and none is estimated — nothing here knows a price
+        // list. What is stated instead is a quantity upstream counted: the
+        // tokens this daemon has served as the account since it started, which
+        // is a floor under its real spend rather than the whole of it, and is
+        // said to be one.
+        let spent = state.usage.spent_for(&account.name);
+        let served = if spent.total() == 0 {
+            "no turn has been served as it yet".to_owned()
+        } else {
+            format!(
+                "{} tokens served as it since this daemon started, and turns made elsewhere are not counted",
+                spent.total()
+            )
+        };
+        return format!(
+            "a key has no quota ceiling; it is metered per token, so nothing here bounds its spend ({served})"
+        );
     }
     format!("{provider} reports quota when a turn is made; none has been made as this account yet")
 }

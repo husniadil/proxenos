@@ -545,6 +545,10 @@ async fn messages(
         Arc::clone(&session),
         translated.input,
         state.capture.upstream(),
+        Spend {
+            usage: Arc::clone(&state.usage),
+            account: account.clone(),
+        },
     );
 
     // §5.5 — the caller's own choice. The client always streams, so this is the
@@ -570,6 +574,7 @@ fn frame_stream(
     session: Arc<crate::session::Session>,
     sent_input: Vec<proxenos_core::responses::InputItem>,
     record_upstream: bool,
+    spend: Spend,
 ) -> impl futures::Stream<Item = Vec<proxenos_core::anthropic::Frame>> {
     let state = StreamState {
         translator,
@@ -581,6 +586,7 @@ fn frame_stream(
         calibration,
         session,
         sent_input,
+        spend,
     };
 
     stream::unfold((events, state), |(mut events, mut state)| async move {
@@ -620,6 +626,7 @@ fn frame_stream(
                 let frames = state.translator.finish();
                 state.done = true;
                 state.calibrate();
+                state.tally();
                 state.close_turn();
                 state.record_upstream_exchange();
                 Some((frames, (events, state)))
@@ -705,6 +712,16 @@ struct Calibration {
     estimate: u64,
 }
 
+/// Where this turn's token counts are filed once upstream reports them.
+///
+/// The account rather than "whoever is serving", resolved at the moment the
+/// turn was routed: a pinned tier spends the account it names (§7.1), and a
+/// tally that resolved later would put its tokens under the serving account.
+struct Spend {
+    usage: Arc<crate::usage::UsageStore>,
+    account: Option<String>,
+}
+
 struct StreamState {
     translator: ResponseTranslator,
     done: bool,
@@ -718,6 +735,7 @@ struct StreamState {
     /// What this turn put on the wire, which together with what the server adds
     /// becomes the baseline the next turn must extend (§4.3).
     sent_input: Vec<proxenos_core::responses::InputItem>,
+    spend: Spend,
 }
 
 impl StreamState {
@@ -754,6 +772,33 @@ impl StreamState {
             .session
             .estimator
             .observe(self.calibration.estimate, actual);
+    }
+
+    /// §8.3 — add what upstream charged this turn to the account that served
+    /// it.
+    ///
+    /// The counts are read from the same completed event calibration reads,
+    /// and are passed through exactly as given (§6.1). A turn upstream
+    /// reported no usage for adds nothing: a zero here would read as a turn
+    /// that cost nothing rather than one nobody counted.
+    fn tally(&self) {
+        let Some(usage) = self
+            .seen
+            .iter()
+            .rev()
+            .find_map(|event| event.pointer("/response/usage"))
+        else {
+            return;
+        };
+
+        let count = |name: &str| usage.get(name).and_then(Value::as_u64);
+        let (Some(input), Some(output)) = (count("input_tokens"), count("output_tokens")) else {
+            return;
+        };
+
+        self.spend
+            .usage
+            .record_spend(self.spend.account.as_deref(), input, output);
     }
 
     /// §3.3 and §4.3 — record what the server added, and what it called the

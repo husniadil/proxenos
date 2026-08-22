@@ -92,7 +92,21 @@ async fn upstream() -> (String, Seen) {
                 }),
                 json!({ "type": "response.created", "response": { "id": "resp_1" } }),
                 json!({ "type": "response.output_text.delta", "delta": "hi" }),
-                json!({ "type": "response.completed", "response": { "id": "resp_1" } }),
+                // Upstream's own counts on the completed response, which are
+                // what a spend tally may state and the only thing it may
+                // state (§6.1). Distinct per account for the same reason the
+                // percentage is: a tally filed under the wrong account has to
+                // be visible rather than plausible.
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_1",
+                        "usage": {
+                            "input_tokens": if used_percent == 77 { 900 } else { 100 },
+                            "output_tokens": if used_percent == 77 { 90 } else { 20 },
+                        },
+                    },
+                }),
             ]
             .iter()
             .map(|event| format!("data: {event}\n\n"))
@@ -384,4 +398,43 @@ async fn a_turns_figure_states_that_it_rode_a_turn() {
     let measured = usage.latest_for("acct_serving").expect("a turn was served");
     assert_eq!(measured.source, proxenos::usage::Source::Turn);
     assert!(measured.at > 0);
+}
+
+/// A metered account's spend is the one thing that can be stated about it
+/// without a price list, so what upstream charged a turn is tallied under the
+/// account that served it — the pinned account where a tier pinned one.
+#[tokio::test]
+async fn what_a_turn_cost_is_tallied_under_the_account_that_served_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store_with_two_accounts(&dir);
+
+    let (base, _seen, usage) = daemon(
+        Arc::clone(&store),
+        vec![
+            tier("sonnet", "gpt-5.6-terra", None),
+            tier("haiku", "gpt-5.6-luna", Some("spare")),
+        ],
+    )
+    .await;
+
+    assert_eq!(turn(&base, "sonnet", "the main turn").await.status(), 200);
+    assert_eq!(
+        turn(&base, "sonnet", "another main turn").await.status(),
+        200
+    );
+    assert_eq!(turn(&base, "haiku", "the cheap turn").await.status(), 200);
+
+    let serving = usage.spent_for("acct_serving");
+    assert_eq!(
+        (serving.input, serving.output),
+        (200, 40),
+        "two turns as the serving account, at upstream's own counts"
+    );
+
+    let spare = usage.spent_for("spare");
+    assert_eq!(
+        (spare.input, spare.output),
+        (900, 90),
+        "the pinned tier's turn was tallied under someone else"
+    );
 }
