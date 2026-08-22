@@ -62,8 +62,23 @@ impl Window {
     /// not need to switch.
     #[must_use]
     pub fn is_stale_at(&self, now: u64) -> bool {
-        self.resets_at.is_some_and(|resets_at| now >= resets_at)
+        has_reset(self.resets_at, now)
     }
+}
+
+/// Whether a window whose reset the provider stated has since turned over.
+///
+/// **One definition, reached from both sides.** The parse side holds a
+/// `Window` and the meter holds the JSON it became, so neither can call the
+/// other's shape — which is exactly how a rule like this ends up written twice,
+/// with the tested copy and the shipping copy free to drift apart. Both go
+/// through here.
+///
+/// `None` is never stale: a window the provider stated no reset for cannot be
+/// said to have turned over, and guessing would drop a figure on no evidence.
+#[must_use]
+pub fn has_reset(resets_at: Option<u64>, now: u64) -> bool {
+    resets_at.is_some_and(|resets_at| now >= resets_at)
 }
 
 /// The account's quota, as of one turn.
@@ -252,6 +267,18 @@ impl Snapshot {
     /// the header takes. Only windows that genuinely match a slot appear: a
     /// thirty-day window announced as a five-hour one would show a meter that
     /// is wrong in the reassuring direction.
+    ///
+    /// **This is deliberately narrower than [`Snapshot::from_headers`], and
+    /// the asymmetry is the point.** That side reads whatever the provider
+    /// chose to state — a per-window status, the threshold behind it, which
+    /// window it calls representative, an overage window with no duration at
+    /// all — because a figure in hand and dropped is a figure lost. This side
+    /// states only what has been observed being read back: the two utilization
+    /// slots, their resets, and the one unified status. Emitting the rest would
+    /// be this proxy asserting a limit of its own in the provider's vocabulary,
+    /// on a contract nobody has verified a client honours. The operator reaches
+    /// all of it through `usage`, which is where a figure with no header slot
+    /// belongs (`api.md` §3).
     pub fn headers(&self) -> Vec<(&'static str, String)> {
         let mut headers = Vec::new();
 

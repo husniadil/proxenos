@@ -666,8 +666,11 @@ fn notes(window: &Value, now: u64) -> String {
     // zero. It errs toward overstating — spend shown against an empty window
     // sends an operator to switch accounts they did not need to switch — so it
     // is said first.
-    let resets_at = field(window, "resets_at").and_then(Value::as_u64);
-    if resets_at.is_some_and(|resets_at| now >= resets_at) {
+    //
+    // Through the same predicate the parse side uses, never a second copy of
+    // the rule: two copies do not stay equal, and the one under test would be
+    // the one that stayed right.
+    if crate::usage::has_reset(field(window, "resets_at").and_then(Value::as_u64), now) {
         notes.push("window has since reset".to_owned());
     }
 

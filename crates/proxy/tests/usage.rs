@@ -662,3 +662,58 @@ fn selecting_an_account_says_which_provider_now_serves() {
     let quiet = proxenos::render::selected_account(&serde_json::json!({ "selected": "spare" }));
     assert_eq!(quiet, "serving turns as spare");
 }
+
+/// The meter and the parse side answer "has this window turned over" the same
+/// way, because they ask the same predicate.
+///
+/// A rule written twice does not stay written twice the same. The copy under
+/// test stays right and the copy that ships drifts, and the suite says nothing
+/// — so this asserts the two agree over the clocks where they could differ,
+/// against what `usage` actually prints rather than against the predicate
+/// alone.
+#[test]
+fn the_meter_and_the_predicate_agree_on_what_has_reset() {
+    let snapshot = Snapshot::from_headers(&relay_quota_headers()).expect("a quota was reported");
+    let mut result = snapshot.to_json();
+    result["accounts"] = serde_json::json!([]);
+
+    // Straddling both resets in the capture: before either, between them, and
+    // after both.
+    for now in [1_787_338_000, 1_787_350_000, 1_787_400_000] {
+        let rendered = proxenos::render::usage_at(&result, now);
+        for window in &snapshot.windows {
+            let name = window.window_minutes.map_or_else(
+                || {
+                    window
+                        .label
+                        .clone()
+                        .expect("a window is named one way or the other")
+                },
+                |minutes| {
+                    if minutes % (24 * 60) == 0 {
+                        format!("{}d", minutes / (24 * 60))
+                    } else {
+                        format!("{}h", minutes / 60)
+                    }
+                },
+            );
+            let line = rendered
+                .lines()
+                .find(|line| line.starts_with(&name))
+                .unwrap_or_else(|| panic!("no {name} line at {now} in:\n{rendered}"));
+
+            assert_eq!(
+                line.contains("window has since reset"),
+                window.is_stale_at(now),
+                "at {now}, the meter and the predicate disagree about {name}:\n{rendered}"
+            );
+            // The figure itself is kept either way. A window that has turned
+            // over is not a zero — that would be a number the provider never
+            // gave, and it reads as headroom.
+            assert!(
+                line.contains(&format!("{:.0}% used", window.used_percent)),
+                "the figure must survive the marking:\n{rendered}"
+            );
+        }
+    }
+}
