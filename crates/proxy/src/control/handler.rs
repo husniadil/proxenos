@@ -317,6 +317,17 @@ fn status(state: &ControlState) -> Value {
         "version": VERSION,
         // This process, as distinct from any other that serves the same socket.
         "instance": &*INSTANCE,
+        // The process serving it, so `status` names what `stop`, `supervisor`
+        // and `run --detach` all talk about.
+        "pid": std::process::id(),
+        // Whether the supervisor of §2.6 is what started it. Null where this
+        // side cannot tell, which a renderer reports as silence: "not
+        // supervised" is a claim, and a platform with no supervisor here has
+        // no standing to make it.
+        "supervised": crate::supervisor::supervised(
+            &crate::supervisor::Platform::current(),
+            std::env::var("XPC_SERVICE_NAME").ok().as_deref(),
+        ),
         // Policy this daemon publishes for whoever starts the client. Reported
         // under the configuration's own key names, because the person reading
         // this arrived holding "Skill execution blocked by permission rules" —

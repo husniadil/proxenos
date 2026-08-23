@@ -75,7 +75,8 @@ fn now() -> u64 {
 
 /// The widest cell wins: a table whose columns are sized to what is in them.
 ///
-/// The last column is never padded, so no row carries trailing space, and no
+/// No row carries trailing space — the last column is never padded, and a row
+/// whose last cell is empty loses the separator in front of it too. No
 /// cell is ever shortened here — a column that has to fit inside a terminal
 /// shortens its own cells before handing them over, because only the caller
 /// knows which of them can lose characters and still mean something.
@@ -109,6 +110,8 @@ fn table(header: &[&str], rows: &[Vec<String>]) -> String {
             })
             .collect::<Vec<_>>()
             .join("  ")
+            .trim_end()
+            .to_owned()
     };
 
     let header: Vec<String> = header.iter().map(|cell| (*cell).to_owned()).collect();

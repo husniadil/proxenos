@@ -568,3 +568,177 @@ fn a_reload_says_what_applied_and_what_is_still_waiting() {
         "reloaded config.toml; nothing in it was a setting this daemon can change"
     );
 }
+
+// --- the rendered status ---------------------------------------------------
+//
+// `docs/api.md` §2 — the report a running daemon answers `status` with. The
+// rules below are about the three parts an operator acts on: who is paying,
+// what is serving, and where each tier goes.
+
+/// A daemon serving turns, mapping four tiers, one of them pinned elsewhere.
+fn a_daemon() -> serde_json::Value {
+    serde_json::json!({
+        "base_url": "http://127.0.0.1:8787",
+        "auth": {
+            "connected": true,
+            "account": "work-codex",
+            "email": "husni@sayurbox.com",
+            "kind": "grant",
+            "provider": "codex",
+        },
+        "tiers": {
+            "opus": "gpt-5.6-terra",
+            "sonnet": "gpt-5.6-terra",
+            "haiku": "gpt-5.6-luna",
+            "fable": { "model": "gpt-5.5", "account": "personal-codex" },
+        },
+        "version": env!("CARGO_PKG_VERSION"),
+        "pid": 4711,
+        "supervised": true,
+        "client": { "deny_skills": [] },
+    })
+}
+
+/// The line naming the account holds the name every account verb takes.
+///
+/// It used to say `connected`, which is the one thing already established by
+/// there being a line at all — and left the operator to work out which of the
+/// names in `accounts` this was. The address, the kind and the provider follow
+/// it, since those tell two accounts of one operator's apart.
+#[test]
+fn the_auth_line_leads_with_the_name_accounts_lists() {
+    let rendered = proxenos::render::status_at(&a_daemon(), NOW);
+    assert!(
+        rendered.contains("auth       work-codex (husni@sayurbox.com, codex)"),
+        "{rendered}"
+    );
+
+    // A key says so, because it is spent against a different endpoint and
+    // cannot be asked for a quota.
+    let key = proxenos::render::status_at(
+        &serde_json::json!({
+            "auth": {
+                "connected": true,
+                "account": "openai-api",
+                "kind": "key",
+                "provider": "codex",
+            },
+        }),
+        NOW,
+    );
+    assert!(key.contains("auth       openai-api (key, codex)"), "{key}");
+}
+
+/// A daemon that does not name the account renders what it always did.
+///
+/// That is a daemon older than the field, not a bug to paper over: leading
+/// with a name that is not there would mean inventing one.
+#[test]
+fn the_auth_line_falls_back_to_connected_where_there_is_no_name() {
+    let rendered = proxenos::render::status_at(
+        &serde_json::json!({
+            "auth": { "connected": true, "email": "someone@example.com", "provider": "codex" },
+        }),
+        NOW,
+    );
+    assert!(
+        rendered.contains("auth       connected (someone@example.com, codex)"),
+        "{rendered}"
+    );
+}
+
+/// What is serving the socket, named once: the build, the process, and whether
+/// anything brings it back.
+#[test]
+fn the_daemon_line_names_the_build_the_process_and_its_supervisor() {
+    let rendered = proxenos::render::status_at(&a_daemon(), NOW);
+    assert!(
+        rendered.contains(&format!(
+            "daemon     {} (pid 4711), supervised",
+            env!("CARGO_PKG_VERSION")
+        )),
+        "{rendered}"
+    );
+
+    let unsupervised = proxenos::render::status_at(
+        &serde_json::json!({ "version": "0.12.0", "pid": 12, "supervised": false }),
+        NOW,
+    );
+    assert!(
+        unsupervised.contains("daemon     0.12.0 (pid 12), not supervised"),
+        "{unsupervised}"
+    );
+
+    // Silence where the daemon cannot tell — a platform with no supervisor
+    // here, or a process launchd started under some other label. "not
+    // supervised" would be a claim nothing established.
+    let unknowable = proxenos::render::status_at(
+        &serde_json::json!({ "version": "0.12.0", "pid": 12, "supervised": null }),
+        NOW,
+    );
+    assert!(
+        unknowable.contains("daemon     0.12.0 (pid 12)") && !unknowable.contains("supervised"),
+        "{unknowable}"
+    );
+}
+
+/// The tier mapping is a table under a header, and a pinned tier says where it
+/// spends in a column rather than in a parenthesis trailing off the model.
+#[test]
+fn the_tier_rows_lead_with_a_header_and_carry_state_in_a_column() {
+    let rendered = proxenos::render::status_at(&a_daemon(), NOW);
+    let header = rendered
+        .lines()
+        .find(|line| line.starts_with("TIER"))
+        .unwrap_or_else(|| panic!("no tier header: {rendered}"));
+    assert_eq!(cells(header), vec!["TIER", "MODEL", "STATE"], "{rendered}");
+
+    assert_eq!(
+        row(&rendered, "fable"),
+        vec!["fable", "gpt-5.5", "as personal-codex"],
+        "{rendered}"
+    );
+    assert_eq!(
+        row(&rendered, "opus"),
+        vec!["opus", "gpt-5.6-terra"],
+        "{rendered}"
+    );
+}
+
+/// An ordinary mapping has no state to report, and gets no column for one.
+///
+/// A header over four blank cells is a column the reader looks at and learns
+/// nothing from.
+#[test]
+fn the_state_column_appears_only_where_a_tier_has_a_state() {
+    let rendered = proxenos::render::status_at(
+        &serde_json::json!({
+            "auth": { "connected": true, "account": "work-codex", "provider": "codex" },
+            "tiers": { "opus": "gpt-5.6-terra", "haiku": "gpt-5.6-luna" },
+        }),
+        NOW,
+    );
+    let header = rendered
+        .lines()
+        .find(|line| line.starts_with("TIER"))
+        .unwrap_or_else(|| panic!("no tier header: {rendered}"));
+    assert_eq!(cells(header), vec!["TIER", "MODEL"], "{rendered}");
+    assert!(
+        rendered.lines().all(|line| line == line.trim_end()),
+        "no row carries trailing space: {rendered:?}"
+    );
+
+    // A relaying account has one on every unpinned row instead.
+    let relaying = proxenos::render::status_at(
+        &serde_json::json!({
+            "auth": { "connected": true, "account": "personal-claude", "provider": "anthropic" },
+            "tiers": { "opus": "claude-opus-5" },
+        }),
+        NOW,
+    );
+    assert_eq!(
+        row(&relaying, "opus"),
+        vec!["opus", "claude-opus-5", "inert while relaying"],
+        "{relaying}"
+    );
+}

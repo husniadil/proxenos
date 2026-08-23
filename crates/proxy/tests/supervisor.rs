@@ -317,3 +317,34 @@ fn only_a_daemon_this_install_does_not_end_holds_the_port() {
     // loops behind it. That one this verb did not end.
     assert_eq!(holder(true, Some("0.7.0"), Some("0.8.0")), Some("0.8.0"));
 }
+
+/// Whether the daemon can tell it was started by the supervisor.
+///
+/// launchd names the job in `XPC_SERVICE_NAME`; a shell passes down `0`, or
+/// nothing. A third label is neither answer: something else launchd knows
+/// about started this process, and "not supervised by proxenos.daemon" is not
+/// the same statement as "nothing supervises this". `status` prints the line
+/// only where there is an answer.
+#[test]
+fn supervision_is_read_from_the_job_label_and_never_guessed() {
+    use proxenos::supervisor::Platform;
+    use proxenos::supervisor::supervised;
+
+    assert_eq!(
+        supervised(&Platform::MacOs, Some(proxenos::supervisor::LABEL)),
+        Some(true)
+    );
+    assert_eq!(supervised(&Platform::MacOs, None), Some(false));
+    assert_eq!(supervised(&Platform::MacOs, Some("0")), Some(false));
+    assert_eq!(supervised(&Platform::MacOs, Some("")), Some(false));
+    assert_eq!(
+        supervised(&Platform::MacOs, Some("com.example.other")),
+        None
+    );
+
+    // No supervisor on this platform, so nothing here can answer for it.
+    assert_eq!(
+        supervised(&Platform::Other("linux"), Some(proxenos::supervisor::LABEL)),
+        None
+    );
+}

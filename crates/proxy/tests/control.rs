@@ -1928,8 +1928,12 @@ async fn a_cross_account_tier_set_with_consent_pins_the_tier() {
     // alone would hide which account it spends.
     let status = harness.call("status").await.unwrap();
     let rendered = render::status(&status);
+    let haiku = rendered
+        .lines()
+        .find(|line| line.starts_with("haiku"))
+        .unwrap_or_else(|| panic!("no haiku row: {rendered}"));
     assert!(
-        rendered.contains("claude-haiku-4-5 (as spare)"),
+        haiku.contains("claude-haiku-4-5") && haiku.contains("as spare"),
         "{rendered}"
     );
 }
@@ -4749,12 +4753,16 @@ fn the_rendered_status_says_ids_relay_when_the_serving_account_relays() {
         rendered.contains("claude-opus-5") && rendered.contains("inert"),
         "an unpinned row must be marked inert: {rendered}"
     );
+    let pinned = rendered
+        .lines()
+        .find(|line| line.starts_with("haiku"))
+        .unwrap_or_else(|| panic!("no haiku row: {rendered}"));
     assert!(
-        rendered.contains("gpt-5.6-luna (as work)"),
+        pinned.contains("gpt-5.6-luna") && pinned.contains("as work"),
         "a pinned row stays live and keeps its pin: {rendered}"
     );
     assert!(
-        !rendered.contains("gpt-5.6-luna (as work) (inert"),
+        !pinned.contains("inert"),
         "a pinned row must not be marked inert: {rendered}"
     );
 }

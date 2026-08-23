@@ -138,6 +138,21 @@ vanished. Keys in that file keep working exactly as they did.
   than that verb's payload. `env` renders shell exports and nothing else.
   `statusline` is untouched; its `--json` was never one of these.
 
+- **`status` names the serving account, the daemon, and the tier mapping as a
+  table.** The `auth` line leads with the name `accounts` lists the account
+  under — the string every account verb takes — instead of the word
+  `connected`, which said nothing that the line's existence had not already
+  said; the address, kind and provider follow it, and a payload with no name
+  renders as it did before. A `daemon` line names the build and the pid, and
+  says `supervised` or `not supervised` where the daemon can tell — `stop`,
+  `supervisor` and `run --detach` all talk about that process and nothing named
+  it. The four tier rows are a table under `TIER  MODEL`, with a `STATE` column
+  carrying what used to trail off the end of a row in parentheses: `inert while
+  relaying`, or `as <account>` for a pinned tier. The `status` payload gains
+  `pid` and `supervised`, additively (`docs/api.md` §3); `supervised` is null
+  where nothing establishes an answer, and the line is then left out rather
+  than claiming one.
+
 - **`accounts` prints a header table.** The rows had no header, a column that
   said `key` where an address belonged, the raw source path, and every state —
   refused, identity changed, a login about to expire — as a parenthesised

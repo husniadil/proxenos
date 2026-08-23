@@ -244,6 +244,28 @@ of. All of these go through the socket, because the daemon holds the selection:
 a CLI that edited the file directly would leave a running daemon serving the
 account it read at startup.
 
+**The rendered `status` names the account by the name `accounts` lists it
+under.** The `auth` line leads with it — `auth       work-codex
+(husni@sayurbox.com, codex)` — because that string is what every account verb
+takes, and the word it led with before, `connected`, was the one thing already
+established by there being a line at all. The address, the kind and the
+provider follow it, and a daemon whose payload carries no name renders exactly
+what it did before rather than inventing one.
+
+**A `daemon` line names what is serving the socket**: the build, the process,
+and — where the daemon can tell — whether the supervisor of §2.6 is what
+started it. `stop`, `supervisor` and `run --detach` all talk about that
+process, and nothing in the report named it. The supervision clause is silence
+rather than `not supervised` where the answer is not established, since a
+platform with no supervisor here has no standing to make that claim.
+
+**The four tier rows are a table under `TIER  MODEL`**, with a `STATE` column
+where a row has one — `inert while relaying`, or `as <account>` for a tier
+pinned to another account. The state used to trail off the end of the model as
+a parenthesis, and the rows had no header at all. The column appears only where
+some row has a state: a header over four blank cells is one the reader learns
+nothing from.
+
 **The rendered `status` says what the next turn does, not only what is
 configured.** Where the account serving turns is on the second provider, every
 model id it authenticates relays verbatim and the tier mapping decides nothing
@@ -854,7 +876,7 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 
 | Method | Returns | v0.1 |
 |---|---|---|
-| `status` | connection state, whether the grant has been **refused** — `dead` where this side cannot spend it and `refused` carrying the backend's own words where it was sent and turned away — when the serving account's login has to be renewed (`login_expires_at`, absent where no such date exists), plan and which source reported it, the tier mapping and the effort ceiling, any mapped model the catalog withholds, whether the catalog was authoritative, the client policy in effect, and the build and `instance` serving the socket | yes |
+| `status` | connection state, the process serving the socket (`pid`) and whether the supervisor of §2.6 started it (`supervised` — `true`, `false`, or **null** where this side cannot tell, which is every platform with no supervisor here and any process launchd started under some other label), whether the grant has been **refused** — `dead` where this side cannot spend it and `refused` carrying the backend's own words where it was sent and turned away — when the serving account's login has to be renewed (`login_expires_at`, absent where no such date exists), plan and which source reported it, the tier mapping and the effort ceiling, any mapped model the catalog withholds, whether the catalog was authoritative, the client policy in effect, and the build and `instance` serving the socket | yes |
 | `accounts.remove` | removes one account — the selected one, or `{"account": name}` — and answers with the name it cleared and the one serving turns afterwards; the rest stay usable, and an idle account's removal leaves the serving grant's quota alone. A key is dropped from this daemon's store; a **declared** profile loses its `[profiles]` entry and nothing else — the grant belongs to the program that owns the directory — after which the file is re-read so the daemon stops answering for it. A profile that was found rather than declared is refused, saying so and that `[profiles]` is empty | no — was `disconnect`, then `accounts.forget` |
 | `accounts` | every stored account, what kind of credential each holds, whether the operator wrote it down (`declared`, true only for a profile named in `[profiles]`), and which one serves turns, plus `discovered` — whether these are the operator's own `[profiles]` entries or the stock profile of each program, read because none were declared; each borrowed row also carries the profile it was read from and, for a Claude profile, `login_expires_at` — the date the operator has to sign in again. No tokens | no — v0.3 |
 | `accounts.select` | `{"account": name}`, the account every following turn is made as, the provider now serving and the one serving a moment ago (absent where nothing was) — one select moves every unpinned turn onto that provider's subscription — whether the catalog was refetched for it, and the tier mapping now in force; refuses, and moves nothing, where that account's mapping names a model its catalog does not have, naming whose menu refused and how to give that account its own mapping | no — v0.3 |
@@ -1066,6 +1088,15 @@ not a figure is known: on a daemon that has served no turn it is the only thing
 worth rendering, and a borrowed account is what makes it worth rendering at all
 (`proxy-behavior.md` §8.4). It is subject to the same session check as the
 figure: a session this daemon does not serve is told neither.
+
+**`status` says which process is serving, and what supervises it.** `pid` is
+this process, and `supervised` is read from the job label launchd hands a job
+it starts: the label §2.6 installs is a positive answer and no label at all is
+a negative one. Any other label answers **null**, because "not supervised by
+`proxenos.daemon`" and "nothing supervises this" are different statements and
+only the first would be established. Both fields are additive: a caller that
+needs them checks for them (§6), and a daemon predating them omits `pid` and
+answers no `supervised` at all.
 
 **`status` names the account.** `auth.account` is what this daemon calls the one
 serving turns and is what selects it; `auth.account_id` is what the backend

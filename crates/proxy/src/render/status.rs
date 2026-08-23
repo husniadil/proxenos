@@ -60,21 +60,23 @@ pub fn status_at(result: &Value, now: u64) -> String {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     lines.push(if connected {
+        // What this daemon calls the account, which is the string every
+        // account verb takes and the name `accounts` lists it under. Leading
+        // with it is what makes this line and that listing one surface: the
+        // operator reads a name here and types it into `accounts use`.
+        let name = auth
+            .and_then(|auth| field(auth, "account"))
+            .and_then(Value::as_str);
         // The address if the grant carried one, then the id the backend knows
-        // it by, then what this daemon calls the account — which always
-        // exists, and is the string every account verb takes.
+        // it by. Where the account has neither and no name either, the word
+        // that was here before it had a name to lead with.
         let who = auth
             .and_then(|auth| field(auth, "email"))
             .and_then(Value::as_str)
             .or_else(|| {
                 auth.and_then(|auth| field(auth, "account_id"))
                     .and_then(Value::as_str)
-            })
-            .or_else(|| {
-                auth.and_then(|auth| field(auth, "account"))
-                    .and_then(Value::as_str)
-            })
-            .unwrap_or("account unknown");
+            });
         // Named where it is not the kind this proxy started with, because a
         // key is spent against another endpoint and cannot be asked for a
         // quota.
@@ -82,22 +84,32 @@ pub fn status_at(result: &Value, now: u64) -> String {
             .and_then(|auth| field(auth, "kind"))
             .and_then(Value::as_str)
         {
-            Some("key") => ", key",
-            _ => "",
+            Some("key") => Some("key"),
+            _ => None,
         };
         // And the provider, on every connected row. With two providers in
         // the store an unnamed one is a guess, and this line is where an
         // operator looks to find out whose backend the next turn reaches.
         // Omitted only where the payload does not carry it — a daemon that
         // predates providers — because filling that in would invent it.
-        let provider = match auth
+        let provider = auth
             .and_then(|auth| field(auth, "provider"))
-            .and_then(Value::as_str)
-        {
-            Some(provider) => format!(", {provider}"),
-            None => String::new(),
-        };
-        format!("auth       connected ({who}{kind}{provider})")
+            .and_then(Value::as_str);
+        // The name leads where there is one; `connected` leads where there is
+        // not, which is what a daemon predating the field answers with. The
+        // parenthesis holds whatever else is known, and is left off entirely
+        // rather than printed empty.
+        let detail = [who, kind, provider]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let head = name.unwrap_or("connected");
+        if detail.is_empty() {
+            format!("auth       {head}")
+        } else {
+            format!("auth       {head} ({detail})")
+        }
     } else {
         // Two different states wear the same word. Nothing to serve with is
         // one; several accounts and no choice between them is the other, and
@@ -210,27 +222,65 @@ pub fn status_at(result: &Value, now: u64) -> String {
         _ => None,
     };
 
+    // The mapping as a table. Four rows with no header were four labels an
+    // operator had to already know the meaning of, and the state each row can
+    // be in — inert, or pinned to another account — trailed off the end of the
+    // model as a parenthesis. A column says the same thing where the eye is
+    // already looking for it.
     if let Some(tiers) = field(result, "tiers").and_then(Value::as_object) {
-        for (tier, value) in tiers {
-            // A pinned tier arrives as `{ account, model }` — the same two
-            // shapes the configuration takes — and is printed with its pin,
-            // because which account a tier spends is the whole point of one.
-            let rendered = match (value.as_str(), value.as_object()) {
-                // An unpinned tier follows the account serving turns, so a
-                // relaying one takes that tier with it and the mapped model is
-                // never asked for. A pin names its own account and stays live
-                // either way — that is what pinning one is for.
-                (Some(model), _) if relaying.is_some() => format!("{model} (inert while relaying)"),
-                (Some(model), _) => model.to_owned(),
-                (None, Some(pinned)) => format!(
-                    "{} (as {})",
-                    pinned.get("model").and_then(Value::as_str).unwrap_or("?"),
-                    pinned.get("account").and_then(Value::as_str).unwrap_or("?")
-                ),
-                _ => "unmapped".to_owned(),
-            };
-            lines.push(format!("{tier:<10} {rendered}"));
-        }
+        let mapped: Vec<(String, String, String)> = tiers
+            .iter()
+            .map(|(tier, value)| {
+                // A pinned tier arrives as `{ account, model }` — the same two
+                // shapes the configuration takes — and says so in its state,
+                // because which account a tier spends is the whole point of one.
+                let (model, state) = match (value.as_str(), value.as_object()) {
+                    // An unpinned tier follows the account serving turns, so a
+                    // relaying one takes that tier with it and the mapped model
+                    // is never asked for. A pin names its own account and stays
+                    // live either way — that is what pinning one is for.
+                    (Some(model), _) if relaying.is_some() => {
+                        (model.to_owned(), "inert while relaying".to_owned())
+                    }
+                    (Some(model), _) => (model.to_owned(), String::new()),
+                    (None, Some(pinned)) => (
+                        pinned
+                            .get("model")
+                            .and_then(Value::as_str)
+                            .unwrap_or("?")
+                            .to_owned(),
+                        format!(
+                            "as {}",
+                            pinned.get("account").and_then(Value::as_str).unwrap_or("?")
+                        ),
+                    ),
+                    _ => ("unmapped".to_owned(), String::new()),
+                };
+                (tier.clone(), model, state)
+            })
+            .collect();
+
+        // The state column only where a row has one. A header over a column of
+        // blanks is a column the reader looks at and learns nothing from, and
+        // the ordinary mapping — nothing pinned, nothing relaying — is all
+        // blanks.
+        let stateful = mapped.iter().any(|(_, _, state)| !state.is_empty());
+        let rows: Vec<Vec<String>> = mapped
+            .into_iter()
+            .map(|(tier, model, state)| {
+                if stateful {
+                    vec![tier, model, state]
+                } else {
+                    vec![tier, model]
+                }
+            })
+            .collect();
+        let header: &[&str] = if stateful {
+            &["TIER", "MODEL", "STATE"]
+        } else {
+            &["TIER", "MODEL"]
+        };
+        lines.push(super::table(header, &rows));
     }
 
     // And what the mapping's inert rows are inert in favour of, named rather
@@ -283,6 +333,30 @@ pub fn status_at(result: &Value, now: u64) -> String {
     // the missing field is the only evidence there is.
     let older_build = field(result, "client").is_none();
     let daemon_version = field(result, "version").and_then(Value::as_str);
+
+    // What is actually serving this socket, as one line: the build, the
+    // process, and whether anything brings it back. Without it the only
+    // version ever printed was the one on the mismatch notice below, so a
+    // daemon that agreed with its CLI reported no version at all — and `stop`,
+    // `supervisor` and `run --detach` all describe a process the report never
+    // named.
+    if let Some(version) = daemon_version {
+        // The pid where the payload carries one, and nothing where it does not:
+        // a daemon predating the field is the case, and inventing a number for
+        // it would be worse than a shorter line.
+        let pid = field(result, "pid")
+            .and_then(Value::as_u64)
+            .map_or_else(String::new, |pid| format!(" (pid {pid})"));
+        // Said only where the daemon can tell. `null` is the platform, or the
+        // process, that cannot answer the question — reported as silence rather
+        // than resolved into "not supervised", which would be a claim.
+        let supervised = match field(result, "supervised").and_then(Value::as_bool) {
+            Some(true) => ", supervised",
+            Some(false) => ", not supervised",
+            None => "",
+        };
+        lines.push(format!("daemon     {version}{pid}{supervised}"));
+    }
     match (daemon_version, older_build) {
         // Across releases the string is the plain answer, and it names both
         // sides so the reader can tell which way round it is.

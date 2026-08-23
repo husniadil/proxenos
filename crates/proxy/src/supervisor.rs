@@ -190,6 +190,32 @@ fn escape(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// Whether this process was started by the supervisor, where that is knowable.
+///
+/// launchd hands a job it starts an `XPC_SERVICE_NAME` naming that job's label,
+/// and a process started from a shell inherits whatever the shell had — `0`
+/// under a terminal, or nothing at all. So the label this verb installs is a
+/// positive answer, and the absence of any label is a negative one.
+///
+/// **A third label is `None`, not `false`.** Something else launchd knows about
+/// started this process, and "not supervised by `proxenos.daemon`" and "nothing
+/// supervises this" are different statements. Reporting the second where only
+/// the first is established is the kind of plausible answer that reads as a
+/// measurement. `None` on every platform with no supervisor here, for the same
+/// reason.
+#[must_use]
+pub fn supervised(platform: &Platform, xpc_service_name: Option<&str>) -> Option<bool> {
+    if !matches!(platform, Platform::MacOs) {
+        return None;
+    }
+    match xpc_service_name {
+        Some(label) if label == LABEL => Some(true),
+        // launchd's own placeholder, and what a login shell passes down.
+        None | Some("") | Some("0") => Some(false),
+        Some(_) => None,
+    }
+}
+
 /// What is on disk, against what this environment would write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Installed {
