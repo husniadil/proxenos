@@ -1259,6 +1259,10 @@ fn accounts(state: &ControlState) -> Result<Value, ProxyError> {
             .find(|account| account.selected)
             .map(|account| account.name.clone()),
         "accounts": accounts,
+        // Whether these are the operator's own entries or the stock profiles
+        // this daemon read because none were written down. A front-end that
+        // could not tell would present a found account as a declared one.
+        "discovered": state.credentials.discovered_profiles(),
         // Credentials this daemon holds but no longer reads. Skipping one
         // silently reads as a credential that vanished (§8.4).
         "ignored_grants": state.credentials.ignored_grants().unwrap_or_default(),

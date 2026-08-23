@@ -137,10 +137,22 @@ pub fn accounts_at(result: &Value, now: u64) -> String {
         return "no accounts".to_owned();
     };
     if accounts.is_empty() {
-        return "no accounts — declare a profile under `[profiles]`, or store a key with \
+        return "no accounts — sign in with `claude auth login` or `codex login` and they are \
+                found from there, declare a profile under `[profiles]`, or store a key with \
                 `proxenos login --key --as NAME`"
             .to_owned();
     }
+
+    // Said once, under the rows rather than on them: it is true of the whole
+    // set, and what it tells the operator is why accounts they never wrote
+    // down are here — and how to stop them moving when they sign in
+    // somewhere else.
+    let found = if field(result, "discovered").and_then(Value::as_bool) == Some(true) {
+        "\nnote: these were found, not declared — the stock profile of each program, read \
+         because `[profiles]` is empty. Write them into `[profiles]` to pin them."
+    } else {
+        ""
+    };
 
     let ignored = match field(result, "ignored_grants").and_then(Value::as_array) {
         Some(names) if !names.is_empty() => {
@@ -239,7 +251,7 @@ pub fn accounts_at(result: &Value, now: u64) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
-    format!("{rows}{ignored}")
+    format!("{rows}{found}{ignored}")
 }
 
 /// What a rename says it did. Both halves, because the point of the command is
@@ -373,9 +385,25 @@ pub fn status_at(result: &Value, now: u64) -> String {
         };
         format!("auth       connected ({who}{kind}{provider})")
     } else {
-        "auth       not connected — declare a profile under `[profiles]`, or store a key \
-         with `proxenos login --key --as NAME`"
-            .to_owned()
+        // Two different states wear the same word. Nothing to serve with is
+        // one; several accounts and no choice between them is the other, and
+        // telling that operator to declare a profile sends them to add a
+        // third. Observed on a first run: two profiles found, `accounts`
+        // listing both, and `status` advising the one thing that would not
+        // help.
+        let held = auth
+            .and_then(|auth| field(auth, "accounts"))
+            .and_then(Value::as_array)
+            .is_some_and(|accounts| !accounts.is_empty());
+        if held {
+            "auth       no account chosen — more than one is available; choose with \
+             `proxenos accounts --use NAME`"
+                .to_owned()
+        } else {
+            "auth       not connected — sign in with `claude auth login` or `codex login` and \
+             it is found from there, or store a key with `proxenos login --key --as NAME`"
+                .to_owned()
+        }
     });
 
     // Its own line rather than a suffix on the one above: the account is

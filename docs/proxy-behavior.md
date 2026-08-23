@@ -1708,6 +1708,23 @@ else, the directory keeps its name, and every turn afterwards is billed to an
 account nobody pointed at them. A profile that cannot be read is never marked —
 it has not changed identity, it has not been read.
 
+**With nothing declared, the stock profile of each program is read.** A first
+run should not make an operator write down what the programs on the machine
+already know: `[profiles]` empty means look at the profile each client uses
+with no variable set, and whichever holds a grant is an account. One signed-in
+client is therefore one account, which serves without being chosen; two are two,
+and the existing rule applies — neither serves until one is chosen, because
+that choice decides whose subscription pays.
+
+Discovered and declared never mix. Writing any entry replaces the found set
+entirely: an entry is the operator's own statement about which identity pays,
+and a discovered profile sitting beside it would be a second opinion nobody
+asked for. A discovered profile holding no grant is not listed either — nobody
+asked for it, and reporting that a program was never signed into on a machine
+that does not have it answers a question nobody put. A declared one is always
+listed, whatever state it is in, because a row that vanished reads as an entry
+the operator never wrote. The listing says which of the two sets it is showing.
+
 **A login that has to be renewed is said so before it lapses, on the week it
 matters.** A Claude profile's stored item records `refreshTokenExpiresAt`,
 which is the date its own client counts down to ("your login expires in 3

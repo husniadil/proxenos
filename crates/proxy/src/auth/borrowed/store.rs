@@ -39,6 +39,15 @@ pub struct BorrowedStore {
     /// configuration that is entirely valid.
     platform: Result<Platform, String>,
     selection: Selection,
+    /// Whether these profiles were found rather than written down.
+    ///
+    /// It changes one thing: a declared profile that holds no grant is still
+    /// listed, because the operator wrote it and a missing row would read as
+    /// an entry they never wrote — while a discovered one that holds no grant
+    /// is nothing at all. Nobody asked for it, and reporting "the stock Codex
+    /// profile was never signed into" on a machine with no Codex on it is an
+    /// answer to a question nobody put.
+    discovered: bool,
 }
 
 /// Where profiles live on this machine.
@@ -59,12 +68,39 @@ impl BorrowedStore {
             reader,
             platform,
             selection,
+            discovered: false,
         }
     }
 
-    /// The profiles this store was built over, in the order declared.
-    pub fn profiles(&self) -> &[Profile] {
-        &self.profiles
+    /// The same store over profiles nobody declared (§8.4).
+    #[must_use]
+    pub fn discovered(mut self) -> Self {
+        self.discovered = true;
+        self
+    }
+
+    /// Whether this store is serving profiles it found rather than ones it was
+    /// given, which is what the listing says out loud.
+    pub fn is_discovered(&self) -> bool {
+        self.discovered
+    }
+
+    /// The profiles an operator can actually act on.
+    ///
+    /// The declared ones, whatever state they are in. Or, where they were
+    /// discovered, the ones that hold a grant — which costs a read apiece, and
+    /// is the read the answer is made of anyway.
+    fn visible(&self) -> Vec<&Profile> {
+        self.profiles
+            .iter()
+            .filter(|profile| !self.discovered || self.grant_for(profile).is_ok())
+            .collect()
+    }
+
+    /// The profiles this store answers for, in the order they were declared —
+    /// or, where nothing was declared, the ones that were found signed in.
+    pub fn profiles(&self) -> Vec<&Profile> {
+        self.visible()
     }
 
     /// One profile by name, and the grant it currently holds.
@@ -95,7 +131,7 @@ impl BorrowedStore {
                      Choose one with `accounts --use NAME`."
                 ))
             }),
-            None => match self.profiles.as_slice() {
+            None => match self.visible().as_slice() {
                 [] => Err(ProxyError::authentication(
                     "no profiles are declared. Add a `[profiles]` entry naming a directory \
                      another program keeps a grant in."
@@ -112,8 +148,8 @@ impl BorrowedStore {
     }
 
     fn named(&self, name: &str) -> Result<&Profile, ProxyError> {
-        self.profiles
-            .iter()
+        self.visible()
+            .into_iter()
             .find(|profile| profile.name == name)
             .ok_or_else(|| {
                 ProxyError::authentication(format!(
@@ -174,8 +210,8 @@ impl AccountStore for BorrowedStore {
         let recorded = self.selection.recorded_account_id()?;
 
         Ok(self
-            .profiles
-            .iter()
+            .visible()
+            .into_iter()
             .map(|profile| {
                 let grant = self.grant_for(profile).ok();
                 Account {

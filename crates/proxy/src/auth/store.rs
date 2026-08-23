@@ -340,6 +340,18 @@ pub trait AccountStore: CredentialStore {
     /// Every stored account, in the order they were added.
     fn accounts(&self) -> Result<Vec<Account>, ProxyError>;
 
+    /// Whether the profiles this store answers for were found rather than
+    /// declared (§8.4).
+    ///
+    /// `false` for a store where the question does not arise. It is reported
+    /// because the two are not the same promise: a declared account is the
+    /// operator's own statement about which identity pays, and a discovered
+    /// one is this daemon reading the stock profile of each program because
+    /// nothing was written down. Writing `[profiles]` replaces the set.
+    fn discovered_profiles(&self) -> bool {
+        false
+    }
+
     /// Credentials this store holds but no longer reads.
     ///
     /// Empty for a store where the question does not arise. It exists because

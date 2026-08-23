@@ -2077,3 +2077,136 @@ fn status_is_silent_where_no_renewal_date_is_known() {
 
     assert!(!rendered.contains("renew"), "{rendered}");
 }
+
+// --- the profiles nobody declared -----------------------------------------
+//
+// A first run should not require an operator to write down what the programs
+// on the machine already know. With `[profiles]` empty the stock profile of
+// each program is read, and what is signed in becomes an account.
+
+/// The set that is looked for: each program's stock profile, named plainly,
+/// with no directory — because the stock profile is precisely the one no
+/// variable designates (§8.4).
+#[test]
+fn the_discovered_set_is_the_stock_profile_of_each_program() {
+    let found = borrowed::discovered();
+
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[0].name, "codex");
+    assert_eq!(found[0].provider, Provider::Codex);
+    assert_eq!(found[1].name, "claude");
+    assert_eq!(found[1].provider, Provider::Anthropic);
+    assert!(found.iter().all(|profile| profile.config_dir.is_none()));
+}
+
+/// A discovered profile that holds no grant is not an account. Nobody asked
+/// for it, and reporting "the stock Codex profile was never signed into" on a
+/// machine with no Codex on it answers a question nobody put.
+#[test]
+fn a_discovered_profile_with_no_grant_is_not_listed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let codex = profile("codex", Provider::Codex, None);
+    let claude = profile("claude", Provider::Anthropic, None);
+    let store = store(
+        dir.path(),
+        vec![codex.clone(), claude],
+        &[(&codex, a_codex_grant())],
+    )
+    .discovered();
+
+    let listed = store.accounts().expect("lists");
+
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, "codex");
+    // And with one account there is nothing to choose between, so it serves.
+    assert!(listed[0].selected);
+    assert_eq!(
+        store.load().expect("loads").expect("a grant").account_id,
+        Some("acct_123".to_owned())
+    );
+}
+
+/// A declared profile that holds no grant is still listed: the operator wrote
+/// it, and a row that vanished would read as an entry they never wrote. This
+/// is the difference the two sets are for.
+#[test]
+fn a_declared_profile_with_no_grant_is_still_listed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let codex = profile("codex", Provider::Codex, None);
+    let claude = profile("claude", Provider::Anthropic, None);
+    let store = store(
+        dir.path(),
+        vec![codex.clone(), claude],
+        &[(&codex, a_codex_grant())],
+    );
+
+    assert_eq!(store.accounts().expect("lists").len(), 2);
+}
+
+/// Declaring anything replaces the found set entirely — a written entry is the
+/// operator's statement about which identity pays, and a discovered one
+/// sitting beside it would be a second opinion nobody asked for.
+#[test]
+fn declaring_a_profile_stops_the_daemon_looking_for_others() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut config = proxenos::config::Config::default();
+
+    let found = Accounts::from_config(&config, dir.path()).expect("builds");
+    assert!(found.discovered_profiles());
+
+    config.profiles.insert(
+        "work".to_owned(),
+        proxenos::config::ProfileConfig {
+            provider: Provider::Codex,
+            path: Some(PathBuf::from("/profiles/work")),
+        },
+    );
+    let declared = Accounts::from_config(&config, dir.path()).expect("builds");
+    assert!(!declared.discovered_profiles());
+}
+
+/// The listing says which of the two it is, because a front-end that could not
+/// tell would present a found account as one the operator chose.
+#[test]
+fn the_listing_says_the_accounts_were_found_rather_than_declared() {
+    let rendered = render::accounts(&serde_json::json!({
+        "discovered": true,
+        "accounts": [{
+            "name": "claude",
+            "kind": "grant",
+            "provider": "anthropic",
+            "plan": "max",
+            "selected": true,
+        }],
+    }));
+
+    assert!(rendered.contains("found, not declared"), "{rendered}");
+    assert!(rendered.contains("[profiles]"), "{rendered}");
+}
+
+/// Nothing to serve with and several accounts with no choice between them are
+/// different problems, and only one of them is fixed by adding an account.
+///
+/// Seen on a first run: two profiles found, `accounts` listing both, and
+/// `status` advising the operator to declare a profile — which would have
+/// added a third and chosen none of them.
+#[test]
+fn status_tells_a_full_store_to_choose_and_an_empty_one_to_sign_in() {
+    let chooseable = render::status(&serde_json::json!({
+        "auth": {
+            "connected": false,
+            "accounts": [
+                { "name": "codex", "provider": "codex", "kind": "grant" },
+                { "name": "claude", "provider": "anthropic", "kind": "grant" },
+            ],
+        },
+    }));
+    assert!(chooseable.contains("accounts --use"), "{chooseable}");
+
+    let empty = render::status(&serde_json::json!({
+        "auth": { "connected": false, "accounts": [] },
+    }));
+    assert!(empty.contains("claude auth login"), "{empty}");
+    assert!(empty.contains("login --key"), "{empty}");
+    assert!(!empty.contains("accounts --use"), "{empty}");
+}

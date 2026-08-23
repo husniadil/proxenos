@@ -368,6 +368,34 @@ pub fn source(provider: Provider, host: Host, config_dir: Option<&Path>, home: &
     }
 }
 
+/// The profiles looked for when the operator has declared none.
+///
+/// Both stock profiles: what each program uses with no variable set. A machine
+/// where one of them was never signed into simply has one account, and one
+/// where neither was has none — the same answer as before, arrived at without
+/// making the operator write down what the programs themselves already know.
+///
+/// Their names are what `accounts --use` takes, so they are the plainest thing
+/// each provider could be called. Declaring `[profiles]` replaces this set
+/// entirely: a written entry is the operator's own statement about identity,
+/// and a discovered one must never quietly sit beside it.
+pub fn discovered() -> Vec<read::Profile> {
+    [
+        (DISCOVERED_CODEX, Provider::Codex),
+        (DISCOVERED_CLAUDE, Provider::Anthropic),
+    ]
+    .into_iter()
+    .map(|(name, provider)| read::Profile {
+        name: name.to_owned(),
+        provider,
+        config_dir: None,
+    })
+    .collect()
+}
+
+pub const DISCOVERED_CODEX: &str = "codex";
+pub const DISCOVERED_CLAUDE: &str = "claude";
+
 pub mod poke;
 pub mod read;
 pub mod store;

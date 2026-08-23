@@ -71,6 +71,13 @@ vanished. Keys in that file keep working exactly as they did.
   refuses with `could not run \`claude\``. The same key settles the version the
   second provider's quota request is made as.
 
+- **A first run with nothing to configure.** `[profiles]` empty now means the
+  stock profile of each program — what `claude` and `codex` themselves use with
+  no variable set — and whichever is signed in becomes an account. One signed-in
+  client is one account and serves turns; two are two, and one has to be chosen,
+  because that decides whose subscription pays. Writing any entry replaces the
+  found set entirely, and the listing says which of the two it is showing.
+
 - **A warning before a borrowed login lapses.** A Claude profile records the
   date its own client counts down to, and within seven days of it `accounts`
   says how long is left and `status` says what renewing takes. It is the one

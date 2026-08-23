@@ -229,6 +229,10 @@ impl AccountStore for Accounts {
         self.ignored()
     }
 
+    fn discovered_profiles(&self) -> bool {
+        self.borrowed.is_discovered()
+    }
+
     /// The borrowed profiles first, then the stored keys.
     ///
     /// Order is the order they were declared and stored in. The selection is
@@ -363,15 +367,26 @@ impl Accounts {
         config: &crate::config::Config,
         config_dir: &std::path::Path,
     ) -> Result<Self, ProxyError> {
-        let profiles = config
-            .profiles
-            .iter()
-            .map(|(name, profile)| crate::auth::borrowed::read::Profile {
-                name: name.clone(),
-                provider: profile.provider,
-                config_dir: profile.path.clone(),
-            })
-            .collect();
+        // Declared, or found. An operator who wrote `[profiles]` gets exactly
+        // what they wrote; one who wrote nothing gets the stock profile of
+        // each program, which is what those programs use themselves (§8.4).
+        // The two never mix: a written entry is a statement about identity,
+        // and a discovered one sitting beside it would be a second opinion
+        // nobody asked for.
+        let declared = !config.profiles.is_empty();
+        let profiles: Vec<_> = if declared {
+            config
+                .profiles
+                .iter()
+                .map(|(name, profile)| crate::auth::borrowed::read::Profile {
+                    name: name.clone(),
+                    provider: profile.provider,
+                    config_dir: profile.path.clone(),
+                })
+                .collect()
+        } else {
+            crate::auth::borrowed::discovered()
+        };
 
         // Resolved, not required. A configuration with no `[profiles]` is a key
         // account's, and it needs neither a checked host nor a home directory —
@@ -385,13 +400,19 @@ impl Accounts {
                 })
             });
 
+        let borrowed = BorrowedStore::new(
+            profiles,
+            Box::new(crate::auth::borrowed::read::HostReader),
+            platform,
+            Selection::new(Selection::path_in(config_dir)),
+        );
+
         Ok(Self::new(
-            BorrowedStore::new(
-                profiles,
-                Box::new(crate::auth::borrowed::read::HostReader),
-                platform,
-                Selection::new(Selection::path_in(config_dir)),
-            ),
+            if declared {
+                borrowed
+            } else {
+                borrowed.discovered()
+            },
             FileStore::new(config_dir.join(crate::auth::store::KEYS_FILE)),
             Selection::new(Selection::path_in(config_dir)),
             // Where the operator said the client is, and the bare name
