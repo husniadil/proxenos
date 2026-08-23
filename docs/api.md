@@ -983,6 +983,14 @@ which decides which endpoint it is spent against and what it can be asked for;
 carries the same field. Stored entries without one are the first provider's:
 every credential file written before the field existed reads unchanged, and the
 CLI renderings name a provider only where it is not `codex`.
+`auth.key_flavour` is present only on a key, and only where the store recorded
+which meter it is on: `subscription_token` or `api_key` (`proxy-behavior.md`
+§8.2). It is a classification of the credential's shape, never any part of the
+secret. It is **absent** on every entry written before the field existed and on
+any key whose shape matched neither, and absence is reported rather than
+resolved into whichever is likelier — a `usage` row for such an account says
+this daemon does not know which meter it is on, and claims nothing about
+whether a figure will arrive.
 `auth.connected` means there is a credential to spend, of either kind — a key
 has no grant behind it, and reading only the grant reported a daemon that could
 serve every turn as not connected. `auth.accounts` lists every stored

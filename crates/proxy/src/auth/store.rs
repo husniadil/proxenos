@@ -46,13 +46,85 @@ impl std::fmt::Debug for Credentials {
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ApiKey {
     api_key: String,
+    /// Which of the two anthropic key shapes this is, where the shape said so.
+    ///
+    /// A classification, never any part of the secret. Absent where nothing
+    /// classified it: a file written before the field existed, a key of a
+    /// provider the distinction does not apply to, or a key matching neither
+    /// shape. Absent is its own answer and is never resolved into a guess.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    flavour: Option<KeyFlavour>,
 }
+
+/// What an anthropic key is metered as.
+///
+/// The two are filed identically and behave in opposite ways: a subscription
+/// token draws down an entitlement whose figure rides the response headers of
+/// every relayed turn, and an API key has no ceiling at all and is metered per
+/// token. Nothing that reports an account can be right about both without
+/// knowing which it holds.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyFlavour {
+    /// What `claude setup-token` mints.
+    SubscriptionToken,
+    /// A key billed per token.
+    ApiKey,
+}
+
+impl KeyFlavour {
+    /// What this flavour is called wherever it is reported.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SubscriptionToken => "subscription_token",
+            Self::ApiKey => "api_key",
+        }
+    }
+
+    /// What the shape of a key says about it, at the moment it is handed over.
+    ///
+    /// A prefix is evidence rather than proof, so this answers only for a shape
+    /// it recognizes: a key matching neither is filed as neither, and reports
+    /// as the unknown it is. The distinction is anthropic's — the other
+    /// provider issues one kind of key and nothing here would be answering a
+    /// question about it.
+    fn classify(key: &str, provider: Provider) -> Option<Self> {
+        if provider != Provider::Anthropic {
+            return None;
+        }
+        if key.starts_with(crate::auth::setup_token::SETUP_TOKEN_PREFIX) {
+            return Some(Self::SubscriptionToken);
+        }
+        if key.starts_with(API_KEY_PREFIX) {
+            return Some(Self::ApiKey);
+        }
+        None
+    }
+}
+
+/// The stem an anthropic API key carries, as distinct from a setup token's.
+/// The version digits after it belong to the issuer, the same reason
+/// `SETUP_TOKEN_PREFIX` stops where it does.
+pub const API_KEY_PREFIX: &str = "sk-ant-api";
 
 impl ApiKey {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
+            flavour: None,
         }
+    }
+
+    /// The same key, with what its shape says about it recorded beside it.
+    pub fn classified(api_key: impl Into<String>, provider: Provider) -> Self {
+        let api_key = api_key.into();
+        let flavour = KeyFlavour::classify(&api_key, provider);
+        Self { api_key, flavour }
+    }
+
+    /// What was recorded about this key's meter, where anything was.
+    pub fn flavour(&self) -> Option<KeyFlavour> {
+        self.flavour
     }
 
     /// The secret itself, for the one caller that puts it on the wire.
@@ -120,6 +192,15 @@ impl Credential {
         }
     }
 
+    /// What was recorded about a key's meter. A grant has none: it is a
+    /// subscription by construction.
+    pub fn flavour(&self) -> Option<KeyFlavour> {
+        match self {
+            Self::Grant(_) => None,
+            Self::Key(key) => key.flavour(),
+        }
+    }
+
     pub fn grant(&self) -> Option<&Credentials> {
         match self {
             Self::Grant(grant) => Some(grant),
@@ -169,6 +250,12 @@ pub struct Account {
     /// Which provider the credential is spent against — the other half of that
     /// same decision.
     pub provider: &'static str,
+    /// Which meter a key is on, where the store recorded it: an anthropic
+    /// subscription token and an anthropic API key are both `key` and are
+    /// metered in opposite ways. Absent where nothing classified it, and
+    /// absent is reported rather than resolved into whichever is likelier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_flavour: Option<&'static str>,
     /// The id the backend knows it by, where the grant carried one.
     pub account_id: Option<String>,
     /// Read from the stored id token, so two accounts are distinguishable by
@@ -776,6 +863,7 @@ impl AccountStore for FileStore {
                     name: entry.name.clone(),
                     kind: entry.credential.kind(),
                     provider: entry.provider.as_str(),
+                    key_flavour: entry.credential.flavour().map(KeyFlavour::as_str),
                     // All four come from a grant's claims. A key carries none
                     // of them, and reports none rather than something
                     // plausible.
@@ -868,12 +956,12 @@ impl AccountStore for FileStore {
                 .and_then(|index| file.accounts.get_mut(index))
             {
                 Some(entry) => {
-                    entry.credential = Credential::Key(ApiKey::new(key));
+                    entry.credential = Credential::Key(ApiKey::classified(key, provider));
                 }
                 None => file.accounts.push(Entry {
                     name: name.to_owned(),
                     provider,
-                    credential: Credential::Key(ApiKey::new(key)),
+                    credential: Credential::Key(ApiKey::classified(key, provider)),
                 }),
             }
             // The same rule `put` states: a key is stored, and it serves turns

@@ -70,6 +70,10 @@ struct Harness {
     /// temp directory, never the operator's.
     config_file: std::path::PathBuf,
     store: Arc<FileStore>,
+    /// The file the store reads. Held so a test can write the shape a file
+    /// written before a field existed had, which is the only way to assert
+    /// what such an account reports.
+    credentials_path: std::path::PathBuf,
     /// The same policy the ingress routes turns from. Asserting on this is the
     /// difference between testing that a method echoes a value back and testing
     /// that it moved anything.
@@ -170,6 +174,7 @@ impl Harness {
         Self {
             path,
             config_file: dir.path().join("config.toml"),
+            credentials_path: dir.path().join("credentials.json"),
             store,
             policy,
             switches,
@@ -5117,7 +5122,10 @@ async fn a_usage_reason_names_the_provider_it_describes() {
         .unwrap();
     harness
         .store
-        .add_key("relay", "relay-secret", Provider::Anthropic)
+        // A setup token, so the row is the one whose figure is genuinely one
+        // turn away (§8.2). What is asserted is which provider the sentence
+        // names, and an unclassified key answers a different question.
+        .add_key("relay", "sk-ant-oat01-relay", Provider::Anthropic)
         .unwrap();
     harness.store.select("main").unwrap();
 
@@ -5291,4 +5299,81 @@ fn a_first_selection_names_the_provider_without_claiming_a_move() {
         "serving turns as main"
     );
     assert_eq!(render::selected_account(&json!({})), "no account selected");
+}
+
+/// §8.2 — a subscription setup token and an API key are both filed as `key` on
+/// anthropic, and they are metered in opposite ways. One line cannot be true of
+/// both: for the setup token a figure genuinely arrives on the next relayed
+/// turn, and for the API key none ever will, because it is metered per token
+/// with no ceiling at all.
+#[tokio::test]
+async fn an_anthropic_key_says_which_of_the_two_it_is() {
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add_key("subscription", "sk-ant-oat01-value", Provider::Anthropic)
+        .unwrap();
+    harness
+        .store
+        .add_key("metered", "sk-ant-api03-value", Provider::Anthropic)
+        .unwrap();
+
+    let usage = harness.call("usage").await.unwrap();
+    let detail = |name: &str| {
+        usage["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["account"] == json!(name))
+            .unwrap_or_else(|| panic!("`{name}` should be reported: {usage}"))["detail"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+
+    assert_eq!(
+        detail("subscription"),
+        "anthropic states quota on every turn; this daemon has recorded no relayed \
+         turn as this account yet"
+    );
+    assert_eq!(
+        detail("metered"),
+        "an anthropic API key has no quota ceiling; it is metered per token, so nothing \
+         here bounds its spend (no turn has been served as it yet)"
+    );
+}
+
+/// An account stored before the flavour was recorded, and a key whose shape
+/// matches neither, are the same case: this daemon does not know which of the
+/// two it holds. The line says that and claims nothing further — not that a
+/// figure is pending, and not that none will ever come.
+#[tokio::test]
+async fn an_unclassified_anthropic_key_claims_neither_meter() {
+    let harness = Harness::start().await;
+    // What a file written before the field existed holds: a key, a provider,
+    // and no flavour. Nothing re-reads the secret to classify it after the
+    // fact, so this is exactly the legacy row.
+    std::fs::write(
+        &harness.credentials_path,
+        r#"{"selected":"legacy","accounts":[{"name":"legacy","provider":"anthropic","kind":"key","api_key":"stored-before-the-field"}]}"#,
+    )
+    .unwrap();
+
+    let usage = harness.call("usage").await.unwrap();
+    let detail = usage["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["account"] == json!("legacy"))
+        .unwrap_or_else(|| panic!("`legacy` should be reported: {usage}"))["detail"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    assert_eq!(
+        detail,
+        "this daemon has not recorded which kind of anthropic key this account holds, \
+         so it cannot say whether a quota figure will ever arrive for it \
+         (no turn has been served as it yet)"
+    );
 }

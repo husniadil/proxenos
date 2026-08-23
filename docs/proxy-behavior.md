@@ -1268,6 +1268,23 @@ and carries the one quantity that can honestly stand beside it: the tokens this
 daemon has served as the account (§6.1), as a count, with no cost stated or
 estimated.
 
+**On the second provider a key is two credentials wearing one word.** A
+subscription setup token and an API key are both stored as `key`, and they are
+metered in opposite ways: the token draws down an entitlement whose figure rides
+the response headers of every relayed turn, and the API key has no ceiling and
+is metered per token. One sentence cannot be true of both — the token's figure
+is genuinely one turn away, and the key's never arrives — so the store records
+**which of the two a key is**, at the moment it is handed over, from the stem
+its shape carries. What is persisted is a classification and never any part of
+the secret (§8). Three rows follow, and each says only what is known: the
+setup token reports a figure pending; the API key reports the absence of a
+ceiling with the served-token count beside it, exactly as the paragraph above
+states for the other provider's key; and a key that is **neither** — one whose
+shape matched no stem, or one stored before the field existed — reports that
+this daemon has not recorded which meter it is on. A prefix is evidence and not
+proof, so an unrecognized shape is filed as neither rather than as the likelier
+one, and nothing re-reads a stored secret to classify it after the fact.
+
 A fourth follows from the catalog rather than the pairing. The key endpoint's
 model list is real and authoritative — it answers with every model the key can
 reach — and it carries no window and no supported efforts for any of them. So
