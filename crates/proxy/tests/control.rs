@@ -3086,6 +3086,64 @@ async fn a_failed_refetch_keeps_the_catalog_already_in_force() {
     assert_eq!(models["stale"], json!(true));
 }
 
+/// Two accounts on different plans, switched between in both directions,
+/// with nothing edited in between.
+///
+/// This is what one shared `[tiers]` table cannot do: a catalog is one
+/// account's menu (§7.0), so a table naming a model only one plan offers
+/// refuses every switch to the other. `[accounts.<name>.tiers]` is the way to
+/// hold a mapping that is right for both, and the switch resolves the account
+/// being moved *to* — so the round trip has to be accepted without the
+/// operator touching the file at any point in it.
+#[tokio::test]
+async fn switching_between_accounts_with_different_catalogs_needs_no_config_edit() {
+    let catalogs = CatalogServer::start().await;
+    let harness = Harness::start()
+        .await
+        .with_configuration(mapping_per_account(&["acct_one", "acct_two"]))
+        .await;
+    harness
+        .store
+        .add(&grant("acct_one", "a-one"), None)
+        .unwrap();
+    harness
+        .store
+        .add(&grant("acct_two", "a-two"), None)
+        .unwrap();
+    harness.store.select("acct_two").unwrap();
+    let harness = harness.with_catalog_source(&catalogs.url).await;
+
+    let written = std::fs::read_to_string(&harness.config_file).unwrap_or_default();
+
+    for account in ["acct_one", "acct_two", "acct_one"] {
+        harness
+            .call_with("accounts.select", json!({ "account": account }))
+            .await
+            .unwrap_or_else(|error| {
+                panic!("the switch to {account} should be accepted as written: {error}")
+            });
+
+        let expected = format!("model-for-{account}");
+        let serving: Vec<String> = harness
+            .policy
+            .get()
+            .tiers()
+            .iter()
+            .map(|tier| tier.model.clone())
+            .collect();
+        assert!(
+            !serving.is_empty() && serving.iter().all(|model| *model == expected),
+            "every tier should serve {expected}, not {serving:?}"
+        );
+    }
+
+    assert_eq!(
+        std::fs::read_to_string(&harness.config_file).unwrap_or_default(),
+        written,
+        "no switch may need the configuration file changed"
+    );
+}
+
 /// What the stub carries: what it was asked for, and whether it is refusing.
 type CatalogState = (
     Arc<std::sync::Mutex<Vec<String>>>,
@@ -3483,6 +3541,14 @@ async fn a_switch_the_target_account_cannot_serve_is_refused() {
     assert!(
         error.contains("a-model-this-account-has-not"),
         "the refusal should name the model: {error}"
+    );
+    // And the way out. A catalog is one account's menu, so a mapping written
+    // once for the daemon is only ever right for the models every account has;
+    // an operator who meets this refusal with no pointer has nothing but an
+    // edit before each switch and another one after it.
+    assert!(
+        error.contains("[accounts.acct_one.tiers]"),
+        "the refusal should name the way to hold a mapping for both: {error}"
     );
     assert_eq!(
         harness.store.load().unwrap().unwrap().access_token,
