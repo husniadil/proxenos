@@ -80,7 +80,7 @@ pub fn plan(platform: &Platform, origin: &Origin) -> Result<Unit, ProxyError> {
              unit — a `proxenos.service` with `Restart=always` under \
              `~/.config/systemd/user` — which nothing here writes, because a unit that is written \
              but never runs is worse than no verb: it reports success and supervises nothing. \
-             Until then, start the daemon with `proxenos run --detach` and supervise it with \
+             Until then, start the daemon with `proxenos start` and supervise it with \
              whatever this platform already has."
         )));
     }

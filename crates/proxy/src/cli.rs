@@ -13,7 +13,14 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Start the daemon.
+    /// Start the daemon in the background and return once it answers.
+    ///
+    /// A verb of its own rather than a flag on `run`, because backgrounding is
+    /// what an operator asks for and holding the terminal is what a supervisor
+    /// asks for. `stop` is the pair of this one, and was the pair of neither
+    /// while the two lived under one name.
+    Start(StartArgs),
+    /// Start the daemon in the foreground, holding the terminal.
     Run(RunArgs),
     /// Stored accounts: list them, add one, choose one, drop one.
     Accounts(AccountsArgs),
@@ -190,9 +197,13 @@ pub struct RunArgs {
     /// Port to bind on loopback. Overrides the configured value.
     #[arg(long, env = "PROXENOS_PORT")]
     pub port: Option<u16>,
-    /// Start the daemon in the background and return once it answers.
-    #[arg(long)]
-    pub detach: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct StartArgs {
+    /// Port to bind on loopback. Overrides the configured value.
+    #[arg(long, env = "PROXENOS_PORT")]
+    pub port: Option<u16>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -343,21 +354,36 @@ mod tests {
         assert!(matches!(cli.command, Command::Stop));
     }
 
-    /// The flag belongs to `run` alone; without it the daemon owns the
-    /// terminal, which is the right default for watching it work.
+    /// Backgrounding is a verb, and the flag that used to spell it is gone
+    /// with no alias. A flag still accepted here would start a daemon the
+    /// documentation no longer describes.
     #[test]
-    fn run_can_be_asked_to_detach() {
-        let cli = Cli::try_parse_from(["proxenos", "run", "--detach"]).unwrap();
-        let Command::Run(args) = cli.command else {
-            panic!("run should parse");
+    fn start_is_a_verb_and_detach_is_not_a_flag() {
+        let cli = Cli::try_parse_from(["proxenos", "start"]).unwrap();
+        let Command::Start(args) = cli.command else {
+            panic!("start should parse");
         };
-        assert!(args.detach);
+        assert_eq!(args.port, None);
 
-        let cli = Cli::try_parse_from(["proxenos", "run"]).unwrap();
+        assert!(Cli::try_parse_from(["proxenos", "run", "--detach"]).is_err());
+        assert!(Cli::try_parse_from(["proxenos", "start", "--detach"]).is_err());
+    }
+
+    /// Both daemon verbs take the same port control, because either one is
+    /// how a daemon gets started.
+    #[test]
+    fn start_and_run_take_the_same_port() {
+        let cli = Cli::try_parse_from(["proxenos", "start", "--port", "18799"]).unwrap();
+        let Command::Start(args) = cli.command else {
+            panic!("start should parse");
+        };
+        assert_eq!(args.port, Some(18799));
+
+        let cli = Cli::try_parse_from(["proxenos", "run", "--port", "18799"]).unwrap();
         let Command::Run(args) = cli.command else {
             panic!("run should parse");
         };
-        assert!(!args.detach);
+        assert_eq!(args.port, Some(18799));
     }
 
     /// The secret is never an argument. A command line is visible to every

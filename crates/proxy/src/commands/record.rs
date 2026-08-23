@@ -17,16 +17,7 @@ use std::sync::Arc;
 /// involved at the point of capture.
 pub(crate) async fn record(args: cli::RecordArgs) -> Result<()> {
     match args.mode {
-        cli::RecordMode::Ingress { port } => {
-            run_with(
-                RunArgs {
-                    port,
-                    detach: false,
-                },
-                Capture::Ingress,
-            )
-            .await
-        }
+        cli::RecordMode::Ingress { port } => run_with(RunArgs { port }, Capture::Ingress).await,
         cli::RecordMode::Upstream { port } => {
             // Says so before it starts, because the cost is the difference
             // between the two modes and it is not recoverable afterwards.
@@ -34,14 +25,7 @@ pub(crate) async fn record(args: cli::RecordArgs) -> Result<()> {
                 "recording upstream: every turn through this daemon spends quota \
                  and is written to disk with its content"
             );
-            run_with(
-                RunArgs {
-                    port,
-                    detach: false,
-                },
-                Capture::Upstream,
-            )
-            .await
+            run_with(RunArgs { port }, Capture::Upstream).await
         }
         cli::RecordMode::Surface { account, out, only } => {
             surface(&account, out, only.as_deref()).await

@@ -318,7 +318,7 @@ fn status(state: &ControlState) -> Value {
         // This process, as distinct from any other that serves the same socket.
         "instance": &*INSTANCE,
         // The process serving it, so `status` names what `stop`, `supervisor`
-        // and `run --detach` all talk about.
+        // and `start` all talk about.
         "pid": std::process::id(),
         // Whether the supervisor of §2.6 is what started it. Null where this
         // side cannot tell, which a renderer reports as silence: "not

@@ -346,7 +346,7 @@ pub fn status_at(result: &Value, now: u64) -> String {
     // process, and whether anything brings it back. Without it the only
     // version ever printed was the one on the mismatch notice below, so a
     // daemon that agreed with its CLI reported no version at all — and `stop`,
-    // `supervisor` and `run --detach` all describe a process the report never
+    // `supervisor` and `start` all describe a process the report never
     // named.
     if let Some(version) = daemon_version {
         // The pid where the payload carries one, and nothing where it does not:

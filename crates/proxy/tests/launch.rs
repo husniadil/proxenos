@@ -495,29 +495,29 @@ fn stop_names_the_upgrade_problem_when_the_daemon_predates_it() {
     );
 }
 
-/// `run --detach` hands the terminal back and leaves a daemon behind.
+/// `start` hands the terminal back and leaves a daemon behind.
 ///
 /// The command's own exit is the observable: after it returns, the daemon it
 /// started still answers the control socket, its output lands in a log file
 /// rather than a terminal that no longer exists, and `stop` still ends it.
 #[cfg(unix)]
 #[test]
-fn a_detached_run_outlives_the_command_that_started_it() {
+fn a_started_daemon_outlives_the_command_that_started_it() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
     let binary = env!("CARGO_BIN_EXE_proxenos");
 
     let started = std::process::Command::new(binary)
-        .args(["run", "--detach", "--port", "0"])
+        .args(["start", "--port", "0"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
         .output()
-        .expect("the detach command should run");
+        .expect("the start command should run");
 
     assert!(
         started.status.success(),
-        "detach failed: {}{}",
+        "start failed: {}{}",
         String::from_utf8_lossy(&started.stdout),
         String::from_utf8_lossy(&started.stderr)
     );
@@ -544,7 +544,7 @@ fn a_detached_run_outlives_the_command_that_started_it() {
         .expect("the stop verb should run");
     assert!(
         stopped.status.success(),
-        "the detached daemon should have been answering: {}",
+        "the started daemon should have been answering: {}",
         String::from_utf8_lossy(&stopped.stderr)
     );
 }
@@ -555,7 +555,7 @@ fn a_detached_run_outlives_the_command_that_started_it() {
 /// The command must exit nonzero and quote the reason the daemon itself gave.
 #[cfg(unix)]
 #[test]
-fn a_detached_daemon_that_dies_at_startup_is_reported_from_its_log() {
+fn a_started_daemon_that_dies_at_startup_is_reported_from_its_log() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -569,11 +569,11 @@ fn a_detached_daemon_that_dies_at_startup_is_reported_from_its_log() {
     std::fs::write(home.join("daemon.log"), "STALE LINE FROM AN EARLIER RUN\n").unwrap();
 
     let started = std::process::Command::new(binary)
-        .args(["run", "--detach", "--port", &port])
+        .args(["start", "--port", &port])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
         .output()
-        .expect("the detach command should run");
+        .expect("the start command should run");
 
     assert!(
         !started.status.success(),
@@ -590,42 +590,48 @@ fn a_detached_daemon_that_dies_at_startup_is_reported_from_its_log() {
     );
 }
 
-/// One daemon per control socket. A second detach is refused before it can
-/// spawn a child that would steal the first one's socket file.
+/// One daemon per control socket. A second `start` names what is already
+/// answering instead of spawning a child that would steal its socket file —
+/// and exits 0, because the state it was asked for is the state that holds.
 #[cfg(unix)]
 #[test]
-fn a_second_detach_is_refused_while_the_first_still_answers() {
+fn a_second_start_names_the_daemon_already_answering() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
     let binary = env!("CARGO_BIN_EXE_proxenos");
 
     let first = std::process::Command::new(binary)
-        .args(["run", "--detach", "--port", "0"])
+        .args(["start", "--port", "0"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
         .output()
-        .expect("the first detach should run");
+        .expect("the first start should run");
     assert!(
         first.status.success(),
-        "the first detach should have worked: {}",
+        "the first start should have worked: {}",
         String::from_utf8_lossy(&first.stderr)
     );
 
     let second = std::process::Command::new(binary)
-        .args(["run", "--detach", "--port", "0"])
+        .args(["start", "--port", "0"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
         .output()
-        .expect("the second detach should run");
+        .expect("the second start should run");
     assert!(
-        !second.status.success(),
-        "the second detach must be refused while the first answers"
+        second.status.success(),
+        "a daemon already answering is the state that was asked for: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let said = String::from_utf8_lossy(&second.stdout);
+    assert!(
+        said.starts_with("already running: "),
+        "it should name what is there: {said}"
     );
     assert!(
-        String::from_utf8_lossy(&second.stderr).contains("already answering"),
-        "it should say why: {}",
-        String::from_utf8_lossy(&second.stderr)
+        said.contains("(pid "),
+        "naming the process is what makes the line actionable: {said}"
     );
 
     let _ = std::process::Command::new(binary)

@@ -10,6 +10,7 @@ use super::serving_account;
 use super::version_of;
 use super::watch;
 use crate::cli::RunArgs;
+use crate::cli::StartArgs;
 use anyhow::Result;
 use anyhow::bail;
 use proxenos::config::Config;
@@ -121,28 +122,48 @@ pub(crate) enum Capture {
 }
 
 pub(crate) async fn run(args: RunArgs) -> Result<()> {
-    if args.detach {
-        return detach(&args).await;
-    }
     run_with(args, Capture::Nothing).await
+}
+
+/// What to say about a daemon that is already answering.
+///
+/// A pure function over what the socket reported, so the sentence is a test
+/// rather than something read off a machine that happens to have a daemon on
+/// it. The process and the supervision are said where the payload carries
+/// them and left out where it does not: inventing a pid for a daemon that
+/// reports none would be worse than a shorter line, and "not supervised" is a
+/// claim only a daemon that can tell is entitled to make.
+fn already_running(now: &Answering) -> String {
+    let pid = now
+        .pid
+        .map_or_else(String::new, |pid| format!(" (pid {pid})"));
+    let supervised = match now.supervised {
+        Some(true) => ", supervised",
+        Some(false) => ", not supervised",
+        None => "",
+    };
+    format!("already running: {}{pid}{supervised}", now.version)
 }
 
 /// Start the daemon as its own process and return once it answers.
 ///
 /// The child is a plain `run` of this same binary in its own process group,
-/// its output appended to a log file, because a detached process's terminal is
-/// gone the moment this command returns. Success is observed, not assumed:
-/// this returns 0 only once the daemon answers the control socket, and a child
-/// that dies first has its log quoted rather than summarized.
-async fn detach(args: &RunArgs) -> Result<()> {
+/// its output appended to a log file, because a backgrounded process's
+/// terminal is gone the moment this command returns. Success is observed, not
+/// assumed: this returns 0 only once the daemon answers the control socket,
+/// and a child that dies first has its log quoted rather than summarized.
+///
+/// A daemon already answering is the state this verb was asked to produce, so
+/// it says what is there and exits 0 rather than failing. Nothing is started:
+/// the control socket is one per path, and a second daemon would take over the
+/// first one's socket file while the first kept the port.
+pub(crate) async fn start(args: StartArgs) -> Result<()> {
     use anyhow::Context;
 
     let socket = control::default_path();
-    if control::call(&socket, "status", None).await.is_ok() {
-        bail!(
-            "a daemon is already answering on the control socket. Stop it with \
-             `proxenos stop` first."
-        );
+    if let Some(now) = answering().await {
+        println!("{}", already_running(&now));
+        return Ok(());
     }
 
     let log_path = proxenos::config::config_dir().join("daemon.log");
@@ -500,4 +521,47 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
         () = shutdown.wait() => tracing::info!("stopping, as asked over the control socket"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn answering_as(version: &str, pid: Option<u64>, supervised: Option<bool>) -> Answering {
+        Answering {
+            version: version.to_owned(),
+            instance: Some("an id".to_owned()),
+            pid,
+            supervised,
+        }
+    }
+
+    /// The whole answer to `start` where one is already up: what build, which
+    /// process, and whether anything brings it back.
+    #[test]
+    fn an_answering_daemon_is_named_rather_than_replaced() {
+        assert_eq!(
+            already_running(&answering_as("0.12.0", Some(4711), Some(true))),
+            "already running: 0.12.0 (pid 4711), supervised"
+        );
+        assert_eq!(
+            already_running(&answering_as("0.12.0", Some(4711), Some(false))),
+            "already running: 0.12.0 (pid 4711), not supervised"
+        );
+    }
+
+    /// A daemon that cannot answer half the question is not made to. The
+    /// platform with no supervisor here says nothing about supervision, and a
+    /// build predating `pid` gets no invented number.
+    #[test]
+    fn what_the_daemon_cannot_say_is_left_unsaid() {
+        assert_eq!(
+            already_running(&answering_as("0.12.0", Some(4711), None)),
+            "already running: 0.12.0 (pid 4711)"
+        );
+        assert_eq!(
+            already_running(&answering_as("0.11.0", None, None)),
+            "already running: 0.11.0"
+        );
+    }
 }

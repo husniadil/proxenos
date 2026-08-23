@@ -40,7 +40,7 @@ fn a_platform_this_cannot_supervise_is_refused_by_name() {
         "and names what supervising this platform would take: {message}"
     );
     assert!(
-        message.contains("run --detach"),
+        message.contains("proxenos start"),
         "and names what to do meanwhile: {message}"
     );
 }
@@ -152,7 +152,7 @@ fn a_program_launchd_cannot_resolve_is_refused() {
     assert!(message.contains("absolute"), "{message}");
 }
 
-/// The unit runs `run` in the foreground and keeps it alive. Not `--detach`:
+/// The unit runs `run` in the foreground and keeps it alive. Not `start`:
 /// a process that forks away leaves launchd supervising something that has
 /// already exited, and the respawn loop then fights the daemon it cannot see.
 #[test]
@@ -161,7 +161,7 @@ fn the_unit_runs_the_daemon_in_the_foreground_and_keeps_it_alive() {
     let document = render(&unit);
 
     assert_eq!(unit.arguments, vec!["run".to_owned()]);
-    assert!(!document.contains("--detach"), "{document}");
+    assert!(!document.contains("<string>start</string>"), "{document}");
     assert!(
         document.contains("<key>KeepAlive</key>\n    <true/>"),
         "{document}"
@@ -176,7 +176,7 @@ fn the_unit_runs_the_daemon_in_the_foreground_and_keeps_it_alive() {
     );
 }
 
-/// It logs where the daemon already logs, so a supervised start and a detached
+/// It logs where the daemon already logs, so a supervised start and a background
 /// one leave one file to read rather than two.
 #[test]
 fn the_unit_logs_where_the_daemon_already_logs() {

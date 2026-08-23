@@ -77,7 +77,7 @@ pub const FALLBACK_TMPDIR: &str = "/tmp";
 ///
 /// The silent variant of this costs a real debugging session: the bind fails
 /// while the HTTP port comes up fine, so the daemon serves turns and looks
-/// healthy while every CLI verb gets connection refused and `--detach` times
+/// healthy while every CLI verb gets connection refused and `start` times
 /// out waiting for a socket that will never appear. Both ends check, because
 /// either can be the first to be given the path.
 pub fn ensure_addressable(path: &Path) -> Result<(), ProxyError> {

@@ -22,6 +22,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
+        Command::Start(args) => commands::daemon::start(args).await,
         Command::Run(args) => commands::daemon::run(args).await,
         Command::Accounts(args) => commands::accounts::accounts(args).await,
         Command::Status(args) => commands::inspect::print_status(args).await,

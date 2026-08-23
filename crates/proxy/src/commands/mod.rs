@@ -66,6 +66,12 @@ pub(crate) const RESTART_WINDOW: std::time::Duration = std::time::Duration::from
 pub(crate) struct Answering {
     pub(crate) version: String,
     pub(crate) instance: Option<String>,
+    /// The process serving the socket, where the daemon reports one. A daemon
+    /// predating the field omits it, and nothing is invented for it.
+    pub(crate) pid: Option<u64>,
+    /// Whether the supervisor of §2.6 started it. `None` is the platform, or
+    /// the process, that cannot answer — silence rather than a claim.
+    pub(crate) supervised: Option<bool>,
 }
 
 /// Poll until `settled` accepts what it sees, or the window closes.
@@ -95,6 +101,10 @@ pub(crate) async fn answering() -> Option<Answering> {
             .get("instance")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
+        pid: result.get("pid").and_then(serde_json::Value::as_u64),
+        supervised: result
+            .get("supervised")
+            .and_then(serde_json::Value::as_bool),
     })
 }
 

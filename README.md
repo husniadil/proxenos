@@ -178,7 +178,7 @@ points at the cause. Credentials never go in this file.
 Then:
 
 ```sh
-proxenos run --detach      # start the daemon on loopback, in the background
+proxenos start             # start the daemon on loopback, in the background
 proxenos exec claude       # start the client against it
 ```
 

@@ -141,6 +141,18 @@ vanished. Keys in that file keep working exactly as they did.
 
 ### Changed
 
+- **`proxenos start` is the verb for a background daemon, and `--detach` is
+  gone with no alias.** `run` held the terminal, `run --detach` backgrounded,
+  and `stop` was the counterpart of neither — one name for two things an
+  operator picks between, with the choice spelled as a flag. `start` does
+  exactly what `run --detach` did: same readiness poll, same log tail quoted
+  when the child dies, same `--port`. `run` keeps the foreground, which is what
+  a supervisor asks for, and the supervised unit still runs `run`. Where a
+  daemon is already answering, `start` names it — `already running: 0.12.0
+  (pid 4711), supervised`, read from the `status` payload's `pid` and
+  `supervised` — and exits 0 without starting a second one, rather than
+  refusing: the state it was asked to produce is the state that holds.
+
 - **`usage` prints a header table, one row per window.** Every account row used
   to end in the same long sentence — "codex reports quota when a turn is made;
   this daemon has recorded no turn as this account yet" — repeated once per

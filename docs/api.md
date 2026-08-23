@@ -95,7 +95,10 @@ the vocabulary above.
 ## 2. Command line
 
 ```
-proxenos run        start the daemon (--detach: in the background)
+proxenos start      start the daemon in the background, returning once it
+                    answers; says what is there and does nothing where one is
+                    already running
+proxenos run        start the daemon in the foreground
 proxenos accounts   stored accounts, and which one serves turns (also
                     `accounts list`; --json prints the socket's own payload)
                     a header table, one row per account: `NAME PROVIDER KIND
@@ -268,7 +271,7 @@ what it did before rather than inventing one.
 
 **A `daemon` line names what is serving the socket**: the build, the process,
 and — where the daemon can tell — whether the supervisor of §2.6 is what
-started it. `stop`, `supervisor` and `run --detach` all talk about that
+started it. `stop`, `supervisor` and `start` all talk about that
 process, and nothing in the report named it. The supervision clause is silence
 rather than `not supervised` where the answer is not established, since a
 platform with no supervisor here has no standing to make that claim.
@@ -783,20 +786,26 @@ by whatever supervises it. Nothing here can fix that; what it does is say which
 situation it is rather than surface `unknown method` and leave the reader to
 work out that a protocol error is really an upgrade problem.
 
-### 2.5 `run --detach`
+### 2.5 `start`
 
 Starts the daemon in the background and returns once it answers.
 
 ```
-$ proxenos run --detach
+$ proxenos start
 daemon running (pid 4711), logging to ~/.config/proxenos/daemon.log
 stop it with `proxenos stop`
 ```
 
+A verb of its own rather than a flag on `run`. Backgrounding is what an
+operator asks for and holding the terminal is what a supervisor asks for, and
+while both lived under one name `stop` (§2.4) was the counterpart of neither.
+`run` still starts the daemon in the foreground and takes the same `--port`;
+the flag that used to spell this is **gone, with no alias**.
+
 The child is a plain `run` of the same binary in its own process group, with
 stdout and stderr appended to `daemon.log` in the configuration directory —
-a detached process's terminal is gone the moment the command returns, so its
-output needs somewhere durable to go. `stop` (§2.4) is the counterpart.
+a backgrounded process's terminal is gone the moment the command returns, so
+its output needs somewhere durable to go. `stop` (§2.4) is the counterpart.
 
 **Success is observed, not assumed.** The command exits 0 only once the daemon
 answers the control socket. A child that dies first — a held port, a broken
@@ -805,10 +814,17 @@ and the command exits nonzero. Ten seconds without either is reported the same
 way, and the child is ended rather than left to finish coming up after the
 command has already called it a failure.
 
-**A second detach is refused while the first still answers.** The control
-socket is one per socket path, and a second daemon would take over the socket
-file of the first, leaving the CLI answering for one daemon while another holds
-the port. The refusal names `stop` as the way forward.
+**A daemon already answering is named, not replaced.** The control socket is
+one per socket path, and a second daemon would take over the socket file of the
+first, leaving the CLI answering for one daemon while another holds the port.
+So nothing is started, and the line says what is there —
+`already running: 0.12.0+ab12cd3 (pid 4711), supervised` — from the `pid` and
+`supervised` of the `status` payload (§3). It exits **0**: the state the verb
+was asked to produce is the state that holds, and a failure would be a report
+of something being wrong when nothing is. Each half is said only where the
+daemon reports it: a build predating `pid` gets no invented number, and
+`supervised` unanswered is silence rather than "not supervised", which is a
+claim (§2.6).
 
 ### 2.6 `supervisor`
 
@@ -831,13 +847,13 @@ semver-bound like the rest of §6.
 
 **macOS is the only platform implemented, and every other one refuses by name.**
 The refusal says what supervising that platform would take — a systemd user
-unit with `Restart=always` — and names `run --detach` as the way to start the
+unit with `Restart=always` — and names `proxenos start` as the way to start the
 daemon meanwhile. Nothing writes a file it cannot hand to a supervisor: a unit
 that is installed but never runs reports success and supervises nothing, which
 is worse than having no verb at all.
 
 **The job runs `run` in the foreground, and logs where the daemon already
-logs.** Not `--detach`: a process that forks away leaves launchd supervising
+logs.** Not `start`: a process that forks away leaves launchd supervising
 something that has already exited, and its respawn then fights the daemon it
 cannot see. `KeepAlive` is what brings it back.
 
