@@ -1339,7 +1339,36 @@ pin and leaves the serving account's own figure exactly where it was.
 was asked for over the socket are both legitimate and differently stale, so each
 carries how it was come by and the moment it was taken. Neither is corrected,
 recomputed, or aged into an estimate: what the provider said is what is
-reported.
+reported. That stays true now that any account can be asked for one: asking
+records under the account it asked as, marked as asked for, and leaves every
+other account's figure and freshness exactly where they were.
+
+**A figure can be asked for per account, not only for the one serving.** Riding a
+turn is the free path, and it can only ever fill in the account that made the
+turn — so an account kept as a spare has one route to a figure, which is to
+become the serving account and make a turn. That is the question answering
+itself: the spare's headroom is what decides whether to switch to it. Asking a
+provider for a quota is not making a turn, the credential is already stored, and
+the backend answers for whichever credential asks. So `usage.refresh` asks once
+per account, each on that account's own credential, and nothing about which
+account serves turns is read or changed — authorization by name reads one
+account by name (§7.1) and the selection is untouched either side of the sweep.
+
+**Only where a figure is possible, and each failure is one account's.** A key
+holds no subscription entitlement, and a credential of the provider that states
+quota only on relayed turns has no endpoint that would answer (§9.4); neither is
+asked, and both keep the sentence they already had rather than gaining a failed
+request. Where an account is asked and the answer does not come, that is said on
+that account's own row and blanks, delays, or stands in for no other's. Nothing
+is invented for a row that could not be asked.
+
+**Asking does not refresh a grant the operator did not select.** An expired
+access token would have to be renewed before it could ask, and a refresh rotates
+a token family: a second holder of the same grant is left holding a token
+retired by a sweep it never asked for. So a spare with an expired grant reports
+that, rather than being renewed in the background. The serving account is the
+exception, because every turn it makes already refreshes it, and asking as it
+changes nothing that was not happening anyway.
 
 **The daemon-wide line answers for the account being asked about.** Where a
 single account is held, nothing is repeated under its own name, so that line is
@@ -1574,7 +1603,8 @@ kept here for the same reason §7.1's path keeps one.
 provider states rate-limit headroom in `anthropic-ratelimit-unified-*` response
 headers on every turn, and for a subscription credential that is the *only*
 place it states one: its usage endpoint refuses that credential for want of a
-scope, so the `usage.refresh` path of §8.3 has nothing to ask. Reading the
+scope, so the `usage.refresh` path of §8.3 has nothing to ask for these
+accounts and does not ask. Reading the
 headers costs nothing — the figure rides a turn already being made — and it is
 filed under the account that made the turn, never under whichever account is
 selected when someone later asks.

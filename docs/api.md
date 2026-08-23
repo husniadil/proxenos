@@ -792,7 +792,7 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 | `models` | catalog, whether it is the fallback list, and whether it was fetched for an account other than the one serving turns | yes |
 | `tiers` | tier mapping | no — was `tiers.get` |
 | `usage` | the serving account's quota as of its last turn, or that no turn has been made, plus `models` — the ids this daemon serves — and `accounts`, one entry per stored account with its own figure, its freshness, and `unavailable` where it has none. Each window carries `used_percent`, `window_minutes`, `resets_at`, and — where the provider stated them — `status`, `surpassed_threshold`, `representative`, and `label` for a window no duration identifies | yes |
-| `usage.refresh` | asks the backend for a figure now, for a front-end with nothing to show on a daemon that has served no turn | yes |
+| `usage.refresh` | asks the backend for a figure now, **per account** — every stored account whose credential can hold one, each on its own credential and each recorded under its own name. The answer is the serving account's outcome plus `accounts`, one entry per stored account carrying either its figure or the sentence saying why it has none. Nothing about which account serves turns is read or changed | yes |
 | `env` | the §2.2 block: `variables`, and `settings` always present | yes |
 | `shutdown` | `{"stopping": true, "version": ...}`, then the process goes once the answer is written | yes |
 | `record.start` / `record.stop` | fixture capture | yes — `{"mode": "ingress"}` by default, `"upstream"` must be named because it bills every turn that follows |
@@ -1027,12 +1027,26 @@ and only the daemon holds the answer.
 
 **`usage.refresh` is not the primary path and does not replace it.** The backend
 volunteers a snapshot at the head of every stream; that one is free, rides a turn
-already being made, and is what `usage` reports. This exists for the case that
+already being made, and is what `usage` reports. This exists for the cases that
 path cannot cover — a front-end with a figure to show on a daemon that has served
-no turn yet — and its answer is recorded where the stream path records its own,
-under the serving account, so everything reading a quota reads one value. It is
-recorded as asked for rather than as volunteered: both are true figures and they
-go stale differently, so `usage` states which one each account's figure is.
+no turn yet, and an account that is held but not serving, whose headroom is the
+question asked *before* switching to it. Each account's answer is recorded where
+the stream path records its own, under that account's own name, so everything
+reading a quota reads one value. It is recorded as asked for rather than as
+volunteered: both are true figures and they go stale differently, so `usage`
+states which one each account's figure is.
+
+**Asking is per account, and so is failing.** One account's refusal, expiry, or
+dead endpoint is reported on that account's own entry and stands in for no
+other's. A row whose credential cannot hold a subscription figure at all — a
+key, or a credential of the provider that states quota only on turns — is not
+asked; it keeps the sentence it already had rather than gaining a failed
+request, and no figure is invented for it. And asking never refreshes the grant
+of an account the operator did not select: a refresh rotates a token family, and
+a second holder of the same grant would be left holding a token retired by a
+sweep it never asked for. Such a row says its grant has expired and what to do
+about it. The serving account is the exception, because every turn already
+refreshes it.
 
 **`status` reports the version of the build serving the socket.** It is not
 necessarily the build that asked: one file is both, and replacing it does not
