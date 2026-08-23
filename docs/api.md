@@ -96,16 +96,21 @@ the vocabulary above.
 
 ```
 proxenos run        start the daemon (--detach: in the background)
-proxenos login      --profile: sign in to a new profile of the owning program
-                    and declare it (--as NAME names it, --provider says which
-                    program, --path says where; absent it goes under this
-                    daemon's own directory). --key: store an API key, read
-                    from stdin
-proxenos accounts   stored accounts (--use switches, --rename, --forget drops)
+proxenos accounts   stored accounts, and which one serves turns (also
+                    `accounts list`; --json prints the socket's own payload)
                     one row per account: a `*` on the one serving turns, the
                     name, the address or `key`, and the provider — named on
                     every row, since with two providers stored an unnamed one
                     is a guess
+  accounts login   NAME --provider codex|anthropic [--path DIR]
+                    sign in to a new profile of the owning program and
+                    declare it; --path says where, absent it goes under this
+                    daemon's own directory
+  accounts add-key NAME --provider codex|anthropic
+                    store an API key, read from stdin
+  accounts use     NAME   serve every following turn as this account
+  accounts rename  OLD NEW   change what this daemon calls an account
+  accounts remove  NAME   drop this account, leaving the rest usable
 proxenos status     connection, tier mapping, model catalog
 proxenos models     available models
 proxenos env        environment for Claude Code, as shell exports
@@ -119,17 +124,25 @@ proxenos statusline wrap a status-line script, adding that quota
 proxenos record     capture exchanges as fixtures
 ```
 
-Every verb except `run`, `login`, and `doctor` operates through the control
-socket (§3) against a running daemon.
+Every verb except `run`, `doctor`, and the two `accounts` verbs that add an
+account operates through the control socket (§3) against a running daemon.
 
-`login` is two verbs wearing one name, and it has to be told which. **Neither
-obtains a subscription grant of this daemon's own**; there is no authorization
-flow here, no callback port, and no `--setup-token`.
+**One sub-verb per thing an operator does, each naming its account
+positionally.** The surface before this used flags as actions — `--use`,
+`--forget` and `--rename` on `accounts`, and a top-level `login` whose two
+unrelated halves were told apart by `--key` and `--profile` — so what a command
+did was decided by which flags were present, and the account it did it to was
+spelled `--as` in one verb and `--use` in another. The top-level `login` verb
+is gone with no alias, and there is one word for the account: `NAME`.
 
-`--key` stores an API key, and only that: a key belongs to nobody and has to be
-kept somewhere.
+**Neither verb that adds an account obtains a subscription grant of this
+daemon's own**; there is no authorization flow here, no callback port, and no
+`--setup-token`.
 
-`--profile` signs in to a profile the daemon will then borrow from
+`accounts add-key` stores an API key, and only that: a key belongs to nobody
+and has to be kept somewhere.
+
+`accounts login` signs in to a profile the daemon will then borrow from
 (`proxy-behavior.md` §8.4). It runs that program's own login — `claude auth
 login` or `codex login` — against a directory, with the same environment
 variable the daemon later resolves the grant from, so what was signed in and
@@ -147,14 +160,15 @@ instead of run — with the environment variable already on it — along with th
 line that declares the profile afterwards. A client that wants a browser and a
 keyboard, started from something with neither, hangs with nothing said.
 
-A declared profile reaches the daemon at its next start: `[profiles]` is read
-once, at startup (§4). The verb says so rather than leaving the operator to
-find out from an account that never appeared.
+A declared profile reaches a running daemon at once: the verb calls
+`config.reload` (§3) after it writes, and says whether the daemon took it.
+Best effort — no socket is no daemon, which is an ordinary state for a login
+and not a failure of one.
 
 Storing a key never moves which account pays. A lone account serves turns
 without anything recorded, so the choice is written down before a second
 account exists; every account stored after that leaves the selection alone, and
-`accounts --use NAME` is the verb that moves it. Storing a credential and
+`accounts use NAME` is the verb that moves it. Storing a credential and
 choosing what serves turns are two decisions, and one command making both moved
 every turn onto a newly stored account without saying so.
 
@@ -162,7 +176,8 @@ The key arrives on **stdin**, never in a command line: an argument is visible to
 every process on the machine and lands in shell history. Where stdin is a
 terminal it says on **stderr** what it is waiting for and reads from a hidden
 prompt; where stdin is a pipe it says nothing, so
-`printf '%s' "$KEY" | proxenos login --key ...` writes to stdout only the line
+`printf '%s' "$KEY" | proxenos accounts add-key NAME --provider P` writes to
+stdout only the line
 naming what it stored. One thing more is said, on stderr and only at a terminal:
 an `anthropic` key beginning `sk-ant-oat` gets a note that the stem belongs to
 two credentials — the year-long token `claude setup-token` mints and the
@@ -171,15 +186,18 @@ apart, and that the second will simply stop authenticating
 (`proxy-behavior.md` §8.2). The key is stored either way; the note names the
 stem and no part of the secret.
 
-`--as NAME` is required, because a key carries no id to be named by.
-`--provider` states which provider's endpoints it is spent against — `codex` by
-default, `anthropic` for a key that serves turns through the relay
-(`proxy-behavior.md` §9). Storing a key under a name that already holds a key of
-the *same* provider rotates it in place, silently, which is what a replaced
-secret needs. A name that holds a key of a *different* provider is refused
-instead, naming the account, the provider it currently holds, and the
-`accounts --forget NAME` that clears the way. A name that is already a declared
-profile is refused too: one name, one account.
+`NAME` is positional and required, because a key carries no id to be named by.
+`--provider` is required too and has no default: it states which provider's
+endpoints the key is spent against — `anthropic` for a key that serves turns
+through the relay (`proxy-behavior.md` §9) — and the two providers refuse each
+other's credentials, so a key that silently claimed the wrong one fails later
+as an authentication error naming the credential rather than the choice.
+Storing a key under a name that already holds a key of the *same* provider
+rotates it in place, silently, which is what a replaced secret needs. A name
+that holds a key of a *different* provider is refused instead, naming the
+account, the provider it currently holds, and the `accounts remove NAME` that
+clears the way. A name that is already a declared profile is refused too: one
+name, one account.
 
 `accounts` lists what this daemon can serve — the declared profiles first, then
 the keys — marking the one serving turns, naming the store each borrowed row was
@@ -187,17 +205,34 @@ read from, and marking a profile that has become a different account since it
 was chosen. A grant left in `credentials.json` by an older version is **not**
 listed as an account, because nothing reads one any more; it is named in a note
 under the listing instead, since a credential that quietly stopped counting
-reads as one that vanished. `--use NAME` switches to another, and
-its confirmation says how far the switch moved: a switch within one provider
-changes whose quota is spent and reads `still on codex`, while one across
-providers changes which backend answers, which path the turn takes and which
-subscription is drawn down, and names both sides — `codex to anthropic`.
-`--rename FROM TO` and `--forget NAME` work on a key, which is this daemon's to
-name and to drop. Both are **refused for a borrowed profile**, naming it: a
-profile's name is the key it is declared under, and forgetting one is deleting
-an entry from a file the operator can see. All of them go through the socket,
-because the daemon holds the selection: a CLI that edited the file directly
-would leave a running daemon serving the account it read at startup.
+reads as one that vanished. Each row also says what kind of thing it is and
+whether the operator wrote it down — `declared` is true only for a profile
+named in `[profiles]`, and it is what separates the account `accounts remove`
+can drop by deleting a line from the one where there is no line to delete.
+`--json` prints the socket's payload instead of the table, under either
+spelling of the listing.
+
+`accounts use NAME` switches to another, and its confirmation says how far the
+switch moved: a switch within one provider changes whose quota is spent and
+reads `still on codex`, while one across providers changes which backend
+answers, which path the turn takes and which subscription is drawn down, and
+names both sides — `codex to anthropic`.
+
+`accounts rename OLD NEW` works on a key; it is **refused for a borrowed
+profile**, naming it, because a profile's name is the key it is declared under
+and changing it is an edit to a file the operator can see.
+
+`accounts remove NAME` works on both, and each kind loses a different thing. A
+key is this daemon's own and is dropped from its store. A **declared** profile
+is a line in `[profiles]` naming a directory another program owns: the line
+goes, the grant stays exactly where it is, and the daemon re-reads the file so
+it stops answering for an account it has just reported gone. A profile this
+daemon *found* rather than one it was given is refused instead, saying both
+that it was found and that `[profiles]` is empty — there is no line to delete,
+and writing the set down is what makes it something an entry can be taken out
+of. All of these go through the socket, because the daemon holds the selection:
+a CLI that edited the file directly would leave a running daemon serving the
+account it read at startup.
 
 **The rendered `status` says what the next turn does, not only what is
 configured.** Where the account serving turns is on the second provider, every
@@ -807,8 +842,8 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 | Method | Returns | v0.1 |
 |---|---|---|
 | `status` | connection state, whether the grant has been **refused** — `dead` where this side cannot spend it and `refused` carrying the backend's own words where it was sent and turned away — when the serving account's login has to be renewed (`login_expires_at`, absent where no such date exists), plan and which source reported it, the tier mapping and the effort ceiling, any mapped model the catalog withholds, whether the catalog was authoritative, the client policy in effect, and the build and `instance` serving the socket | yes |
-| `accounts.remove` | removes one account — the selected one, or `{"account": name}` — and answers with the name it cleared and the one serving turns afterwards; the rest stay usable, and an idle account's removal leaves the serving grant's quota alone. Only a key is this daemon's to drop: a borrowed profile is refused either way, naming the `[profiles]` entry that would actually remove it | no — was `disconnect`, then `accounts.forget` |
-| `accounts` | every stored account, what kind of credential each holds, and which one serves turns, plus `discovered` — whether these are the operator's own `[profiles]` entries or the stock profile of each program, read because none were declared; each borrowed row also carries the profile it was read from and, for a Claude profile, `login_expires_at` — the date the operator has to sign in again. No tokens | no — v0.3 |
+| `accounts.remove` | removes one account — the selected one, or `{"account": name}` — and answers with the name it cleared and the one serving turns afterwards; the rest stay usable, and an idle account's removal leaves the serving grant's quota alone. A key is dropped from this daemon's store; a **declared** profile loses its `[profiles]` entry and nothing else — the grant belongs to the program that owns the directory — after which the file is re-read so the daemon stops answering for it. A profile that was found rather than declared is refused, saying so and that `[profiles]` is empty | no — was `disconnect`, then `accounts.forget` |
+| `accounts` | every stored account, what kind of credential each holds, whether the operator wrote it down (`declared`, true only for a profile named in `[profiles]`), and which one serves turns, plus `discovered` — whether these are the operator's own `[profiles]` entries or the stock profile of each program, read because none were declared; each borrowed row also carries the profile it was read from and, for a Claude profile, `login_expires_at` — the date the operator has to sign in again. No tokens | no — v0.3 |
 | `accounts.select` | `{"account": name}`, the account every following turn is made as, the provider now serving and the one serving a moment ago (absent where nothing was) — one select moves every unpinned turn onto that provider's subscription — whether the catalog was refetched for it, and the tier mapping now in force; refuses, and moves nothing, where that account's mapping names a model its catalog does not have, naming whose menu refused and how to give that account its own mapping | no — v0.3 |
 | `accounts.rename` | `{"account": from, "name": to}`, the name this daemon calls an account by, and whether an account section moved with it; the grant and the account id are untouched | no — v0.3 |
 | `models` | catalog, whether it is the fallback list, and whether it was fetched for an account other than the one serving turns | yes |
@@ -1057,7 +1092,7 @@ would say so. Staleness is per window — one snapshot can hold a five-hour wind
 that has turned over beside a seven-day one that has not — and a window with no
 reset stated is never marked.
 
-**`accounts --use` says which provider now serves.** One select moves every
+**`accounts use` says which provider now serves.** One select moves every
 unpinned turn onto that account's provider and spends that provider's
 subscription. The operator asked for it, but a name does not state a provider,
 and only the daemon holds the answer.

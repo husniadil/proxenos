@@ -6,7 +6,8 @@
 //!
 //! Silence while reading a tty reads as a hang. The prompt is written to
 //! **stderr** and only where a person is typing, so a piped key stays byte for
-//! byte what it was: `printf '%s' "$KEY" | proxenos accounts add-key NAME --provider P` prints
+//! byte what it was: `printf '%s' "$KEY" | proxenos accounts add-key NAME
+//! --provider P` prints
 //! nothing that a reader of its stdout did not already see.
 
 use std::io::{self, IsTerminal, Write};

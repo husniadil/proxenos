@@ -454,7 +454,8 @@ pub fn status_at(result: &Value, now: u64) -> String {
                 .to_owned()
         } else {
             "auth       not connected — sign in with `claude auth login` or `codex login` and \
-             it is found from there, or store a key with `proxenos accounts add-key NAME --provider codex|anthropic`"
+             it is found from there, or store a key with `proxenos accounts \
+             add-key NAME --provider codex|anthropic`"
                 .to_owned()
         }
     });

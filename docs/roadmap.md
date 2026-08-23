@@ -178,8 +178,8 @@ is §L.
 
 ## 7. Control socket and CLI
 
-`status`, `login`, `models`, `env`, `accounts.forget`, `record` — through the
-socket, not through private paths.
+`status`, `accounts`, `models`, `env`, `accounts.remove`, `record` — through
+the socket, not through private paths.
 
 **Done when** every verb works against a running daemon over the socket, `env`
 emits all four tier variables plus the context floor, and the CLI holds no state

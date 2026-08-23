@@ -660,7 +660,7 @@ restart loses are not equally recoverable, and they are settled differently.
 The tally lives in `spend.json` beside the configuration, under
 `config_dir()`. It is daemon state rather than configuration, and deliberately
 not the credential store: it holds an account name and two token counts, and no
-place for any part of a secret to be written. Forgetting an account removes its
+place for any part of a secret to be written. Removing an account drops its
 row, the same way it drops its figure.
 
 **A write replaces the file; it never writes into it.** `std::fs::write`
@@ -1365,12 +1365,12 @@ interchangeable.)
 **The stem stands anyway, and the ambiguity is spoken instead.** A bare bearer
 carries no structure to read without decoding it, and decoding a credential to
 classify it is a new way for a secret to reach a log — a worse trade than the
-one being fixed. So classification is unchanged, and `login --key` for an
+one being fixed. So classification is unchanged, and `accounts add-key` for an
 anthropic key beginning `sk-ant-oat` **names both credentials on stderr where
 stdin is a terminal**: the one moment a person is present to be told what a
 short-lived paste will do. It says the stem, never any part of the key. Where
 stdin is a pipe it says nothing, on either stream, because a scripted login's
-output is read by something (§ the `--key` contract in `api.md`).
+output is read by something (§ the `accounts add-key` contract in `api.md`).
 
 The caution is what remains of a distinction that used to matter more. The
 guided `--setup-token` flow that stored one of those two credentials is gone:
@@ -1647,7 +1647,7 @@ success, or the next caller would wait for a run that is not happening.
 **Which profile serves turns is this side's state, and the only thing about a
 borrowed account this daemon writes.** It is kept beside the other daemon state
 rather than in the configuration document, for the same reason the token tally
-is: `accounts --use` is a runtime verb and the document is the operator's.
+is: `accounts use` is a runtime verb and the document is the operator's.
 
 **One declared profile serves without being chosen. More than one, with nothing
 chosen, is refused.** There is nothing to choose between in the first case, and
@@ -1660,11 +1660,20 @@ rather than falling through to another account.
 the operator wrote, and dropping it from the listing would read as one they
 never wrote; what is unknown about it is reported absent.
 
-**Every other write refuses, naming the profile.** Adding, renaming, forgetting
-and saving are verbs of a store that owns what it holds, and this one does not.
-The refusal says what does: the program that owns the profile changes what is
+**Every other write refuses, naming the profile.** Adding, renaming and saving
+are verbs of a store that owns what it holds, and this one does not. The
+refusal says what does: the program that owns the profile changes what is
 inside it, and the configuration file is where this daemon's view of it is
 edited.
+
+**Removing a declared profile is that edit, made by the daemon rather than by
+hand.** What goes is the `[profiles]` entry; the grant stays exactly where it
+is, because it belongs to the program that owns the directory and this side
+never writes one. The file is re-read afterwards, so the daemon stops answering
+for an account it has just reported gone. A profile this daemon *found* rather
+than one it was given has no entry to delete, and is refused saying both that
+it was found and that `[profiles]` is empty — writing the set down is what
+makes it something an entry can be taken out of.
 
 **A borrowed Anthropic grant has a quota endpoint; the credential it replaced
 did not.** `GET /api/oauth/usage` answers 200 for one, carrying `five_hour` and
@@ -1711,7 +1720,7 @@ account nobody pointed at them. A profile that cannot be read is never marked �
 it has not changed identity, it has not been read.
 
 **A second profile is signed in by running the program that will own it.**
-`login --profile` creates a directory, runs that program's own login against it
+`accounts login` creates a directory, runs that program's own login against it
 with the variable that names it, and afterwards reads the profile to find out
 whether there is anything to declare. It is the rule the rest of this section
 follows, applied one step earlier: the client authenticates, the client writes,
@@ -1720,7 +1729,7 @@ directory that holds no grant is declared nowhere.
 
 Declaring the first profile writes down the ones already being read. A written
 entry stops the daemon looking for the stock profiles, so a first
-`login --profile` on a machine that had been discovering them would otherwise
+`accounts login` on a machine that had been discovering them would otherwise
 take away every account the operator already had — the verb adds one, and must
 not subtract two. Only the discovered profiles that hold a grant are written:
 an entry for a program that was never signed into is an account that cannot

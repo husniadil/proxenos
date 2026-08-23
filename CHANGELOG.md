@@ -36,10 +36,23 @@ vanished. Keys in that file keep working exactly as they did.
   already perform that flow, and what they write is what this reads. About
   1,500 lines went with it, including the single-flight refresher and the
   dead-token bookkeeping that existed only to manage a family this daemon no
-  longer holds. `login --key` survives, because a key belongs to nobody and has
-  to be kept somewhere.
+  longer holds. Storing a key survives as `accounts add-key`, because a key
+  belongs to nobody and has to be kept somewhere.
 
 ### Added
+
+- **`proxenos reload`, and `config.reload` behind it: an edit to `config.toml`
+  reaching a daemon that is already serving.** `[profiles]`, the tier mapping
+  and the effort ceiling are re-read and applied — the mapping through the same
+  validated path a switch takes, so a file that would refuse a switch refuses a
+  reload too. Nothing is fetched. What it cannot move is named every time
+  rather than left to be discovered from an edit that did nothing:
+  `instructions`, `client`, `transport`, `upstream` and `port` are read once
+  and still need a restart. A file that no longer parses is refused with the
+  parse error and the daemon keeps what it was running on. `accounts login` and
+  `accounts remove` call it themselves after writing, so a declared profile no
+  longer waits for the next start — the line telling you to stop the daemon and
+  let it come back is gone with the reason for it.
 
 - **`[profiles]`, which says where another program keeps a grant.** Paths only:
   no credential enters the configuration file and none is read out of it. An
@@ -71,15 +84,14 @@ vanished. Keys in that file keep working exactly as they did.
   refuses with `could not run \`claude\``. The same key settles the version the
   second provider's quota request is made as.
 
-- **`login --profile`, which signs in to a second profile without you having to
+- **`accounts login`, which signs in to a second profile without you having to
   know where a profile lives.** It runs the owning program's own login —
   `claude auth login` or `codex login` — against a directory (yours with
   `--path`, else one under this daemon's own directory), reads the profile
   afterwards, and declares it in `[profiles]` only if it holds a grant. Nothing
   here sees a token. A directory already signed in is adopted rather than signed
   in again, and a run with no terminal prints the command with its environment
-  variable attached instead of hanging on prompts nobody can answer. `login`
-  now has to be told which kind it is: `--profile` or `--key`.
+  variable attached instead of hanging on prompts nobody can answer.
 
 - **A first run with nothing to configure.** `[profiles]` empty now means the
   stock profile of each program — what `claude` and `codex` themselves use with
@@ -104,6 +116,10 @@ vanished. Keys in that file keep working exactly as they did.
   without the notice the first sign is a grant that emptied itself. A Codex
   profile records nothing equivalent and says nothing rather than guessing.
 
+- **`declared` on every account row**, true only for a profile named in
+  `[profiles]`. It is what separates the account `accounts remove` can drop by
+  deleting a line from the one where there is no line to delete.
+
 - **Who is paying, on every surface that has room for it.** Each row names the
   store it was read from; the status line receives the serving account whether
   or not a figure is known; `exec` prints one line before the client starts. And
@@ -112,6 +128,34 @@ vanished. Keys in that file keep working exactly as they did.
   while the identity behind it moves.
 
 ### Changed
+
+- **The account verbs are verbs now, not flags.** `proxenos login` is gone with
+  no alias: it was two unrelated commands told apart by `--key` and
+  `--profile`, and `accounts` used `--use`, `--forget` and `--rename` as
+  actions, so what a command did was decided by which flags were present. The
+  surface is `accounts` (also `accounts list`, `--json` for the socket's own
+  payload), `accounts login NAME --provider codex|anthropic [--path DIR]`,
+  `accounts add-key NAME --provider codex|anthropic`, `accounts use NAME`,
+  `accounts rename OLD NEW`, and `accounts remove NAME`. The account is
+  positional everywhere and is called `NAME` everywhere — it used to be spelled
+  `--as` in one verb and `--use` in another. `--provider` is required on both
+  verbs that add an account and no longer defaults to `codex`: the two
+  providers refuse each other's credentials, and a silent default is found out
+  later, from an account that cannot serve.
+
+- **`accounts remove` works on a declared profile.** It used to refuse one and
+  point at the `[profiles]` entry the operator would have to delete by hand. It
+  deletes the entry itself now; the grant stays exactly where it is, because it
+  belongs to the program that owns the directory. A profile this daemon *found*
+  rather than one it was given is still refused, saying both that it was found
+  and that `[profiles]` is empty.
+
+- **`accounts.forget` is `accounts.remove` on the control socket**, and its
+  answer's `forgotten` field is `removed`. One operation was spelled three
+  ways — the flag, the method, and `remove` in the store underneath both — and
+  the socket was the odd one. Renamed rather than aliased, which `api.md` §6
+  permits on a minor bump before a second caller exists; `accounts.forget` had
+  arrived the same way, replacing `disconnect`.
 
 - **A credential now says whose endpoints it belongs to**, as well as which of
   that provider's two it reaches. The relay asks about the provider, since a

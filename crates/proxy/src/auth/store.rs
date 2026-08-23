@@ -540,7 +540,8 @@ impl StoredFile {
         if self.accounts.is_empty() {
             return ProxyError::invalid_request(format!(
                 "no account named `{name}`; none are stored — declare a profile under \
-                 `[profiles]`, or store a key with `proxenos accounts add-key NAME --provider codex|anthropic`"
+                 `[profiles]`, or store a key with `proxenos accounts add-key \
+                 NAME --provider codex|anthropic`"
             ));
         }
         let stored = self

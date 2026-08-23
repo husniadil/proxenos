@@ -191,7 +191,7 @@ eval "$(proxenos env)"     # this shell, routing only
 proxenos settings          # the whole thing, for a settings file you merge it into
 ```
 
-There is no `proxenos login` for a subscription, because there is nothing here
+Nothing here obtains a subscription grant of its own, because there is nothing
 to log into. **The account that pays for a turn is a directory you already
 have**: sign in with the ChatGPT app or `codex login`, then name that directory
 in the configuration file:
@@ -211,7 +211,7 @@ nothing:
 
 ```sh
 proxenos accounts                # what is declared; * is the one serving turns
-proxenos accounts --use work
+proxenos accounts use work
 ```
 
 The grant in that directory is **read and never written**. Its refresh token is
@@ -221,17 +221,34 @@ than in this one. When a borrowed grant lapses, the program that owns it is what
 renews it: run it once and the next turn picks the new token up.
 
 An account can hold an API key instead, for anyone with no subscription at all.
-That one *is* this daemon's to keep, and it is the only thing `login` stores.
-The key is read from standard input, never from an argument, because an argument
-is visible to every other process on the machine:
+That one *is* this daemon's to keep. The key is read from standard input, never
+from an argument, because an argument is visible to every other process on the
+machine:
 
 ```sh
-proxenos login --key --as api    # pipe the key in, or paste it and end with ctrl-d
-proxenos accounts --use api
+# pipe the key in, or paste it and end with ctrl-d
+proxenos accounts add-key api --provider anthropic
+proxenos accounts use api
 ```
 
-`--as` is required here rather than optional: a key carries no account id to be
-named by, and the name is what `accounts --use` takes.
+The name is positional and required: a key carries no account id to be named
+by, and the name is what `accounts use` takes. `--provider` is required too —
+the two providers refuse each other's credentials, and a key that silently
+claimed the wrong one fails later as an authentication error about the
+credential rather than about the choice.
+
+`proxenos accounts login NAME --provider codex` is the other way to gain an
+account: it runs that program's own login against a fresh directory and writes
+the `[profiles]` entry for you. Either way, `proxenos accounts` lists what is
+there, `accounts rename OLD NEW` changes what this daemon calls one, and
+`accounts remove NAME` drops one — a key from the store, a declared profile
+from `[profiles]`, leaving the grant in its directory alone.
+
+An edit to `config.toml` reaches a daemon that is already serving:
+
+```sh
+proxenos reload    # re-reads the file; says what it applied and what needs a restart
+```
 
 Each account can map the tiers its own way. A catalog is one account's menu, so
 two subscriptions on different plans are offered different models, and a key

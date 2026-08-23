@@ -260,8 +260,8 @@ disable_commit_attribution = true
 # provider = "codex"
 # path     = "/Users/me/Library/Application Support/Agent Profiles/codex/p/997619b5"
 #
-# A key stored with `proxenos accounts add-key NAME --provider codex|anthropic` is the other kind of
-# account and needs nothing here.
+# A key stored with `proxenos accounts add-key NAME --provider codex` (or
+# `--provider anthropic`) is the other kind of account and needs nothing here.
 "#;
 
 /// Unknown keys are refused rather than ignored.
