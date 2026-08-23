@@ -1911,3 +1911,56 @@ async fn a_spent_budget_asks_nothing_and_says_why() {
         assert!(detail.contains("not asked to refresh"), "{detail}");
     }
 }
+
+// --- the host this was never run on ---------------------------------------
+
+/// A Claude profile on Linux reads the same grant out of a file, and the whole
+/// path is exercised rather than only the choice of source.
+///
+/// Nothing in this suite runs on Linux, and the machine this was built on is a
+/// macOS one — so the file layout comes from the client rather than from a
+/// measurement, and `docs/proxy-behavior.md` §8.4 says which parts those are.
+/// What is proven here is that the reader is asked for the file the source
+/// names, and that what comes back is parsed exactly as the keychain's bytes
+/// are.
+#[test]
+fn a_claude_profile_on_linux_is_read_from_its_file() {
+    let profile = profile("work", Provider::Anthropic, Some("/profiles/work"));
+    let source = profile.source(borrowed::Host::Linux, Path::new(HOME));
+
+    assert_eq!(
+        source.label(),
+        "/profiles/work/.credentials.json",
+        "on Linux the grant is a file inside the profile, not a keychain item"
+    );
+
+    let reader = FakeReader::holding(&source, &claude_blob(4_000_000_000, 4_100_000_000));
+    let grant = read::grant(&reader, &profile, borrowed::Host::Linux, Path::new(HOME))
+        .expect("the profile is signed into");
+
+    assert_eq!(grant.credentials.access_token, "sk-ant-oat01-borrowed");
+    assert_eq!(grant.credentials.expires_at, Some(4_000_000_000));
+    assert_eq!(grant.refresh_token_expires_at, Some(4_100_000_000));
+    assert_eq!(grant.plan.as_deref(), Some("max"));
+}
+
+/// And a profile that was never signed into on Linux says so naming the file,
+/// which is the thing an operator can go and look for.
+#[test]
+fn an_unsigned_linux_profile_names_the_file_it_looked_for() {
+    let profile = profile("work", Provider::Anthropic, Some("/profiles/work"));
+
+    let refusal = read::grant(
+        &FakeReader::empty(),
+        &profile,
+        borrowed::Host::Linux,
+        Path::new(HOME),
+    )
+    .expect_err("nothing is there")
+    .to_string();
+
+    assert!(
+        refusal.contains("/profiles/work/.credentials.json"),
+        "{refusal}"
+    );
+}

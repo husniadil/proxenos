@@ -1571,6 +1571,18 @@ never writes. On Linux there is no keychain and the same JSON sits in
 has looked, and inventing a location would produce a profile that reads as
 "never signed in" for a reason of our own making.
 
+**What is measured, and where.** Everything above about the keychain — the item
+names, the digest over the value verbatim, the sixteen reads per client run,
+the blanked item — was observed on macOS, on signed-in profiles, and the tests
+that encode it run there. The Linux layout comes from the client rather than
+from a machine anyone here ran: the code path is exercised end to end against a
+reader that hands it those bytes, so what is unproven is the location, not the
+parsing. On any other platform the daemon **starts** and refuses at the first
+profile that needs a location, naming the platform; a configuration holding
+only keys neither needs one nor is refused. Refusing at startup would refuse a
+valid configuration, and guessing a location would report a profile as never
+signed into for a reason of our own making.
+
 The item stores its expiries in **milliseconds** where everything else here is
 in seconds, and they are truncated on the way in. Truncating can only make a
 token look older than it is, which costs one refresh; the other direction costs
