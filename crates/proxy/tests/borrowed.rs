@@ -889,3 +889,165 @@ fn a_named_profile_answers_regardless_of_the_selection() {
         Some("acct_spare")
     );
 }
+
+// --- asking the owning program to refresh ---------------------------------
+
+use proxenos::auth::borrowed::poke;
+use std::sync::Arc;
+use std::sync::Mutex;
+
+/// A client that records that it was run, and never runs anything.
+#[derive(Default)]
+struct FakeClient {
+    runs: Mutex<Vec<Option<PathBuf>>>,
+}
+
+impl poke::Client for FakeClient {
+    fn refresh(&self, config_dir: Option<&Path>) -> Result<(), ProxyError> {
+        self.runs
+            .lock()
+            .expect("not poisoned")
+            .push(config_dir.map(Path::to_path_buf));
+        Ok(())
+    }
+}
+
+const NOW: u64 = 1_800_000_000;
+
+/// A grant that has not lapsed is left alone. Nothing is run, and no quota is
+/// spent making sure of something that is already true.
+#[test]
+fn a_usable_grant_is_not_poked() {
+    assert_eq!(
+        poke::decide(Provider::Anthropic, Some(NOW + 60), None, NOW),
+        poke::Decision::Usable
+    );
+    assert_eq!(
+        poke::decide(Provider::Codex, Some(NOW + 60), None, NOW),
+        poke::Decision::Usable
+    );
+}
+
+/// A lapsed Claude grant whose refresh token is still alive is the one case
+/// worth asking about.
+#[test]
+fn a_lapsed_claude_grant_is_worth_asking_about() {
+    assert_eq!(
+        poke::decide(Provider::Anthropic, Some(NOW - 1), Some(NOW + 86_400), NOW),
+        poke::Decision::Ask
+    );
+}
+
+/// Measured: when the client fails to refresh it blanks its own stored item.
+/// So a profile whose refresh token has already lapsed is never run — asking
+/// would destroy what is left of the grant rather than renew it.
+#[test]
+fn a_dead_refresh_token_is_never_poked() {
+    let decision = poke::decide(Provider::Anthropic, Some(NOW - 1), Some(NOW - 1), NOW);
+
+    match decision {
+        poke::Decision::Hopeless(reason) => {
+            assert!(reason.contains("blank"), "was: {reason}");
+            assert!(reason.contains("Sign in"), "was: {reason}");
+        }
+        other => panic!("a dead refresh token must not be poked: {other:?}"),
+    }
+}
+
+/// A profile written before the client recorded that expiry is still asked
+/// about: unknown is not dead, and if it turns out to be dead the operator has
+/// to sign in again either way.
+#[test]
+fn an_unknown_refresh_deadline_is_still_asked_about() {
+    assert_eq!(
+        poke::decide(Provider::Anthropic, Some(NOW - 1), None, NOW),
+        poke::Decision::Ask
+    );
+}
+
+/// Codex is never run. Its grant refreshes only on a real turn, which spends
+/// quota and rotates the token, and one failing run was measured sending
+/// fourteen refresh requests.
+#[test]
+fn a_codex_grant_is_never_poked() {
+    match poke::decide(Provider::Codex, Some(NOW - 1), None, NOW) {
+        poke::Decision::Hopeless(reason) => {
+            assert!(reason.contains("spends quota"), "was: {reason}");
+            assert!(reason.contains("codex"), "was: {reason}");
+        }
+        other => panic!("Codex must never be poked: {other:?}"),
+    }
+}
+
+/// A grant whose expiry cannot be read at all is treated as lapsed, the same
+/// way `needs_refresh` treats it.
+#[test]
+fn an_unreadable_expiry_is_treated_as_lapsed() {
+    assert_eq!(
+        poke::decide(Provider::Anthropic, None, Some(NOW + 60), NOW),
+        poke::Decision::Ask
+    );
+}
+
+/// The run happens under a lock, and the profile it names is the one handed
+/// to the client.
+#[test]
+fn the_client_is_run_against_the_profile_under_a_lock() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = FakeClient::default();
+    let lock = poke::lock_path(dir.path(), "work");
+
+    poke::under_lock(&client, &lock, Some(Path::new("/profiles/work"))).expect("runs");
+
+    assert_eq!(
+        client.runs.lock().expect("not poisoned").as_slice(),
+        [Some(PathBuf::from("/profiles/work"))]
+    );
+    assert!(lock.exists(), "the lock file is left in place for reuse");
+}
+
+/// The stock profile is run with no variable set, which is what makes it the
+/// stock profile.
+#[test]
+fn the_stock_profile_is_run_with_nothing_set() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = FakeClient::default();
+
+    poke::under_lock(&client, &poke::lock_path(dir.path(), "personal"), None).expect("runs");
+
+    assert_eq!(client.runs.lock().expect("not poisoned").as_slice(), [None]);
+}
+
+/// Two profiles do not wait on each other: they are two clients writing two
+/// different stores, and serialising them buys nothing.
+#[test]
+fn two_profiles_take_different_locks() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    assert_ne!(
+        poke::lock_path(dir.path(), "work"),
+        poke::lock_path(dir.path(), "personal")
+    );
+}
+
+/// A run that fails releases the lock. Holding it would make the next caller
+/// wait for a run that is not happening.
+#[test]
+fn a_failed_run_releases_the_lock() {
+    struct Failing;
+    impl poke::Client for Failing {
+        fn refresh(&self, _config_dir: Option<&Path>) -> Result<(), ProxyError> {
+            Err(ProxyError::authentication("no".to_owned()))
+        }
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let lock = poke::lock_path(dir.path(), "work");
+
+    poke::under_lock(&Failing, &lock, None).expect_err("the run failed");
+
+    // The proof it was released: the next call takes it without blocking.
+    let client = Arc::new(FakeClient::default());
+    poke::under_lock(client.as_ref(), &lock, None).expect("the lock was free");
+    assert_eq!(client.runs.lock().expect("not poisoned").len(), 1);
+}

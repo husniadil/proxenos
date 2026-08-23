@@ -1570,6 +1570,34 @@ removing it. That is indistinguishable from a profile nobody signed into, and
 both want the same answer, so an empty half is refused by name rather than
 carried as a grant with an odd expiry.
 
+**A lapsed grant may be asked about, and only Claude is ever asked.** The one
+move available here is to run the program that owns the profile, wait for it to
+exit, and read the profile again: the rotation happens inside that program,
+which is the only process allowed to perform it. `claude -p` on the cheapest
+tier is that run, with stdin closed — without which the client waits several
+seconds for input that never comes — and a deadline, after which the process is
+killed and the profile is left alone.
+
+Codex is never run. Its grant refreshes only on a real turn, which spends the
+operator's quota and rotates the refresh token, and one failing run was measured
+sending fourteen refresh requests in a row; its access token also lasts ten
+days, so the case barely arises.
+
+**A profile whose refresh token has already lapsed is never asked either.**
+A client that fails to refresh overwrites its own stored item with an empty
+access token and a zero expiry, so asking there destroys what is left of the
+grant instead of renewing it. `refreshTokenExpiresAt` says so locally, for
+free, before anything is run. Where the client never recorded it, the profile
+is asked anyway: unknown is not dead, and if it turns out to be dead the
+operator has to sign in again either way.
+
+**One run per profile, under a lock held for its whole duration.** Ten callers
+arriving at once produce one client, not ten: the rest block on the lock, and
+by the time they take it the run has already written whatever it was going to
+write. The lock is per profile, because two profiles refreshing at once are two
+clients writing two different stores. It is released on failure as well as on
+success, or the next caller would wait for a run that is not happening.
+
 **Which profile serves turns is this side's state, and the only thing about a
 borrowed account this daemon writes.** It is kept beside the other daemon state
 rather than in the configuration document, for the same reason the token tally

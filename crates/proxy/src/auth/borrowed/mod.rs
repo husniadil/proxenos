@@ -368,6 +368,7 @@ pub fn source(provider: Provider, host: Host, config_dir: Option<&Path>, home: &
     }
 }
 
+pub mod poke;
 pub mod read;
 pub mod store;
 
