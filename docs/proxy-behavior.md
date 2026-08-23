@@ -1647,6 +1647,23 @@ owning client's user-agent string rather than this proxy's. Sending either
 provider's extras to the other is how a borrowed grant fails with a message
 about the wrong half.
 
+**Who pays is said on every surface that has a place to say it.** A borrowed
+account is a directory the operator signed into somewhere else, so the name in
+the configuration file is their own label and nothing about it is the account.
+Each listing therefore carries the store it was read from, and the identity the
+credential itself holds travels beside the label: the status line receives the
+serving account whether or not a quota figure has arrived, a launch prints it
+once before the client starts, and `accounts` names the profile behind each row.
+
+**A profile that has become a different account is marked.** The identity is
+recorded at the moment the profile is chosen, and a later read that finds a
+different one says so on the row that serves turns and in the launch line. This
+cannot happen to a credential a daemon holds itself, and it is the one failure
+borrowing introduces: the operator signs into the owning program as somebody
+else, the directory keeps its name, and every turn afterwards is billed to an
+account nobody pointed at them. A profile that cannot be read is never marked —
+it has not changed identity, it has not been read.
+
 **The keychain is read by spawning `security`.** The item's ACL trusts that
 binary; a process reading through Security.framework is a different application
 to the keychain and is prompted. One client run reads the item sixteen times,

@@ -593,6 +593,8 @@ impl crate::auth::store::AccountStore for ProbeStore {
             plan: None,
             expires_at: None,
             selected: true,
+            source: None,
+            identity_changed: false,
         }])
     }
     fn add(
@@ -696,6 +698,8 @@ fn run_environment(probe: &probe::Probe) -> Outcome {
             plan: None,
             expires_at: None,
             selected: true,
+            source: None,
+            identity_changed: false,
         }]
     };
 

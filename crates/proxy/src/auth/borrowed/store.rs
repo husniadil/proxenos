@@ -145,6 +145,7 @@ impl AccountStore for BorrowedStore {
     /// wrote down; what is unknown about it is reported absent instead.
     fn accounts(&self) -> Result<Vec<Account>, ProxyError> {
         let selected = self.selected().map(|profile| profile.name.clone()).ok();
+        let recorded = self.selection.recorded_account_id()?;
 
         Ok(self
             .profiles
@@ -152,6 +153,10 @@ impl AccountStore for BorrowedStore {
             .map(|profile| {
                 let grant = self.grant_for(profile).ok();
                 Account {
+                    // Where an operator can go and look. Named even when the
+                    // grant could not be read: that is the case where knowing
+                    // which directory was tried matters most.
+                    source: Some(profile.source(self.host, &self.home).label()),
                     name: profile.name.clone(),
                     kind: "grant",
                     provider: profile.provider.as_str(),
@@ -163,6 +168,15 @@ impl AccountStore for BorrowedStore {
                     plan: grant.as_ref().and_then(|it| it.plan.clone()),
                     expires_at: grant.as_ref().and_then(|it| it.credentials.expires_at),
                     selected: selected.as_deref() == Some(profile.name.as_str()),
+                    // Only against something recorded, and only where the
+                    // profile can be read now: one that cannot be read has not
+                    // changed identity, it has not been read.
+                    identity_changed: selected.as_deref() == Some(profile.name.as_str())
+                        && recorded.is_some()
+                        && grant
+                            .as_ref()
+                            .and_then(|it| it.credentials.account_id.as_ref())
+                            .is_some_and(|account_id| recorded.as_ref() != Some(account_id)),
                 }
             })
             .collect())
@@ -176,7 +190,11 @@ impl AccountStore for BorrowedStore {
     /// declared profile serves turns.
     fn select(&self, name: &str) -> Result<(), ProxyError> {
         let profile = self.named(name)?;
-        self.selection.write(&profile.name)
+        let account_id = self
+            .grant_for(profile)
+            .ok()
+            .and_then(|grant| grant.credentials.account_id);
+        self.selection.write(&profile.name, account_id.as_deref())
     }
 
     fn remove(&self, name: &str) -> Result<(), ProxyError> {

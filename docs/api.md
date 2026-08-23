@@ -967,6 +967,14 @@ signed into elsewhere after this daemon started — `status.catalog_stale` and
 `models.stale` say the list is not this account's and `status.catalog_account`
 names whose it is.
 
+**A status line is told who is paying, before it is told anything about
+quota.** The `usage` answer carries a `serving` block — name, provider, address,
+plan, and account id — and `statusline` copies it into the payload whether or
+not a figure is known: on a daemon that has served no turn it is the only thing
+worth rendering, and a borrowed account is what makes it worth rendering at all
+(`proxy-behavior.md` §8.4). It is subject to the same session check as the
+figure: a session this daemon does not serve is told neither.
+
 **`status` names the account.** `auth.account` is what this daemon calls the one
 serving turns and is what selects it; `auth.account_id` is what the backend
 calls it and is what appears on a request; `auth.kind` is `grant` or `key`,

@@ -131,7 +131,9 @@ pub fn accounts(result: &Value) -> String {
         return "no accounts".to_owned();
     };
     if accounts.is_empty() {
-        return "no accounts — run `proxenos login`".to_owned();
+        return "no accounts — declare a profile under `[profiles]`, or store a key with \
+                `proxenos login --key --as NAME`"
+            .to_owned();
     }
 
     accounts
@@ -172,9 +174,26 @@ pub fn accounts(result: &Value) -> String {
                 Some(provider) => format!("  {provider}"),
                 None => String::new(),
             };
+            // Where the credential was read from, for an account this daemon
+            // does not hold. A name is the operator's own label; this is the
+            // directory they can go and look at (§8.4).
+            let source = match field(account, "source").and_then(Value::as_str) {
+                Some(source) => format!("  {source}"),
+                None => String::new(),
+            };
+            // Said on the row it belongs to, because the consequence is turns
+            // billed to an account nobody pointed at them.
+            let changed = if field(account, "identity_changed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "  (a different account than when it was chosen)"
+            } else {
+                ""
+            };
             // Trimmed so a payload without a provider does not leave the
             // padding hanging off the end of the line.
-            format!("{marker} {name:<24} {who:<24}{provider}")
+            format!("{marker} {name:<24} {who:<24}{provider}{source}{changed}")
                 .trim_end()
                 .to_owned()
         })
@@ -716,4 +735,45 @@ fn describe_window(minutes: u64) -> String {
         m if m % 60 == 0 => format!("{}h", m / 60),
         m => format!("{m}m"),
     }
+}
+
+/// One line naming who pays for the session about to start.
+///
+/// `None` where nothing is serving turns: a launch with no account is refused
+/// by the daemon with a message of its own, and saying "nobody is paying"
+/// first would only get in front of it.
+pub fn serving_line(result: &Value) -> Option<String> {
+    let serving = field(result, "accounts")?
+        .as_array()?
+        .iter()
+        .find(|account| field(account, "selected").and_then(Value::as_bool) == Some(true))?;
+
+    let name = field(serving, "name").and_then(Value::as_str)?;
+    let provider = field(serving, "provider")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+
+    // The identity beside the label, because the label is the operator's own
+    // word and the identity is the account that gets billed.
+    let who = field(serving, "email")
+        .and_then(Value::as_str)
+        .or_else(|| field(serving, "account_id").and_then(Value::as_str));
+    let plan = field(serving, "plan").and_then(Value::as_str);
+
+    let mut line = format!("serving as {name} ({provider}");
+    if let Some(who) = who {
+        line.push_str(&format!(", {who}"));
+    }
+    if let Some(plan) = plan {
+        line.push_str(&format!(", {plan}"));
+    }
+    line.push(')');
+
+    if field(serving, "identity_changed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        line.push_str(" — a different account than when it was chosen");
+    }
+    Some(line)
 }

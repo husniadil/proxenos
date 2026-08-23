@@ -16,6 +16,15 @@ use std::path::PathBuf;
 #[derive(serde::Deserialize, serde::Serialize)]
 struct Document {
     selected: String,
+    /// The account the chosen profile held at the moment it was chosen.
+    ///
+    /// Recorded so a profile that has since become a different account can be
+    /// noticed. A borrowed profile changes identity when the operator signs
+    /// into the owning program as somebody else, and the directory keeps its
+    /// name — so without this, turns move to another account with nothing
+    /// said. Absent where the profile carried no id to record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    account_id: Option<String>,
 }
 
 /// The recorded choice, or the absence of one.
@@ -38,6 +47,10 @@ impl Selection {
     /// An unreadable file is refused rather than read as absent: falling back
     /// would move which account pays without saying so.
     pub fn read(&self) -> Result<Option<String>, ProxyError> {
+        Ok(self.document()?.map(|document| document.selected))
+    }
+
+    fn document(&self) -> Result<Option<Document>, ProxyError> {
         let raw = match std::fs::read_to_string(&self.path) {
             Ok(raw) => raw,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -54,12 +67,18 @@ impl Selection {
                 self.path.display()
             ))
         })?;
-        Ok(Some(parsed.selected))
+        Ok(Some(parsed))
     }
 
-    pub fn write(&self, name: &str) -> Result<(), ProxyError> {
+    /// What was recorded about the chosen account's identity, if anything.
+    pub fn recorded_account_id(&self) -> Result<Option<String>, ProxyError> {
+        Ok(self.document()?.and_then(|document| document.account_id))
+    }
+
+    pub fn write(&self, name: &str, account_id: Option<&str>) -> Result<(), ProxyError> {
         let body = serde_json::to_string(&Document {
             selected: name.to_owned(),
+            account_id: account_id.map(str::to_owned),
         })
         .map_err(|error| ProxyError::authentication(format!("could not record it: {error}")))?;
 

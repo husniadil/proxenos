@@ -60,15 +60,26 @@ fn serves(usage: &Value, payload: &Value) -> bool {
 /// never be the thing that breaks, and a missing figure is a smaller failure
 /// than a wrong one.
 pub fn merge(mut payload: Value, usage: &Value) -> Value {
+    if !serves(usage, &payload) {
+        return payload;
+    }
+
+    // Who is paying, first and unconditionally. It is the one line worth
+    // rendering on a daemon that has served no turn yet, and a borrowed grant
+    // is what makes it worth rendering at all: the account is a directory the
+    // operator signed into somewhere else, and it can change under them.
+    if let Some(serving) = usage.get("serving")
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("serving".to_owned(), serving.clone());
+    }
+
     if usage.get("known").and_then(Value::as_bool) != Some(true) {
         return payload;
     }
     let Some(windows) = usage.get("windows").and_then(Value::as_array) else {
         return payload;
     };
-    if !serves(usage, &payload) {
-        return payload;
-    }
     let Some(object) = payload.as_object_mut() else {
         return payload;
     };

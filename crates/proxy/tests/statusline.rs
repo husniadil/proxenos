@@ -204,3 +204,63 @@ fn fields_already_present_under_rate_limits_survive() {
         json!(42.0)
     );
 }
+
+// --- who is paying --------------------------------------------------------
+
+/// The account paying for the next turn reaches the status line, whether or
+/// not a quota figure has arrived yet.
+///
+/// It is the one thing worth rendering on a daemon that has served no turn,
+/// and a borrowed grant is what makes it worth rendering at all: the account
+/// is a directory the operator signed into somewhere else.
+#[test]
+fn the_serving_account_reaches_the_status_line_without_a_figure() {
+    let usage = json!({
+        "known": false,
+        "detail": "no turn has been made yet",
+        "serving": {
+            "account": "work",
+            "provider": "codex",
+            "email": "someone@example.test",
+            "plan": "team",
+            "account_id": "acct_123",
+        },
+    });
+
+    let merged = merge(json!({ "model": { "id": "gpt-5" } }), &usage);
+
+    assert_eq!(merged["serving"]["account"], json!("work"));
+    assert_eq!(merged["serving"]["email"], json!("someone@example.test"));
+    assert_eq!(merged["serving"]["plan"], json!("team"));
+    // And the figure is still absent rather than invented.
+    assert_eq!(merged.get("rate_limits"), None);
+}
+
+/// A session this daemon does not serve keeps its own payload entirely — the
+/// account is as wrong to paint over as the quota is.
+#[test]
+fn a_session_this_daemon_does_not_serve_is_told_nothing() {
+    let usage = json!({
+        "known": true,
+        "models": ["gpt-5"],
+        "windows": [{ "used_percent": 10, "window_minutes": 300 }],
+        "serving": { "account": "work", "provider": "codex" },
+    });
+
+    let merged = merge(json!({ "model": { "id": "claude-opus-4-6" } }), &usage);
+
+    assert_eq!(merged.get("serving"), None);
+    assert_eq!(merged.get("rate_limits"), None);
+}
+
+/// A daemon that reports no serving account leaves the payload without one
+/// rather than inventing a name for it.
+#[test]
+fn an_absent_serving_block_adds_nothing() {
+    let merged = merge(
+        json!({ "model": { "id": "gpt-5" } }),
+        &json!({ "known": false }),
+    );
+
+    assert_eq!(merged.get("serving"), None);
+}

@@ -126,6 +126,7 @@ impl AccountStore for Accounts {
         let mut listed = self.borrowed.accounts()?;
         listed.extend(self.keys.accounts()?);
 
+        let recorded = self.selection.recorded_account_id()?;
         let lone = listed.len() == 1;
         for account in &mut listed {
             account.selected = match selected.as_deref() {
@@ -135,6 +136,14 @@ impl AccountStore for Accounts {
                 // every turn goes through it.
                 None => lone,
             };
+            // Each half answers for its own rows; this only makes sure the
+            // mark never survives on a row that is no longer the one serving
+            // turns, since the selection is decided here.
+            account.identity_changed = account.selected
+                && (account.identity_changed
+                    || (recorded.is_some()
+                        && account.account_id.is_some()
+                        && recorded != account.account_id));
         }
         Ok(listed)
     }
@@ -150,10 +159,13 @@ impl AccountStore for Accounts {
 
     fn select(&self, name: &str) -> Result<(), ProxyError> {
         let listed = self.accounts()?;
-        if !listed.iter().any(|account| account.name == name) {
+        let Some(chosen) = listed.iter().find(|account| account.name == name) else {
             return Err(self.unknown(name, &listed));
-        }
-        self.selection.write(name)
+        };
+        // The identity as well as the name. A profile can become a different
+        // account later without this daemon doing anything, and this is what
+        // makes that noticeable rather than silent.
+        self.selection.write(name, chosen.account_id.as_deref())
     }
 
     /// Forgetting a key removes it. Forgetting a borrowed profile is an edit
@@ -197,7 +209,8 @@ impl AccountStore for Accounts {
         if self.selection.read()?.is_none()
             && let [only] = self.accounts()?.as_slice()
         {
-            self.selection.write(&only.name)?;
+            self.selection
+                .write(&only.name, only.account_id.as_deref())?;
         }
         self.keys.add_key(name, key, provider)
     }
@@ -213,9 +226,10 @@ impl AccountStore for Accounts {
         if self.is_borrowed(from) {
             return self.borrowed.rename(from, to);
         }
+        let recorded = self.selection.recorded_account_id()?;
         self.keys.rename(from, to)?;
         if self.selection.read()?.as_deref() == Some(from) {
-            self.selection.write(to)?;
+            self.selection.write(to, recorded.as_deref())?;
         }
         Ok(())
     }

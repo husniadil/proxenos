@@ -698,6 +698,17 @@ async fn exec(args: cli::ExecArgs) -> Result<()> {
         );
     }
 
+    // Who pays for this session, said once, at the one moment there is a
+    // person deciding whether to start it. A borrowed grant is why it is worth
+    // saying: the account is a directory signed into somewhere else, and it
+    // can have become somebody else since it was chosen. A read that fails
+    // says nothing rather than delaying the launch.
+    if let Ok(accounts) = control::call(&control::default_path(), "accounts", None).await
+        && let Some(line) = render::serving_line(&accounts)
+    {
+        eprintln!("{line}");
+    }
+
     let mut child = std::process::Command::new(&plan.program);
     child.args(&plan.arguments);
     for (name, value) in render::variables(&result) {

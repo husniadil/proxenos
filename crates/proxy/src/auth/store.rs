@@ -297,6 +297,23 @@ pub struct Account {
     pub expires_at: Option<u64>,
     /// Whether this is the account serving turns.
     pub selected: bool,
+    /// Where the credential was read from, for an account this daemon does not
+    /// hold: the profile directory's file, or the keychain item's name.
+    ///
+    /// Absent for a key, which is this daemon's own and has no elsewhere to
+    /// name. It is what turns "the account called work" into something the
+    /// operator can go and look at (§8.4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Whether the account behind this profile is no longer the one it was
+    /// when it was chosen.
+    ///
+    /// A borrowed profile can change identity without this daemon doing
+    /// anything: the operator signs into the owning program as somebody else,
+    /// and the directory keeps its name. Nothing else here would say so, and
+    /// the consequence is turns billed to an account nobody pointed at them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub identity_changed: bool,
 }
 
 /// A store that holds more than one grant.
@@ -901,6 +918,8 @@ impl AccountStore for FileStore {
                     plan: super::jwt::plan(id_token),
                     expires_at: grant.and_then(|grant| grant.expires_at),
                     selected: selected == Some(index),
+                    source: None,
+                    identity_changed: false,
                 }
             })
             .collect())

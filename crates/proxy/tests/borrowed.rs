@@ -1188,3 +1188,143 @@ async fn a_lapsed_borrowed_grant_refuses_the_turn() {
         refusal.message
     );
 }
+
+// --- saying who pays ------------------------------------------------------
+
+use proxenos::render;
+
+fn listing(account: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "accounts": [account] })
+}
+
+/// A borrowed row names the directory it was read from. A name is the
+/// operator's own label; this is the thing they can go and look at.
+#[test]
+fn a_listing_names_the_profile_a_grant_came_from() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let store = store(dir.path(), vec![work.clone()], &[(&work, a_codex_grant())]);
+
+    let listed = store.accounts().expect("lists");
+
+    assert_eq!(
+        listed[0].source.as_deref(),
+        Some("/profiles/work/auth.json")
+    );
+    let rendered = render::accounts(&serde_json::json!({
+        "accounts": serde_json::to_value(&listed).expect("serializes"),
+    }));
+    assert!(rendered.contains("/profiles/work/auth.json"), "{rendered}");
+}
+
+/// A profile that has become a different account is marked on the row that
+/// serves turns. Nothing else would say so, and the consequence is turns
+/// billed to an account nobody pointed at them.
+#[test]
+fn a_profile_that_changed_account_is_marked() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let first = store(dir.path(), vec![work.clone()], &[(&work, a_codex_grant())]);
+    first.select("work").expect("selects");
+    drop(first);
+
+    // The same directory, signed in as somebody else.
+    let somebody_else = auth_json(serde_json::json!({
+        "id_token": id_token("acct_other", "pro"),
+        "access_token": access_token(1_800_000_000),
+        "refresh_token": "rt.1.other",
+        "account_id": "acct_other",
+    }));
+    let listed = store(dir.path(), vec![work.clone()], &[(&work, somebody_else)])
+        .accounts()
+        .expect("lists");
+
+    assert!(listed[0].identity_changed, "the identity moved");
+    let rendered = render::accounts(&serde_json::json!({
+        "accounts": serde_json::to_value(&listed).expect("serializes"),
+    }));
+    assert!(rendered.contains("different account"), "{rendered}");
+}
+
+/// The same profile, still the same account, is not marked. A warning that
+/// fires on every launch is one nobody reads.
+#[test]
+fn an_unchanged_profile_is_not_marked() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let contents = [(&work, a_codex_grant())];
+    let first = store(dir.path(), vec![work.clone()], &contents);
+    first.select("work").expect("selects");
+    drop(first);
+
+    let listed = store(dir.path(), vec![work.clone()], &[(&work, a_codex_grant())])
+        .accounts()
+        .expect("lists");
+
+    assert!(!listed[0].identity_changed);
+}
+
+/// A profile that cannot be read has not changed identity; it has not been
+/// read. Marking it would send the operator looking for a switch that never
+/// happened.
+#[test]
+fn an_unreadable_profile_is_not_marked_as_changed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let first = store(dir.path(), vec![work.clone()], &[(&work, a_codex_grant())]);
+    first.select("work").expect("selects");
+    drop(first);
+
+    let listed = store(dir.path(), vec![work], &[])
+        .accounts()
+        .expect("lists");
+
+    assert!(!listed[0].identity_changed);
+}
+
+/// The line a launch prints: the label, the provider, the identity that gets
+/// billed, and the plan.
+#[test]
+fn the_launch_line_names_the_identity_and_not_only_the_label() {
+    let line = render::serving_line(&listing(serde_json::json!({
+        "name": "work",
+        "provider": "codex",
+        "email": "someone@example.test",
+        "plan": "team",
+        "selected": true,
+    })))
+    .expect("a line");
+
+    assert!(line.contains("work"), "{line}");
+    assert!(line.contains("codex"), "{line}");
+    assert!(line.contains("someone@example.test"), "{line}");
+    assert!(line.contains("team"), "{line}");
+}
+
+/// It carries the identity warning too, at the one moment there is a person
+/// deciding whether to start the session.
+#[test]
+fn the_launch_line_carries_the_identity_warning() {
+    let line = render::serving_line(&listing(serde_json::json!({
+        "name": "work",
+        "provider": "codex",
+        "account_id": "acct_other",
+        "selected": true,
+        "identity_changed": true,
+    })))
+    .expect("a line");
+
+    assert!(line.contains("different account"), "{line}");
+}
+
+/// Nothing serving means nothing said: the daemon refuses such a launch with a
+/// message of its own, and this would only get in front of it.
+#[test]
+fn the_launch_line_is_absent_when_nothing_serves() {
+    assert_eq!(
+        render::serving_line(&listing(
+            serde_json::json!({ "name": "work", "selected": false })
+        )),
+        None
+    );
+}

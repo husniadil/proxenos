@@ -640,6 +640,8 @@ fn the_live_relay_arm_names_the_account_it_would_spend() {
             plan: None,
             expires_at: None,
             selected,
+            source: None,
+            identity_changed: false,
         }
     };
     let codex = account("work", proxenos::auth::store::Provider::Codex, true);

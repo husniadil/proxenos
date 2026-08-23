@@ -402,6 +402,31 @@ fn usage(state: &ControlState) -> Value {
         }),
     };
 
+    // Who pays for the next turn, whether or not a quota figure is known.
+    //
+    // A borrowed grant makes this worth saying out loud: the account paying is
+    // a directory the operator signed into somewhere else, and it can change
+    // under them without this daemon doing anything. A name alone is their own
+    // label, so the identity the credential carries travels with it.
+    if let Some(object) = answer.as_object_mut()
+        && let Some(account) = state
+            .credentials
+            .accounts()
+            .ok()
+            .and_then(|accounts| accounts.into_iter().find(|account| account.selected))
+    {
+        object.insert(
+            "serving".to_owned(),
+            json!({
+                "account": account.name,
+                "provider": account.provider,
+                "email": account.email,
+                "plan": account.plan,
+                "account_id": account.account_id,
+            }),
+        );
+    }
+
     // Which sessions this quota belongs to. A status line is configured once and
     // renders for every session the client runs, including sessions pointed
     // somewhere else entirely; without this it would paint one account's quota
