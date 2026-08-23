@@ -7,10 +7,11 @@
 //! binary cannot go and look: it may have been moved, installed, or shipped
 //! away from any checkout.
 //!
-//! No `rerun-if-changed` is declared on purpose. Declaring one replaces the
-//! default, which is to rerun whenever a file in this package changes — and
-//! that default is what keeps the dirty flag honest for the source this crate
-//! is actually built from.
+//! Declaring `rerun-if-changed` replaces cargo's default of rerunning on any
+//! change under this package, so the package directory is declared back
+//! explicitly, alongside the repository's `HEAD` and the ref it points at.
+//! Without those two a commit touching nothing under this crate left the sha
+//! one commit behind until something here happened to change.
 
 fn main() {
     // Absent git — a tarball build, or a checkout with no history — is a
@@ -18,6 +19,14 @@ fn main() {
     // build of unknown provenance.
     let sha = git(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".to_owned());
     let dirty = git(&["status", "--porcelain"]).is_some_and(|status| !status.is_empty());
+
+    println!("cargo:rerun-if-changed=.");
+    if let Some(git_dir) = git(&["rev-parse", "--git-dir"]) {
+        println!("cargo:rerun-if-changed={git_dir}/HEAD");
+        if let Some(reference) = git(&["symbolic-ref", "-q", "HEAD"]) {
+            println!("cargo:rerun-if-changed={git_dir}/{reference}");
+        }
+    }
 
     println!("cargo:rustc-env=PROXENOS_BUILD_SHA={sha}");
     println!("cargo:rustc-env=PROXENOS_BUILD_DIRTY={}", u8::from(dirty));
