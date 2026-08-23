@@ -986,6 +986,7 @@ pub async fn fetch(
     client: &reqwest::Client,
     endpoint: &str,
     authorization: &crate::auth::authorize::Authorization,
+    claude_program: &std::path::Path,
 ) -> Result<Snapshot, crate::error::ProxyError> {
     // Quota belongs to a subscription. There is no such figure behind a key,
     // and asking for one with a key would spend a request to be told so in
@@ -1000,7 +1001,7 @@ pub async fn fetch(
     // this proxy.
     let agent = match authorization.provider {
         crate::auth::store::Provider::Codex => crate::upstream::http::USER_AGENT.to_owned(),
-        crate::auth::store::Provider::Anthropic => claude_user_agent(),
+        crate::auth::store::Provider::Anthropic => claude_user_agent(claude_program),
     };
 
     let request = authorization.apply(
@@ -1048,12 +1049,13 @@ pub async fn fetch(
 /// absent one is not.
 ///
 /// Cached: the client's version changes on an upgrade, and spawning a process
-/// per quota request to learn it would be silly.
-fn claude_user_agent() -> String {
+/// per quota request to learn it would be silly. The program is fixed for the
+/// life of the daemon, so the first caller's is the one that is read.
+fn claude_user_agent(program: &std::path::Path) -> String {
     static AGENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     AGENT
         .get_or_init(|| {
-            let version = std::process::Command::new("claude")
+            let version = std::process::Command::new(program)
                 .arg("--version")
                 .output()
                 .ok()

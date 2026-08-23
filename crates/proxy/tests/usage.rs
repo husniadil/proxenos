@@ -1196,6 +1196,7 @@ async fn a_figure_is_read_from_the_second_providers_own_shape() {
         &reqwest::Client::new(),
         &endpoint.url,
         &authorization(proxenos::auth::store::Provider::Anthropic),
+        std::path::Path::new("claude"),
     )
     .await
     .expect("a figure");
@@ -1215,6 +1216,7 @@ async fn the_second_providers_endpoint_is_asked_as_the_owning_client() {
         &reqwest::Client::new(),
         &endpoint.url,
         &authorization(proxenos::auth::store::Provider::Anthropic),
+        std::path::Path::new("claude"),
     )
     .await
     .expect("a figure");
@@ -1239,6 +1241,7 @@ async fn the_first_provider_is_unchanged() {
         &reqwest::Client::new(),
         &endpoint.url,
         &authorization(proxenos::auth::store::Provider::Codex),
+        std::path::Path::new("claude"),
     )
     .await
     .expect("a figure");
@@ -1260,6 +1263,7 @@ async fn a_body_in_the_other_providers_shape_is_refused() {
         &reqwest::Client::new(),
         &endpoint.url,
         &authorization(proxenos::auth::store::Provider::Codex),
+        std::path::Path::new("claude"),
     )
     .await
     .expect_err("the wrong parser reads nothing");

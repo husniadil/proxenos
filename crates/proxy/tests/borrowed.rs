@@ -895,6 +895,7 @@ fn a_named_profile_answers_regardless_of_the_selection() {
 // --- asking the owning program to refresh ---------------------------------
 
 use proxenos::auth::borrowed::poke;
+use proxenos::auth::borrowed::poke::Client as _;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -1582,4 +1583,73 @@ fn asking_about_a_key_runs_nothing() {
 
     assert!(!accounts.refresh_borrowed("whatever").expect("allowed"));
     assert!(client.runs.lock().expect("not poisoned").is_empty());
+}
+
+/// The real client, as opposed to the fake one every rule above is proven
+/// with: it runs the program it was given rather than whatever `PATH` resolves
+/// `claude` to, and it hands it the profile directory.
+///
+/// This is what `claude_program` exists for. A daemon started by launchd has a
+/// minimal `PATH`, and the bare name does not resolve there.
+#[cfg(unix)]
+#[test]
+fn the_client_runs_the_program_it_was_given() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let record = dir.path().join("argv");
+    let script = stand_in(
+        dir.path(),
+        &format!(
+            "#!/bin/sh\nprintf '%s %s\\n' \"$CLAUDE_CONFIG_DIR\" \"$*\" > {}\n",
+            record.display()
+        ),
+    );
+
+    borrowed::poke::ClaudeClient::new(&script, borrowed::poke::DEADLINE)
+        .refresh(Some(Path::new("/profiles/work")))
+        .expect("it ran");
+
+    let recorded = std::fs::read_to_string(&record).expect("it recorded");
+    assert_eq!(recorded.trim(), "/profiles/work -p ok --model haiku");
+}
+
+/// A program that is not there names what was tried, so an operator who set
+/// `claude_program` to the wrong path is told which path that was.
+#[test]
+fn a_client_that_cannot_be_run_names_the_program() {
+    let refusal =
+        borrowed::poke::ClaudeClient::new("/nowhere/at/all/claude", borrowed::poke::DEADLINE)
+            .refresh(None)
+            .expect_err("nothing to run")
+            .to_string();
+
+    assert!(refusal.contains("/nowhere/at/all/claude"), "{refusal}");
+}
+
+/// A client that never exits is killed at the deadline rather than held onto,
+/// and the refusal says the profile was left as it was.
+#[cfg(unix)]
+#[test]
+fn a_client_that_does_not_finish_is_given_up_on() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = stand_in(dir.path(), "#!/bin/sh\nsleep 30\n");
+
+    let refusal = borrowed::poke::ClaudeClient::new(&script, std::time::Duration::from_millis(200))
+        .refresh(None)
+        .expect_err("it never finishes")
+        .to_string();
+
+    assert!(refusal.contains("did not finish"), "{refusal}");
+    assert!(refusal.contains("left alone"), "{refusal}");
+}
+
+/// An executable stand-in for the client, so the real one is never run and no
+/// turn is ever spent proving how it is run.
+#[cfg(unix)]
+fn stand_in(dir: &Path, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = dir.join("stand-in");
+    std::fs::write(&script, body).expect("written");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
+    script
 }

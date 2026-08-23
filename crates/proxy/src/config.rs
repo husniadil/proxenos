@@ -114,6 +114,14 @@ port = 8787
 # doing it. Turn it on only if that is what you mean.
 # cross_account_tiers = true
 
+# The Claude CLI this daemon runs on its own behalf: once to ask the program
+# that owns a borrowed Anthropic profile to refresh its own grant, and once to
+# read the version the quota request for that grant is made as. Neither serves
+# a turn. Unset, the bare name `claude` is resolved through the daemon's PATH,
+# which is not the shell's — a daemon started by launchd inherits a minimal one
+# and the name does not resolve there.
+# claude_program = "/opt/homebrew/bin/claude"
+
 # The defaults, shown so they can be changed. An omitted tier takes the value
 # below; a tier written blank is refused rather than defaulted. WebFetch runs on
 # the haiku tier, so that one matters more than it looks.
@@ -248,6 +256,18 @@ pub struct Config {
     /// the wrong account's quota invisibly.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cross_account_tiers: bool,
+    /// The Claude CLI this daemon runs on its own behalf.
+    ///
+    /// Two things run it, and neither serves a turn: asking the program that
+    /// owns a borrowed Anthropic profile to refresh its own grant (§8.4), and
+    /// reading the version the quota request for that grant is made as.
+    ///
+    /// Absent means the bare name `claude`, resolved through the daemon's
+    /// `PATH` — which is not the shell's. A daemon started by launchd inherits
+    /// a minimal one, and the name does not resolve there, so write the path
+    /// out where that is how this daemon starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_program: Option<std::path::PathBuf>,
     #[serde(default)]
     pub tiers: Tiers,
     #[serde(default)]
@@ -883,6 +903,7 @@ impl Default for Config {
             upstream: UpstreamConfig::default(),
             accounts: BTreeMap::new(),
             profiles: BTreeMap::new(),
+            claude_program: None,
         }
     }
 }

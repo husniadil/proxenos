@@ -376,7 +376,16 @@ impl Accounts {
             ),
             FileStore::new(config_dir.join(crate::auth::store::KEYS_FILE)),
             Selection::new(Selection::path_in(config_dir)),
-            Box::new(crate::auth::borrowed::poke::ClaudeClient::default()),
+            // Where the operator said the client is, and the bare name
+            // otherwise. A daemon started by launchd resolves nothing from
+            // `PATH`, so the name alone is not enough there (§4).
+            Box::new(match config.claude_program.as_ref() {
+                Some(program) => crate::auth::borrowed::poke::ClaudeClient::new(
+                    program.clone(),
+                    crate::auth::borrowed::poke::DEADLINE,
+                ),
+                None => crate::auth::borrowed::poke::ClaudeClient::default(),
+            }),
             config_dir.to_path_buf(),
         ))
     }

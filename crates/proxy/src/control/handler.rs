@@ -1764,7 +1764,16 @@ async fn ask_for(
         &state.usage_endpoint
     };
 
-    crate::usage::fetch(client, endpoint, &authorization)
-        .await
-        .map_err(|error| error.message)
+    crate::usage::fetch(
+        client,
+        endpoint,
+        &authorization,
+        state
+            .config
+            .claude_program
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new(crate::auth::borrowed::poke::PROGRAM)),
+    )
+    .await
+    .map_err(|error| error.message)
 }

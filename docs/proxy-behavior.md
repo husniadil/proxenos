@@ -1587,6 +1587,13 @@ tier is that run, with stdin closed — without which the client waits several
 seconds for input that never comes — and a deadline, after which the process is
 killed and the profile is left alone.
 
+**What is run is `claude_program`, or the bare name where that is unset.** A
+bare name is resolved through the *daemon's* `PATH`, and a daemon started by
+launchd inherits almost none of one — so on that machine the ask fails with
+`could not run \`claude\`` until the path is written out (`api.md` §4). The same
+program is what the second provider's quota request reads its version from, so
+one key settles both.
+
 Codex is never run. Its grant refreshes only on a real turn, which spends the
 operator's quota and rotates the refresh token, and one failing run was measured
 sending fourteen refresh requests in a row; its access token also lasts ten

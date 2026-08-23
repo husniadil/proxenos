@@ -187,3 +187,18 @@ path = "/profiles/work"
     )
     .expect_err("a provider is required");
 }
+
+/// Where the client is, for the one thing this daemon runs it for. A bare name
+/// resolves through the daemon's `PATH`, and a daemon started by launchd has
+/// almost none — so the path is written out instead.
+#[test]
+fn the_client_this_daemon_runs_can_be_named_by_path() {
+    let config = parse("claude_program = \"/opt/homebrew/bin/claude\"\n");
+
+    config.validate().expect("a path is accepted");
+    assert_eq!(
+        config.claude_program,
+        Some(PathBuf::from("/opt/homebrew/bin/claude"))
+    );
+    assert_eq!(Config::default().claude_program, None);
+}

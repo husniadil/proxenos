@@ -21,6 +21,7 @@
 use crate::auth::store::Provider;
 use crate::error::ProxyError;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -31,6 +32,14 @@ use std::time::Instant;
 /// process that is not going to finish. Waiting forever would hang whatever
 /// asked.
 pub const DEADLINE: Duration = Duration::from_secs(60);
+
+/// What the client is called when the operator has not said where it is.
+///
+/// A bare name, so it is resolved through the running daemon's `PATH`. That is
+/// the shell's `PATH` only when the daemon was started from a shell;
+/// `claude_program` in the configuration file is how a daemon started by
+/// launchd is told where the client actually is (§4).
+pub const PROGRAM: &str = "claude";
 
 /// What to do about a grant that cannot be spent.
 #[derive(Debug, PartialEq, Eq)]
@@ -90,21 +99,21 @@ pub trait Client: Send + Sync {
 
 /// The real one: `claude -p`, with a deadline.
 pub struct ClaudeClient {
-    program: String,
+    program: PathBuf,
     deadline: Duration,
 }
 
 impl Default for ClaudeClient {
     fn default() -> Self {
         Self {
-            program: "claude".to_owned(),
+            program: PathBuf::from(PROGRAM),
             deadline: DEADLINE,
         }
     }
 }
 
 impl ClaudeClient {
-    pub fn new(program: impl Into<String>, deadline: Duration) -> Self {
+    pub fn new(program: impl Into<PathBuf>, deadline: Duration) -> Self {
         Self {
             program: program.into(),
             deadline,
@@ -132,7 +141,10 @@ impl Client for ClaudeClient {
         }
 
         let mut child = command.spawn().map_err(|error| {
-            ProxyError::authentication(format!("could not run `{}`: {error}", self.program))
+            ProxyError::authentication(format!(
+                "could not run `{}`: {error}",
+                self.program.display()
+            ))
         })?;
 
         let started = Instant::now();
@@ -148,7 +160,7 @@ impl Client for ClaudeClient {
                 Err(error) => {
                     return Err(ProxyError::authentication(format!(
                         "could not wait for `{}`: {error}",
-                        self.program
+                        self.program.display()
                     )));
                 }
             }
@@ -157,7 +169,7 @@ impl Client for ClaudeClient {
                 let _ = child.wait();
                 return Err(ProxyError::authentication(format!(
                     "`{}` did not finish within {} seconds, so the profile was left alone",
-                    self.program,
+                    self.program.display(),
                     self.deadline.as_secs()
                 )));
             }

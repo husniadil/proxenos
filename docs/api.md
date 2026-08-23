@@ -1090,6 +1090,11 @@ port = 8787
 # Optional. A ceiling on reasoning effort, whatever the client asks for.
 effort = "low"
 
+# Optional. Where the Claude CLI is, for the two things this daemon runs it
+# for itself. Unset, the bare name `claude` is resolved through the daemon's
+# PATH.
+claude_program = "/opt/homebrew/bin/claude"
+
 [tiers]
 opus   = "..."
 sonnet = "..."
@@ -1150,6 +1155,15 @@ and none is read out of it.
 `provider` names which program owns the profile, and therefore which endpoint
 its grant is spent against. `path` is the profile directory — a `CODEX_HOME`, or
 a `CLAUDE_CONFIG_DIR`.
+
+`claude_program` is the Claude CLI this daemon runs **on its own behalf**, and
+never to serve a turn: once to ask the program that owns a borrowed Anthropic
+profile to refresh its own grant (`proxy-behavior.md` §8.4), and once to read
+the version the quota request for that grant is made as. Unset, it is the bare
+name `claude`, resolved through the daemon's `PATH` — which is not the shell's.
+A daemon started by launchd inherits a minimal one and resolves nothing, so
+write the path out where that is how it starts; `usage --refresh` otherwise
+refuses with `could not run \`claude\``.
 
 **Leaving `path` out means the stock profile**, the one that program uses when
 no variable designates a directory. That is a *different* profile from one
