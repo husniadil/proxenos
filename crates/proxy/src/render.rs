@@ -127,6 +127,12 @@ fn quote(value: &str) -> String {
 /// The name comes first because it is what selects the account; the id and the
 /// address are what tell two of them apart.
 pub fn accounts(result: &Value) -> String {
+    accounts_at(result, now())
+}
+
+/// The same listing against a stated clock, since one field of it counts down.
+#[must_use]
+pub fn accounts_at(result: &Value, now: u64) -> String {
     let Some(accounts) = field(result, "accounts").and_then(Value::as_array) else {
         return "no accounts".to_owned();
     };
@@ -214,9 +220,19 @@ pub fn accounts(result: &Value) -> String {
             } else {
                 ""
             };
+            // The fact on the row, and the remedy on `status`: this line is
+            // a listing, and the account it belongs to may not be the one an
+            // operator is about to act on.
+            let renew = match renewal(
+                field(account, "login_expires_at").and_then(Value::as_u64),
+                now,
+            ) {
+                Some(notice) => format!("  ({notice})"),
+                None => String::new(),
+            };
             // Trimmed so a payload without a provider does not leave the
             // padding hanging off the end of the line.
-            format!("{marker} {name:<24} {who:<24}{provider}{source}{changed}")
+            format!("{marker} {name:<24} {who:<24}{provider}{source}{changed}{renew}")
                 .trim_end()
                 .to_owned()
         })
@@ -296,6 +312,13 @@ pub fn selected_account(result: &Value) -> String {
 }
 
 pub fn status(result: &Value) -> String {
+    status_at(result, now())
+}
+
+/// The same report against a stated clock, since the renewal notice counts
+/// down and a test asserting on it cannot be at the mercy of the wall clock.
+#[must_use]
+pub fn status_at(result: &Value, now: u64) -> String {
     let mut lines = Vec::new();
 
     lines.push(format!(
@@ -354,6 +377,21 @@ pub fn status(result: &Value) -> String {
          with `proxenos login --key --as NAME`"
             .to_owned()
     });
+
+    // Its own line rather than a suffix on the one above: the account is
+    // connected and every turn works, and what this says is that it stops
+    // working on a date. Carrying the remedy because this is the report an
+    // operator reads when they are about to do something about it.
+    if let Some(notice) = renewal(
+        auth.and_then(|auth| field(auth, "login_expires_at"))
+            .and_then(Value::as_u64),
+        now,
+    ) {
+        lines.push(format!(
+            "renew      {notice} — run `claude auth login` in that profile; past that date \
+             the client cannot renew it and asking it to try empties what is left"
+        ));
+    }
 
     // Reported, never enforced. Models and efforts are gated on it, and a
     // refusal names the value it rejected rather than the entitlement that was
@@ -569,6 +607,40 @@ pub fn models(result: &Value) -> String {
 /// second case; this is the first.
 pub fn usage(result: &Value) -> String {
     usage_at(result, now())
+}
+
+/// How close a login has to be to expiring before it is mentioned.
+///
+/// Silent while it is far off. A row carrying a date eleven months of the year
+/// is a row the reader learns to skip, and this one has to land on the week it
+/// appears. Wider than the client's own notice, which starts at three days —
+/// long enough that a weekend does not swallow it.
+const RENEWAL_NOTICE_SECONDS: u64 = 7 * 24 * 60 * 60;
+
+/// What to say about a login that has to be renewed, if anything.
+///
+/// Known only for a borrowed Claude profile: its stored item records the date,
+/// and a Codex profile records nothing equivalent (§8.4). Absent is silence,
+/// never a guess.
+///
+/// It is worth saying ahead of time because of what happens after: past this
+/// date the client cannot refresh the profile, and asking it to try blanks
+/// what is left of the stored grant. This is the notice that turns that into
+/// something an operator does on purpose.
+fn renewal(login_expires_at: Option<u64>, now: u64) -> Option<String> {
+    let expiry = login_expires_at?;
+    if expiry <= now {
+        return Some("login expired".to_owned());
+    }
+    let left = expiry - now;
+    if left > RENEWAL_NOTICE_SECONDS {
+        return None;
+    }
+    Some(match left / 86_400 {
+        0 => "login expires today".to_owned(),
+        1 => "login expires tomorrow".to_owned(),
+        days => format!("login expires in {days} days"),
+    })
 }
 
 /// Epoch seconds. A meter that says a window has turned over needs a clock to

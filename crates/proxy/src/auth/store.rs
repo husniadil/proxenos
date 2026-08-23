@@ -295,6 +295,21 @@ pub struct Account {
     /// has been made.
     pub plan: Option<String>,
     pub expires_at: Option<u64>,
+    /// When the operator has to sign in to the owning program again.
+    ///
+    /// Unix seconds, and only ever known for a borrowed Claude profile: the
+    /// item records `refreshTokenExpiresAt`, which is the date its own client
+    /// counts down to ("your login expires in 3 days"). A Codex profile
+    /// records nothing equivalent — `last_refresh` and an access-token expiry
+    /// say when it was last renewed, not when renewing stops working — so this
+    /// is absent there and absent is what is reported.
+    ///
+    /// It matters more than an ordinary expiry: past it the grant cannot be
+    /// refreshed by asking the client, because a client that fails to refresh
+    /// blanks its own stored item (§8.4). Saying so beforehand is the only
+    /// thing that turns that into an action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_expires_at: Option<u64>,
     /// Whether this is the account serving turns.
     pub selected: bool,
     /// Where the credential was read from, for an account this daemon does not
@@ -937,6 +952,9 @@ impl AccountStore for FileStore {
                     email: super::jwt::email(id_token),
                     plan: super::jwt::plan(id_token),
                     expires_at: grant.and_then(|grant| grant.expires_at),
+                    // A key has no login to renew, and a stored grant is
+                    // not read any more (§8.4). Neither has a date to state.
+                    login_expires_at: None,
                     selected: selected == Some(index),
                     source: None,
                     identity_changed: false,

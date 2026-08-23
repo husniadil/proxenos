@@ -639,6 +639,7 @@ fn the_live_relay_arm_names_the_account_it_would_spend() {
             email: None,
             plan: None,
             expires_at: None,
+            login_expires_at: None,
             selected,
             source: None,
             identity_changed: false,

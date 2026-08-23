@@ -200,6 +200,10 @@ impl AccountStore for BorrowedStore {
                     email: grant.as_ref().and_then(|it| it.email.clone()),
                     plan: grant.as_ref().and_then(|it| it.plan.clone()),
                     expires_at: grant.as_ref().and_then(|it| it.credentials.expires_at),
+                    // Claude only, and read from the same item the client
+                    // counts down from. Absent on a Codex profile because
+                    // nothing in `auth.json` says it (§8.4).
+                    login_expires_at: grant.as_ref().and_then(|it| it.refresh_token_expires_at),
                     selected: selected.as_deref() == Some(profile.name.as_str()),
                     // Only against something recorded, and only where the
                     // profile can be read now: one that cannot be read has not

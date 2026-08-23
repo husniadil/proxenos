@@ -242,6 +242,10 @@ fn status(state: &ControlState) -> Value {
                 "plan_source": source,
                 "email": account.email.clone(),
                 "expires_at": account.expires_at,
+                // When the operator has to sign in to the owning program
+                // again, where that is known at all. Null on a Codex profile
+                // and on a key, which record nothing equivalent (§8.4).
+                "login_expires_at": account.login_expires_at,
                 // Every stored account, so the answer that says a connection
                 // exists also says what else could serve one. Present and
                 // empty rather than absent.

@@ -1708,6 +1708,22 @@ else, the directory keeps its name, and every turn afterwards is billed to an
 account nobody pointed at them. A profile that cannot be read is never marked —
 it has not changed identity, it has not been read.
 
+**A login that has to be renewed is said so before it lapses, on the week it
+matters.** A Claude profile's stored item records `refreshTokenExpiresAt`,
+which is the date its own client counts down to ("your login expires in 3
+days"), and it is read here already. Within seven days `accounts` puts the
+count on the row and `status` adds the remedy; outside that window neither says
+anything, because a date carried eleven months of the year is one the reader
+learns to skip.
+
+The notice exists because of what the date means here rather than as a
+convenience. Past it the client cannot refresh the profile either, and asking
+it to try blanks what is left of the stored grant — so without the notice the
+first sign is a grant that emptied itself. A Codex profile has no equivalent
+field: `last_refresh` and an access-token expiry say when it was last renewed,
+not when renewing stops working. Nothing is stated there, and nothing is
+guessed.
+
 **A grant left in this daemon's own store is not read, and is said to be not
 read.** A credential file written by a version that obtained its own grants
 still holds them. Nothing here obtains or refreshes one now, so such an entry is

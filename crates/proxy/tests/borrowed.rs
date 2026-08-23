@@ -1964,3 +1964,116 @@ fn an_unsigned_linux_profile_names_the_file_it_looked_for() {
         "{refusal}"
     );
 }
+
+// --- the login that has to be renewed -------------------------------------
+//
+// The one date a borrowed profile carries that this daemon can do nothing
+// about. Past it the client cannot refresh the profile either, and asking it
+// to try blanks what is left of the stored grant — so the notice ahead of it
+// is the whole mitigation.
+
+const DAY: u64 = 24 * 60 * 60;
+
+/// The date is read from the same field the owning client counts down from,
+/// and reaches the listing as its own value rather than as a rendered string.
+#[test]
+fn a_claude_profile_reports_when_its_login_has_to_be_renewed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let personal = profile("personal", Provider::Anthropic, Some("/profiles/personal"));
+    let store = store(
+        dir.path(),
+        vec![personal.clone()],
+        &[(&personal, claude_blob(4_000_000_000, 4_100_000_000))],
+    );
+
+    let listed = store.accounts().expect("lists");
+
+    assert_eq!(listed[0].login_expires_at, Some(4_100_000_000));
+}
+
+/// A Codex profile carries nothing equivalent: `last_refresh` and an access
+/// token expiry say when it was last renewed, not when renewing stops working.
+/// Absent is reported rather than filled in with the nearest plausible date.
+#[test]
+fn a_codex_profile_reports_no_renewal_date() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let store = store(dir.path(), vec![work.clone()], &[(&work, a_codex_grant())]);
+
+    let listed = store.accounts().expect("lists");
+
+    assert_eq!(listed[0].login_expires_at, None);
+    assert_eq!(
+        serde_json::to_value(&listed[0])
+            .expect("serializes")
+            .get("login_expires_at"),
+        None,
+        "a date nobody can state is absent, not null"
+    );
+}
+
+/// Inside the notice window the row says how long is left. Outside it the row
+/// says nothing: a line carrying a date eleven months of the year is a line
+/// the reader learns to skip.
+#[test]
+fn a_row_counts_down_only_once_the_renewal_is_close() {
+    let now = 1_800_000_000;
+    let row = |expires_at: u64| {
+        render::accounts_at(
+            &listing(serde_json::json!({
+                "name": "personal",
+                "kind": "grant",
+                "provider": "anthropic",
+                "plan": "max",
+                "login_expires_at": expires_at,
+                "selected": true,
+            })),
+            now,
+        )
+    };
+
+    assert!(row(now + 3 * DAY).contains("login expires in 3 days"));
+    assert!(row(now + DAY + 60).contains("login expires tomorrow"));
+    assert!(row(now + 60).contains("login expires today"));
+    assert!(row(now - 1).contains("login expired"));
+
+    let far = row(now + 30 * DAY);
+    assert!(!far.contains("login expires"), "{far}");
+}
+
+/// `status` carries the remedy as well as the fact, because that is the report
+/// an operator is reading when they are about to act on it.
+#[test]
+fn status_says_what_renewing_takes_and_what_happens_if_it_lapses() {
+    let now = 1_800_000_000;
+    let rendered = render::status_at(
+        &serde_json::json!({
+            "auth": {
+                "connected": true,
+                "account": "personal",
+                "provider": "anthropic",
+                "kind": "grant",
+                "login_expires_at": now + 2 * DAY,
+            },
+        }),
+        now,
+    );
+
+    assert!(rendered.contains("login expires in 2 days"), "{rendered}");
+    assert!(rendered.contains("claude auth login"), "{rendered}");
+    assert!(rendered.contains("empties what is left"), "{rendered}");
+}
+
+/// And says nothing where there is no date to say — every Codex profile, and
+/// every key.
+#[test]
+fn status_is_silent_where_no_renewal_date_is_known() {
+    let rendered = render::status_at(
+        &serde_json::json!({
+            "auth": { "connected": true, "account": "work", "provider": "codex", "kind": "grant" },
+        }),
+        1_800_000_000,
+    );
+
+    assert!(!rendered.contains("renew"), "{rendered}");
+}

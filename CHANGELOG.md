@@ -71,6 +71,14 @@ vanished. Keys in that file keep working exactly as they did.
   refuses with `could not run \`claude\``. The same key settles the version the
   second provider's quota request is made as.
 
+- **A warning before a borrowed login lapses.** A Claude profile records the
+  date its own client counts down to, and within seven days of it `accounts`
+  says how long is left and `status` says what renewing takes. It is the one
+  date worth interrupting for: past it the client cannot refresh the profile
+  either, and asking it to try blanks what is left of the stored grant, so
+  without the notice the first sign is a grant that emptied itself. A Codex
+  profile records nothing equivalent and says nothing rather than guessing.
+
 - **Who is paying, on every surface that has room for it.** Each row names the
   store it was read from; the status line receives the serving account whether
   or not a figure is known; `exec` prints one line before the client starts. And
