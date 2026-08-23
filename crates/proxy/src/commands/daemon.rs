@@ -46,6 +46,10 @@ pub(crate) async fn reload() -> Result<()> {
 
 pub(crate) async fn stop() -> Result<()> {
     let before = answering().await;
+    // Read from the daemon that is about to go, because it is the only one
+    // that can say what started it. What answers afterwards is a different
+    // process, and on a supervised machine it is often not answering yet.
+    let supervision = before.as_ref().and_then(|now| now.supervised);
 
     let result = match control::call(&control::default_path(), "shutdown", None).await {
         Ok(result) => result,
@@ -78,7 +82,7 @@ pub(crate) async fn stop() -> Result<()> {
     }
 
     if let Some(replacement) = seen {
-        report_replacement(&was, &replacement);
+        println!("{}", report_replacement(&was, &replacement, supervision));
         return Ok(());
     }
 
@@ -92,20 +96,34 @@ pub(crate) async fn stop() -> Result<()> {
     .await;
 
     match back {
-        Some(replacement) => report_replacement(&was, &replacement),
+        Some(replacement) => println!("{}", report_replacement(&was, &replacement, supervision)),
         None => println!("stopped {was}; nothing started it again within {RESTART_WINDOW:?}"),
     }
     Ok(())
 }
 
-fn report_replacement(was: &str, now: &Answering) {
-    if now.version == was {
-        println!("stopped {was}; something started it again, on the same build");
+/// What the stop produced, as a sentence.
+///
+/// The supervisor is named where the daemon that went said it had one. Under
+/// launchd a stop *is* how a running daemon is replaced by the build on disk,
+/// so "something started it again" describes the mechanism the operator
+/// installed as though it were a coincidence. Where supervision was not
+/// established — a platform with no supervisor here, or a process launchd
+/// started under some other label — it stays "something", because naming
+/// launchd there would be a claim nothing checked.
+///
+/// The build is named unless the string is identical, which with a build id
+/// on it (§3) means the same build and not merely the same version.
+fn report_replacement(was: &str, now: &Answering, supervised: Option<bool>) -> String {
+    let actor = if supervised == Some(true) {
+        "launchd"
     } else {
-        println!(
-            "stopped {was}; something started it again as {}",
-            now.version
-        );
+        "something"
+    };
+    if now.version == was {
+        format!("stopped {was}; {actor} started it again, on the same build")
+    } else {
+        format!("stopped {was}; {actor} started it again as {}", now.version)
     }
 }
 
@@ -547,6 +565,41 @@ mod tests {
         assert_eq!(
             already_running(&answering_as("0.12.0", Some(4711), Some(false))),
             "already running: 0.12.0 (pid 4711), not supervised"
+        );
+    }
+
+    /// A supervised daemon's replacement is the supervisor's doing, and saying
+    /// so is the answer to "the binary is new and nothing changed".
+    #[test]
+    fn a_supervised_stop_names_the_supervisor() {
+        let now = answering_as("0.12.1", Some(4712), Some(true));
+        assert_eq!(
+            report_replacement("0.12.0", &now, Some(true)),
+            "stopped 0.12.0; launchd started it again as 0.12.1"
+        );
+        assert_eq!(
+            report_replacement("0.12.1", &now, Some(true)),
+            "stopped 0.12.1; launchd started it again, on the same build"
+        );
+    }
+
+    /// Unsupervised, and unknown, keep the word that claims nothing. A
+    /// platform where supervision cannot be established has no standing to
+    /// name a supervisor it never saw.
+    #[test]
+    fn an_unestablished_supervisor_is_not_named() {
+        let now = answering_as("0.12.1", Some(4712), None);
+        assert_eq!(
+            report_replacement("0.12.0", &now, None),
+            "stopped 0.12.0; something started it again as 0.12.1"
+        );
+        assert_eq!(
+            report_replacement("0.12.0", &now, Some(false)),
+            "stopped 0.12.0; something started it again as 0.12.1"
+        );
+        assert_eq!(
+            report_replacement("0.12.1", &now, Some(false)),
+            "stopped 0.12.1; something started it again, on the same build"
         );
     }
 

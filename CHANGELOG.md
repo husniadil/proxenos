@@ -141,6 +141,16 @@ vanished. Keys in that file keep working exactly as they did.
 
 ### Changed
 
+- **`stop` names the supervisor that brought the daemon back.** Under launchd
+  a stop is how a running daemon is replaced by the build on disk, and
+  reporting that as "something started it again" describes the mechanism the
+  operator installed as though it were a coincidence. The sentence reads
+  `stopped 0.12.0; launchd started it again as …` where the daemon that went
+  reported `supervised: true` — read from the process about to stop, the only
+  one that can answer it. Unsupervised, or where supervision could not be
+  established at all, the wording is unchanged: naming a supervisor nothing
+  checked for would be a claim rather than an observation.
+
 - **`proxenos start` is the verb for a background daemon, and `--detach` is
   gone with no alias.** `run` held the terminal, `run --detach` backgrounded,
   and `stop` was the counterpart of neither — one name for two things an

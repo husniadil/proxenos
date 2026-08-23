@@ -748,7 +748,7 @@ Asks the running daemon to stop, then reports what it observed afterwards.
 
 ```
 $ proxenos stop
-stopped 0.2.0; something started it again as 0.3.0
+stopped 0.2.0; launchd started it again as 0.3.0
 ```
 
 The observation is the useful half. Under a supervisor a stop is how a running
@@ -757,6 +757,21 @@ new and nothing changed" — one file is both the daemon and the CLI, and
 replacing it does not restart what is already running (§2.2). Whether anything
 restarts it belongs to the supervisor, so this reports what it saw rather than
 claiming to have done it.
+
+**The supervisor is named where the daemon said it had one.** `supervised` on
+the `status` payload (§3) is read from the daemon that is about to go — the
+only process that can answer it, since what comes back is a different one and
+often not answering yet — and where it said `true` the sentence names
+`launchd` rather than `something`. Under a supervisor that replacement is the
+mechanism the operator installed, and calling it "something" describes it as a
+coincidence. Where supervision was not established — a platform with no
+supervisor here, or a process launchd started under some other label — the
+wording is unchanged, because naming a supervisor nothing checked for would be
+a claim rather than an observation.
+
+The build is named unless the string is identical, and with a build id on it
+(§3) identical means the same build rather than merely the same version
+number.
 
 **It watches the `instance`, not the silence.** A socket falling quiet is a
 statement about timing rather than about the daemon: a supervisor quick enough
