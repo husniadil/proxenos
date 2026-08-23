@@ -1653,3 +1653,83 @@ fn stand_in(dir: &Path, body: &str) -> PathBuf {
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
     script
 }
+
+/// Forgetting with nothing named means the account serving turns, and a
+/// borrowed profile is not this daemon's to forget. Before this it forwarded
+/// to the key store, which removed whatever *it* had marked as chosen and let
+/// the answer claim the profile had gone.
+#[test]
+fn forgetting_the_serving_profile_refuses_and_leaves_the_keys_alone() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let accounts = accounts_over(
+        dir.path(),
+        vec![work.clone()],
+        &[(&work, codex_auth(NOW + 3_600))],
+        Arc::new(FakeClient::default()),
+    );
+    accounts
+        .add_key("spare", "sk-test", Provider::Anthropic)
+        .expect("a key is stored");
+    accounts.select("work").expect("the profile serves");
+
+    let refusal = accounts
+        .clear()
+        .expect_err("a borrowed profile is not forgotten here")
+        .to_string();
+
+    assert!(refusal.contains("work"), "{refusal}");
+    assert!(refusal.contains("borrowed profile"), "{refusal}");
+    let listed = accounts.accounts().expect("lists");
+    assert!(
+        listed.iter().any(|account| account.name == "spare"),
+        "the key must survive a refusal about another account"
+    );
+}
+
+/// Where a key serves, forgetting without a name removes that key and takes
+/// the selection with it — the same thing naming it would have done.
+#[test]
+fn forgetting_the_serving_key_removes_that_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let accounts = accounts_over(
+        dir.path(),
+        vec![work.clone()],
+        &[(&work, codex_auth(NOW + 3_600))],
+        Arc::new(FakeClient::default()),
+    );
+    accounts
+        .add_key("spare", "sk-test", Provider::Anthropic)
+        .expect("a key is stored");
+    accounts.select("spare").expect("the key serves");
+
+    accounts.clear().expect("a key is this daemon's to forget");
+
+    let listed = accounts.accounts().expect("lists");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, "work");
+    assert!(
+        listed[0].selected,
+        "the selection must not still name what was forgotten"
+    );
+}
+
+/// Nothing held at all is not an error: forgetting has always been safe to run
+/// twice, and the second run finds an empty store.
+#[test]
+fn forgetting_an_empty_store_is_not_an_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let accounts = accounts_over(dir.path(), Vec::new(), &[], Arc::new(FakeClient::default()));
+
+    accounts.clear().expect("nothing to forget");
+}
+
+/// A signed-in `auth.json`, whose grant is live until `expires_at`.
+fn codex_auth(expires_at: u64) -> String {
+    auth_json(serde_json::json!({
+        "access_token": access_token(expires_at),
+        "refresh_token": "rt.1.borrowed",
+        "account_id": "acct_123",
+    }))
+}

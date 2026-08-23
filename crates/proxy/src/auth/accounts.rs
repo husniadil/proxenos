@@ -157,8 +157,26 @@ impl CredentialStore for Accounts {
         ))
     }
 
+    /// Forget the account serving turns, which is what `accounts.forget` with
+    /// nothing named means.
+    ///
+    /// Resolved through the selection rather than handed to the key store: the
+    /// selection lives here now, and the key store's own idea of which account
+    /// is chosen is no longer this daemon's. Left to it, a nameless forget on
+    /// a machine serving from a borrowed profile removed some other key and
+    /// reported the profile's name as the thing it had forgotten.
+    ///
+    /// So it goes through `remove`, and inherits both of its answers: a key is
+    /// removed, and a borrowed profile is refused with the edit that would
+    /// actually forget it.
     fn clear(&self) -> Result<(), ProxyError> {
-        self.keys.clear()
+        // Nothing held at all: forgetting has always been safe to run twice,
+        // and the second run is this. An ambiguous selection is still refused,
+        // because that one has an account to name.
+        if self.names()?.is_empty() {
+            return Ok(());
+        }
+        self.remove(&self.selected()?)
     }
 }
 
