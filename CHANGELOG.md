@@ -4,6 +4,60 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+### Changed
+
+- **`usage` says what this daemon has recorded, not what an account has spent.**
+  Every absent-figure reason was a claim about the world made from one process's
+  memory: a turn relayed by a CLI process — `doctor --live` makes one — reads the
+  same quota headers and exits holding them, so the account had spent something
+  the daemon never saw while the meter said none had. The three reasons that
+  claimed spend now scope the claim to this daemon's own record.
+  `docs/proxy-behavior.md` §6.1 carries the rule.
+
+- **A quota window carries what the provider said about it.** A turn's headers
+  state a status, a threshold, and which window speaks for the account; all of it
+  was dropped at parse and the meter printed the percentage alone. An account at
+  93% with the provider's own `allowed_warning` on it read exactly like one at
+  93% with no warning. The windows now keep their status, their threshold, and
+  the provider's `representative-claim`, and the overage window is kept rather
+  than parsed away.
+
+- **A figure whose window has turned over says so.** The daemon learns a figure
+  only when a turn is made, so after a reset with no turn since, the meter showed
+  spend against a window that is back to zero — wrong in the direction that sends
+  an operator to switch accounts they did not need to switch. Staleness is a
+  property of one window and never of a snapshot, since a five-hour window turns
+  over while a seven-day one has not. The figure is kept and marked; it is never
+  rewritten to zero, which is a number the provider never gave.
+
+- **A key's row states the absence of a ceiling, not the absence of a figure.** A
+  key is metered per token, so it is the one account whose spend accrues with
+  every turn and the only one with no percentage to show — an absence that read as
+  safety. It now says nothing bounds its spend, followed by the one quantity
+  available without a price list: the tokens this daemon has served as it. No
+  cost is stated and none is estimated, and the count says it is a floor.
+
+- **`accounts --use` says how far the switch moved.** The same six words stood for
+  a move between two accounts on one provider and a move across providers, which
+  changes the backend, the path a turn takes, and the subscription drawn down. The
+  confirmation now distinguishes them, and says nothing about a subscription
+  changing on the first account stored, where nothing changed.
+
+- **A refused switch names the way out.** Tier mappings are shared and a catalog is
+  one account's menu, so a mapping made for one account is refused on every switch
+  to an account on another plan. `[accounts.<name>.tiers]` already existed and
+  already solved it; the refusal never mentioned it. It does now.
+
+### Fixed
+
+- **`login --key` says what it is waiting for.** It read stdin to EOF and printed
+  nothing, so a terminal operator saw a hang, and the only hint that ctrl-d was
+  wanted arrived after an empty read. At a terminal it now prompts on stderr and
+  reads without echoing, over the same seam `--setup-token` uses. A piped key is
+  unaffected: stdout carries only what it stored, and stderr stays empty.
+
 ## [0.9.0]
 
 The `doctor` matrix stops claiming more than it measured. The relay path (§9)
