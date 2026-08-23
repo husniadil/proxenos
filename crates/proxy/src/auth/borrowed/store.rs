@@ -263,6 +263,7 @@ impl AccountStore for BorrowedStore {
     fn accounts(&self) -> Result<Vec<Account>, ProxyError> {
         let selected = self.selected().map(|profile| profile.name).ok();
         let recorded = self.selection.recorded_account_id()?;
+        let discovered = self.declared_now().discovered;
 
         Ok(self
             .visible()
@@ -270,6 +271,9 @@ impl AccountStore for BorrowedStore {
             .map(|profile| {
                 let grant = self.grant_for(&profile).ok();
                 Account {
+                    // The operator's own entry, or one this daemon found
+                    // because none were written down (§8.4).
+                    declared: !discovered,
                     // Where an operator can go and look. Named even when the
                     // grant could not be read: that is the case where knowing
                     // which directory was tried matters most.

@@ -358,14 +358,14 @@ fn an_account_states_its_provider_and_the_reports_name_it() {
     );
 }
 
-/// §8.4 — a key this daemon holds can be forgotten; a borrowed profile cannot.
+/// §8.4 — one verb removes either kind, and each kind loses a different thing.
 ///
-/// The two are different kinds of thing. A key is ours, and forgetting it is
-/// the whole of what that verb ever meant. A profile belongs to another
-/// program, so the refusal points at the file that declares it rather than
-/// removing something the operator did not mean to lose.
+/// A key is this daemon's own and the store drops it. A declared profile is a
+/// line in `[profiles]` naming a directory another program owns: the line
+/// goes, the grant stays, and the running daemon stops answering for it
+/// without being restarted.
 #[test]
-fn the_binary_forgets_a_key_and_refuses_to_forget_a_profile() {
+fn the_binary_removes_a_key_and_a_declared_profile() {
     let daemon = Daemon::start(&json!({
         "selected": "work",
         "accounts": [
@@ -384,22 +384,25 @@ fn the_binary_forgets_a_key_and_refuses_to_forget_a_profile() {
     assert!(!listed.contains("billing"), "{listed}");
     assert!(listed.contains("work"), "{listed}");
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
-        .args(["accounts", "remove", "work"])
-        .env("PROXENOS_HOME", daemon.dir.path().join("home"))
-        .env("HOME", daemon.dir.path())
-        .env("TMPDIR", daemon.dir.path())
-        .output()
-        .unwrap();
+    // The profile: its entry goes and its grant does not. Nothing here signs
+    // anybody out of anything.
+    let grant = daemon
+        .dir
+        .path()
+        .join("home")
+        .join("profiles")
+        .join("work")
+        .join("auth.json");
+    assert!(grant.exists(), "the fixture should have written a grant");
 
-    assert!(
-        !output.status.success(),
-        "a profile cannot be forgotten here"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("work"), "{stderr}");
-    assert!(stderr.contains("profiles"), "{stderr}");
-    assert!(daemon.run(&["accounts"]).contains("work"));
+    let removed = daemon.run(&["accounts", "remove", "work"]);
+    assert!(removed.contains("work"), "{removed}");
+
+    let config = std::fs::read_to_string(daemon.dir.path().join("home").join("config.toml"))
+        .expect("a configuration file");
+    assert!(!config.contains("[profiles.work]"), "{config}");
+    assert!(grant.exists(), "the grant is the owning program's");
+    assert!(!daemon.run(&["accounts"]).contains("work"));
 }
 
 /// §8.4 — renaming a borrowed profile is refused, and the refusal says where

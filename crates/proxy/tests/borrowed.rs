@@ -2346,3 +2346,154 @@ fn removing_says_what_is_left_rather_than_assuming_nothing_is() {
     }));
     assert!(serving.contains("serving turns as work-codex"), "{serving}");
 }
+
+// --- removing a declared profile ------------------------------------------
+//
+// A profile's name is the key it is declared under, so removing the account is
+// deleting that line. The grant belongs to the program that owns the directory
+// and is never touched, and a profile nobody declared has no line to delete.
+
+/// A daemon over `accounts`, writing to `dir/config.toml`.
+///
+/// Only what removing an account reads: the store, a catalog that can serve
+/// the default mapping, and somewhere to write.
+fn daemon_over(
+    dir: &Path,
+    accounts: Arc<dyn AccountStore>,
+) -> proxenos::control::handler::ControlState {
+    proxenos::control::handler::ControlState {
+        port: 8787,
+        policy: Arc::new(proxenos::policy::Policy::new(
+            proxenos::policy::Snapshot::routing_only(Vec::new(), None),
+        )),
+        catalog: Arc::new(proxenos::catalog::CatalogSource::fixed(
+            proxenos::catalog::Catalog::fallback(),
+        )),
+        credentials: accounts,
+        capture: Arc::new(proxenos::recorder::Switches::default()),
+        usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
+        config: Arc::new(proxenos::config::Config::default()),
+        shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
+        tokens: None,
+        usage_endpoint: String::new(),
+        anthropic_usage_endpoint: String::new(),
+        sessions: Arc::new(proxenos::session::SessionStore::new()),
+        config_path: Some(dir.join("config.toml")),
+    }
+}
+
+/// Removing a declared profile deletes its `[profiles]` entry, and the running
+/// daemon stops answering for it without being restarted. The directory the
+/// grant lives in is left exactly as it was: it belongs to the program that
+/// owns it, and this daemon never writes one.
+#[tokio::test]
+async fn removing_a_declared_profile_deletes_the_entry_and_leaves_the_grant() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // A real directory standing in for the profile, so "untouched" is
+    // something the assertion can actually look at.
+    let held = dir.path().join("profiles").join("spare");
+    std::fs::create_dir_all(&held).expect("profile directory");
+    std::fs::write(held.join("auth.json"), a_codex_grant()).expect("a grant");
+
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let spare = read::Profile {
+        name: "spare".to_owned(),
+        provider: Provider::Codex,
+        config_dir: Some(held.clone()),
+    };
+    let accounts: Arc<dyn AccountStore> = Arc::new(Accounts::new(
+        store(
+            dir.path(),
+            vec![work.clone(), spare],
+            &[(&work, a_codex_grant())],
+        ),
+        FileStore::new(dir.path().join("credentials.json")),
+        proxenos::auth::selection::Selection::new(dir.path().join("selected.json")),
+        Box::new(NeverRuns),
+        dir.path().to_path_buf(),
+    ));
+    let state = daemon_over(dir.path(), Arc::clone(&accounts));
+
+    std::fs::write(
+        dir.path().join("config.toml"),
+        format!(
+            "[profiles.work]\nprovider = \"codex\"\npath     = \"/profiles/work\"\n\n\
+             [profiles.spare]\nprovider = \"codex\"\npath     = \"{}\"\n",
+            held.display()
+        ),
+    )
+    .expect("a configuration file");
+
+    let answer = proxenos::control::handler::dispatch(
+        &state,
+        "accounts.remove",
+        Some(&serde_json::json!({ "account": "spare" })),
+    )
+    .await
+    .expect("removed");
+    assert_eq!(answer["removed"], serde_json::json!("spare"));
+
+    let written = std::fs::read_to_string(dir.path().join("config.toml")).expect("read back");
+    assert!(!written.contains("[profiles.spare]"), "{written}");
+    assert!(written.contains("[profiles.work]"), "{written}");
+
+    // The grant is the owning program's, and nothing here writes one.
+    assert!(held.join("auth.json").exists(), "the grant was deleted");
+
+    // And the daemon has stopped answering for it, without a restart.
+    let listed = proxenos::control::handler::dispatch(&state, "accounts", None)
+        .await
+        .expect("lists");
+    let names: Vec<&str> = listed["accounts"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .map(|account| account["name"].as_str().expect("a name"))
+        .collect();
+    assert_eq!(names, ["work"], "{listed}");
+}
+
+/// A profile that was found rather than declared has no line to delete, and
+/// the refusal says both halves: that it was found, and that `[profiles]` is
+/// empty. Removing "the entry" would otherwise mean writing one first.
+#[tokio::test]
+async fn removing_a_discovered_profile_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let accounts: Arc<dyn AccountStore> = Arc::new(Accounts::new(
+        store(dir.path(), vec![work.clone()], &[(&work, a_codex_grant())]).discovered(),
+        FileStore::new(dir.path().join("credentials.json")),
+        proxenos::auth::selection::Selection::new(dir.path().join("selected.json")),
+        Box::new(NeverRuns),
+        dir.path().to_path_buf(),
+    ));
+    let state = daemon_over(dir.path(), accounts);
+
+    let refusal = proxenos::control::handler::dispatch(
+        &state,
+        "accounts.remove",
+        Some(&serde_json::json!({ "account": "work" })),
+    )
+    .await
+    .expect_err("nothing to remove")
+    .message;
+
+    assert!(refusal.contains("found, not declared"), "{refusal}");
+    assert!(refusal.contains("`[profiles]` is empty"), "{refusal}");
+    // And nothing was written: there was no entry to write about.
+    assert!(!dir.path().join("config.toml").exists(), "{refusal}");
+}
+
+/// A client nothing above asks to run. Removing an account never refreshes
+/// one, so a refusal here is the assertion: anything that called it would be
+/// starting somebody else's program for no reason.
+struct NeverRuns;
+
+impl poke::Client for NeverRuns {
+    fn refresh(&self, _config_dir: Option<&Path>) -> Result<(), ProxyError> {
+        Err(ProxyError::invalid_request(
+            "nothing here asks a client to refresh",
+        ))
+    }
+}

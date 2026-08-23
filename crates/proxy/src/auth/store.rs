@@ -329,6 +329,16 @@ pub struct Account {
     /// the consequence is turns billed to an account nobody pointed at them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub identity_changed: bool,
+    /// Whether the operator wrote this row down.
+    ///
+    /// True only for a profile named in `[profiles]`. A profile this daemon
+    /// *found* — the stock one of each program, read because nothing was
+    /// declared (§8.4) — is false, and so is a key, which lives in a
+    /// credential file rather than in a table anyone edits. It is what
+    /// separates the account `accounts remove` can drop by deleting a line
+    /// from the one where there is no line to delete.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub declared: bool,
 }
 
 /// A store that holds more than one grant.
@@ -970,6 +980,7 @@ impl AccountStore for FileStore {
                 let grant = entry.grant();
                 let id_token = grant.and_then(|grant| grant.id_token.as_deref());
                 Account {
+                    declared: false,
                     name: entry.name.clone(),
                     kind: entry.credential.kind(),
                     provider: entry.provider.as_str(),

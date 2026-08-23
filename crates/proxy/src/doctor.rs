@@ -585,6 +585,7 @@ impl crate::auth::store::CredentialStore for ProbeStore {
 impl crate::auth::store::AccountStore for ProbeStore {
     fn accounts(&self) -> Result<Vec<crate::auth::store::Account>, ProxyError> {
         Ok(vec![crate::auth::store::Account {
+            declared: false,
             name: PROBE_ACCOUNT.to_owned(),
             kind: "key",
             provider: crate::auth::store::Provider::Anthropic.as_str(),
@@ -691,6 +692,7 @@ fn run_environment(probe: &probe::Probe) -> Outcome {
     let catalog = crate::catalog::Catalog::fallback();
     let account = |provider: crate::auth::store::Provider| {
         vec![crate::auth::store::Account {
+            declared: false,
             name: "the launch probe".to_owned(),
             kind: "key",
             provider: provider.as_str(),

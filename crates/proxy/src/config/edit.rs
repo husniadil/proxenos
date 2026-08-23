@@ -447,6 +447,42 @@ pub fn add_profile(
     Ok(document)
 }
 
+/// Remove a declared profile: its table header, its keys, and nothing else.
+///
+/// `None` where the file never declared it, which is not an error — a write
+/// that changes nothing can still fail, and the caller is the side that knows
+/// whether the absence matters.
+///
+/// The table ends at the next header or at the end of the file, which is what
+/// TOML says it does. Comments *above* the header are left where they are: a
+/// comment line belongs to whoever wrote it, and this cannot tell one written
+/// about this profile from one written about the section before it. A stray
+/// comment is a cosmetic remainder; guessing at ownership and taking a line
+/// that explained something else is a loss.
+pub fn remove_profile(document: &str, name: &str) -> Result<Option<String>, ProxyError> {
+    let lines: Vec<&str> = document.lines().collect();
+    let Some(opens) = lines
+        .iter()
+        .position(|line| profile_header(line, name).is_some())
+    else {
+        return Ok(None);
+    };
+
+    let closes = lines
+        .iter()
+        .skip(opens + 1)
+        .position(|line| line.trim().starts_with('['))
+        .map_or(lines.len(), |offset| opens + 1 + offset);
+
+    let kept: Vec<&str> = lines
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index < opens || *index >= closes)
+        .map(|(_, line)| *line)
+        .collect();
+    Ok(Some(with_trailing_newline(kept.join("\n"))))
+}
+
 /// The remainder of a header line that opens this profile's table.
 ///
 /// Both spellings, for the same reason `account_header` recognizes both: TOML

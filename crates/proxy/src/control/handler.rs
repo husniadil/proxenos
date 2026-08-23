@@ -1663,7 +1663,19 @@ async fn remove_account(state: &ControlState, params: Option<&Value>) -> Result<
 
     let cleared = match named {
         Some(name) => {
-            state.credentials.remove(name)?;
+            // Two kinds of account, two ways to be rid of one. A key is this
+            // daemon's own and the store drops it. A declared profile is a
+            // line in `[profiles]` naming a directory another program owns:
+            // what goes is the line, and the grant stays exactly where it is
+            // (§8.4).
+            if discovered_profile(state, name)? {
+                return Err(found_not_declared(name));
+            }
+            if declared_profile(state, name)? {
+                remove_declared_profile(state, name)?;
+            } else {
+                state.credentials.remove(name)?;
+            }
             Some(name.to_owned())
         }
         None => {
@@ -1794,6 +1806,88 @@ fn reload_config(state: &ControlState) -> Result<Value, ProxyError> {
         // discover it from a key it happened to edit.
         "needs_restart": NEEDS_RESTART,
     }))
+}
+
+/// Whether this account is a profile the operator wrote into `[profiles]`.
+///
+/// Read off the listing's own `declared`, which is the one place both halves
+/// of the store are already merged and the one field that separates the three
+/// cases: a declared profile has a line to delete, a discovered one has none,
+/// and a grant left in this daemon's own credential file by an older version
+/// is neither and is the store's to drop. An unknown name is none of them —
+/// the store's own refusal names what is available, and it is a better one
+/// than anything here.
+fn declared_profile(state: &ControlState, name: &str) -> Result<bool, ProxyError> {
+    Ok(state
+        .credentials
+        .accounts()?
+        .into_iter()
+        .any(|account| account.name == name && account.declared))
+}
+
+/// Whether this name is a profile this daemon found rather than one it was
+/// given (§8.4) — the case with nothing to remove.
+fn discovered_profile(state: &ControlState, name: &str) -> Result<bool, ProxyError> {
+    if !state.credentials.discovered_profiles() {
+        return Ok(false);
+    }
+    Ok(state
+        .credentials
+        .accounts()?
+        .into_iter()
+        .any(|account| account.name == name && account.kind == "grant"))
+}
+
+/// Remove a declared profile: delete its `[profiles]` entry, then re-read the
+/// file into this daemon.
+///
+/// **The grant is not touched.** It belongs to the program that owns the
+/// directory, and this daemon never writes one (§8.4) — so what is removed is
+/// this daemon's view of it, and signing in to that program again is not
+/// something the operator has to do.
+///
+/// What a profile nobody declared is refused with.
+///
+/// There is no line to delete: `[profiles]` is empty, and the stock profile of
+/// each program is being read because of that. Both halves are said, because
+/// only the pair explains why an account this daemon is plainly serving cannot
+/// be taken off it.
+fn found_not_declared(name: &str) -> ProxyError {
+    ProxyError::invalid_request(format!(
+        "`{name}` was found, not declared: `[profiles]` is empty, so the stock profile \
+         of each program is being read and there is no entry to remove. Write the \
+         profiles you want into `[profiles]` — `accounts login NAME --provider \
+         codex|anthropic` writes one — and the set you write is the set that is read."
+    ))
+}
+
+fn remove_declared_profile(state: &ControlState, name: &str) -> Result<(), ProxyError> {
+    let mut removed = false;
+    write_config(state, |document| {
+        match crate::config::edit::remove_profile(document, name)? {
+            Some(written) => {
+                removed = true;
+                Ok(written)
+            }
+            // Nothing to write, and the file is left alone. Returning it
+            // unchanged keeps `write_config`'s one shape while making this a
+            // write that changes nothing.
+            None => Ok(document.to_owned()),
+        }
+    })?;
+
+    if !removed {
+        return Err(ProxyError::invalid_request(format!(
+            "the configuration file declares no profile called `{name}`, so there is \
+             nothing to remove. `accounts` lists the declared ones."
+        )));
+    }
+
+    // The store still answers for the profile until the file is read again,
+    // and a daemon that reported an account gone while still serving it is the
+    // divergence this whole surface exists to avoid.
+    reload_config(state)?;
+    Ok(())
 }
 
 /// `usage.refresh` — ask the backend for a quota figure now, per account.

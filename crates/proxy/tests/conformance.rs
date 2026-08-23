@@ -631,6 +631,7 @@ async fn the_relay_probe_drives_the_relay_path() {
 fn the_live_relay_arm_names_the_account_it_would_spend() {
     let account = |name: &str, provider: proxenos::auth::store::Provider, selected: bool| {
         proxenos::auth::store::Account {
+            declared: false,
             name: name.to_owned(),
             kind: "key",
             provider: provider.as_str(),

@@ -126,3 +126,78 @@ fn a_path_that_needs_escaping_reads_back_unchanged() {
     let parsed: Config = toml::from_str(&document).expect("the document parses");
     assert_eq!(parsed.profiles["odd"].path.as_deref(), Some(awkward));
 }
+
+/// What the file loses: the table, its keys, and nothing else.
+///
+/// A profile's name is the key it is declared under, so removing the account
+/// is removing that entry. Everything around it survives byte for byte — the
+/// comments an operator wrote about the other profiles are the reason this is
+/// a text edit rather than a re-serialization.
+#[test]
+fn removing_a_profile_takes_its_table_and_leaves_the_rest() {
+    let document = concat!(
+        "port = 8787\n\n",
+        "# the one that pays\n",
+        "[profiles.work]\n",
+        "provider = \"codex\"\n",
+        "path     = \"/profiles/work\"\n\n",
+        "[profiles.spare]\n",
+        "provider = \"codex\"\n",
+        "path     = \"/profiles/spare\"\n",
+    );
+
+    let written = edit::remove_profile(document, "spare")
+        .expect("edited")
+        .expect("the entry was there");
+
+    let parsed: Config = toml::from_str(&written).expect("the document parses");
+    assert!(!parsed.profiles.contains_key("spare"), "{written}");
+    assert_eq!(
+        parsed.profiles["work"].path.as_deref(),
+        Some(Path::new("/profiles/work"))
+    );
+    assert!(written.contains("# the one that pays"), "{written}");
+}
+
+/// The table ends where the next header begins, so removing the last profile
+/// in the file takes everything under it and nothing above.
+#[test]
+fn removing_the_last_profile_in_the_file_stops_at_the_end() {
+    let document = "[profiles.work]\nprovider = \"codex\"\npath     = \"/profiles/work\"\n";
+
+    let written = edit::remove_profile(document, "work")
+        .expect("edited")
+        .expect("the entry was there");
+
+    let parsed: Config = toml::from_str(&written).expect("the document parses");
+    assert!(parsed.profiles.is_empty(), "{written}");
+    assert!(!written.contains("/profiles/work"), "{written}");
+}
+
+/// The quoted spelling of the key is the same table, for the reason
+/// `add_profile` recognizes both: TOML allows either.
+#[test]
+fn removing_a_profile_recognizes_the_quoted_spelling() {
+    let document = "[profiles.\"work\"]\nprovider = \"codex\"\n";
+
+    let written = edit::remove_profile(document, "work")
+        .expect("edited")
+        .expect("the entry was there");
+
+    let parsed: Config = toml::from_str(&written).expect("the document parses");
+    assert!(parsed.profiles.is_empty(), "{written}");
+}
+
+/// A name the file does not declare is not an error and not an edit. The
+/// caller decides what to say about it, and rewriting a file to change nothing
+/// is a write that can fail for no reason.
+#[test]
+fn removing_a_profile_the_file_never_had_writes_nothing() {
+    let document = "port = 8787\n";
+
+    assert!(
+        edit::remove_profile(document, "work")
+            .expect("edited")
+            .is_none()
+    );
+}
