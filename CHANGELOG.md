@@ -4,6 +4,89 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+This proxy no longer holds a subscription of its own. A grant is read from the
+profile of the program that already owns it, so the account paying for a turn is
+a directory you signed into somewhere else, and switching accounts is choosing
+which directory to read.
+
+**Upgrading needs one edit.** Declare the profiles you want under `[profiles]`
+in `config.toml`; an entry with no `path` is that program's stock profile, which
+is enough where you hold one account per tool:
+
+```toml
+[profiles.codex]
+provider = "codex"
+
+[profiles.claude]
+provider = "anthropic"
+```
+
+Grants already in `credentials.json` are **not** read any more. They are not
+migrated and not offered as accounts, and `accounts` names them under the
+listing so a credential that stopped counting is not one that silently
+vanished. Keys in that file keep working exactly as they did.
+
+### Removed
+
+- **The authorization flow, and everything built on it.** No PKCE exchange, no
+  callback port, no `login` for a subscription, no `login`/`login.cancel` over
+  the control socket, and no `--setup-token`. `codex login` and the ChatGPT app
+  already perform that flow, and what they write is what this reads. About
+  1,500 lines went with it, including the single-flight refresher and the
+  dead-token bookkeeping that existed only to manage a family this daemon no
+  longer holds. `login --key` survives, because a key belongs to nobody and has
+  to be kept somewhere.
+
+### Added
+
+- **`[profiles]`, which says where another program keeps a grant.** Paths only:
+  no credential enters the configuration file and none is read out of it. An
+  entry without a `path` is the stock profile, and that is a *different* profile
+  from one naming the stock directory — on macOS the client picks its keychain
+  item by whether `CLAUDE_CONFIG_DIR` was set at all, not by what it was set to.
+  A relative path or a leading `~` is refused rather than resolved, since a
+  daemon's working directory is not the operator's and the spelling is part of
+  the identity. `docs/proxy-behavior.md` §8.4.
+
+- **A quota figure for a borrowed grant on the second provider.** Its endpoint
+  answers a grant and refuses the subscription token that used to stand in for
+  one, so quota there had been readable only from turn headers. `usage
+  --refresh` now asks it, under the owning client's user-agent, and reads its
+  own body shape.
+
+- **One refresh, asked for and waited on.** Where a borrowed Claude grant has
+  lapsed, `usage --refresh` runs the client once under a per-profile lock,
+  waits for it to exit, and reads the profile again — the figure the caller
+  wants is the one after the refresh. Two cases refuse instead of running
+  anything: the other provider, whose grant refreshes only on a real turn that
+  spends quota and rotates the token, and a profile whose refresh token has
+  lapsed too, where a failed refresh blanks what is left of the stored grant.
+
+- **Who is paying, on every surface that has room for it.** Each row names the
+  store it was read from; the status line receives the serving account whether
+  or not a figure is known; `exec` prints one line before the client starts. And
+  a profile that has become a *different account* since it was chosen is marked,
+  which is the one failure borrowing introduces: the directory keeps its name
+  while the identity behind it moves.
+
+### Changed
+
+- **A credential now says whose endpoints it belongs to**, as well as which of
+  that provider's two it reaches. The relay asks about the provider, since a
+  borrowed grant and a stored key on that provider are spent at the same
+  endpoint. Each provider's subscription path is addressed as its own client.
+
+- **`auth.dead` keeps its question and changes its answer.** There is no refused
+  token to retire, so it means the grant cannot be spent as it stands, and it
+  clears by itself once the owning program refreshes.
+
+- **Which account serves turns moved to this daemon's own state**, in
+  `selected.json` beside the token tally, because a borrowed profile cannot be
+  written. One declared account serves without being chosen; more than one with
+  nothing chosen is refused rather than resolved to whichever comes first.
+
 ## [0.12.0]
 
 One figure reported a floor it had not measured; another reported a lifetime it
