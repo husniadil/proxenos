@@ -742,3 +742,81 @@ fn the_state_column_appears_only_where_a_tier_has_a_state() {
         "{relaying}"
     );
 }
+
+/// The model list is a table, and says which tiers point at each id.
+///
+/// A list of ids and windows left the one question an operator actually has —
+/// which of these does a turn reach — answerable only by reading `status`
+/// beside it. The mapping is read from the `tiers` method, which already
+/// carries it.
+#[test]
+fn the_model_list_names_the_tiers_that_map_to_each_id() {
+    let rendered = proxenos::render::models(
+        &serde_json::json!({
+            "models": [
+                { "id": "gpt-5.6-terra", "context_window": 272_000 },
+                { "id": "gpt-5.6-luna", "context_window": 272_000 },
+                { "id": "gpt-5.5" },
+            ],
+            "authoritative": true,
+        }),
+        Some(&serde_json::json!({
+            "tiers": {
+                "opus": "gpt-5.6-terra",
+                "sonnet": "gpt-5.6-terra",
+                "haiku": "gpt-5.6-terra",
+                "fable": { "model": "gpt-5.6-luna", "account": "personal-codex" },
+            },
+        })),
+    );
+
+    let lines: Vec<&str> = rendered.lines().collect();
+    assert_eq!(
+        cells(lines[0]),
+        vec!["MODEL", "WINDOW", "TIER"],
+        "{rendered}"
+    );
+
+    // The ladder's order, not the mapping's — which arrives sorted by name.
+    assert_eq!(
+        row(&rendered, "gpt-5.6-terra"),
+        vec!["gpt-5.6-terra", "272000 tokens", "opus, sonnet, haiku"],
+        "{rendered}"
+    );
+    // A pinned tier points at its model like any other.
+    assert_eq!(
+        row(&rendered, "gpt-5.6-luna"),
+        vec!["gpt-5.6-luna", "272000 tokens", "fable"],
+        "{rendered}"
+    );
+    // A catalog that states no window says so rather than printing a figure
+    // nobody measured, and a model no tier names has no tier cell.
+    assert_eq!(
+        row(&rendered, "gpt-5.5"),
+        vec!["gpt-5.5", "window unknown"],
+        "{rendered}"
+    );
+}
+
+/// A mapping that could not be read costs the column, not the table.
+///
+/// An empty cell there would read as "no tier maps to this model", which is a
+/// different statement from "this side does not know".
+#[test]
+fn the_tier_column_is_absent_where_the_mapping_could_not_be_read() {
+    let rendered = proxenos::render::models(
+        &serde_json::json!({
+            "models": [{ "id": "gpt-5.6-terra", "context_window": 272_000 }],
+            "authoritative": true,
+        }),
+        None,
+    );
+
+    let lines: Vec<&str> = rendered.lines().collect();
+    assert_eq!(cells(lines[0]), vec!["MODEL", "WINDOW"], "{rendered}");
+    assert_eq!(
+        row(&rendered, "gpt-5.6-terra"),
+        vec!["gpt-5.6-terra", "272000 tokens"],
+        "{rendered}"
+    );
+}

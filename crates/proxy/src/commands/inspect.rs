@@ -21,16 +21,22 @@ pub(crate) async fn print_status(args: cli::StatusArgs) -> Result<()> {
     Ok(())
 }
 
+/// The catalog, and which tiers point into it.
+///
+/// Two calls for the rendered form: the mapping lives behind `tiers` and this
+/// reads it there rather than having the `models` payload carry a second copy
+/// of it. A mapping that cannot be read costs the column and not the table.
+/// `--json` is the `models` payload alone, which is what that flag means
+/// everywhere.
 pub(crate) async fn print_models(args: cli::ModelsArgs) -> Result<()> {
-    let result = control::call(&control::default_path(), "models", None).await?;
-    println!(
-        "{}",
-        if args.json {
-            serde_json::to_string_pretty(&result)?
-        } else {
-            render::models(&result)
-        }
-    );
+    let socket = control::default_path();
+    let result = control::call(&socket, "models", None).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+    let tiers = control::call(&socket, "tiers", None).await.ok();
+    println!("{}", render::models(&result, tiers.as_ref()));
     Ok(())
 }
 

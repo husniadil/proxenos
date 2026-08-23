@@ -119,7 +119,9 @@ proxenos accounts   stored accounts, and which one serves turns (also
   accounts remove  NAME   drop this account, leaving the rest usable
 proxenos status     connection, tier mapping, model catalog (--json prints the
                     socket's own payload)
-proxenos models     available models (--json prints the socket's own payload)
+proxenos models     available models, as `MODEL WINDOW TIER` under a header;
+                    TIER names the tiers mapping to each id, read from the
+                    `tiers` method (--json prints the socket's own payload)
 proxenos env        environment for Claude Code, as shell exports
 proxenos settings   the same configuration, as one settings document
 proxenos exec       run a command with that configuration applied
@@ -243,6 +245,15 @@ and writing the set down is what makes it something an entry can be taken out
 of. All of these go through the socket, because the daemon holds the selection:
 a CLI that edited the file directly would leave a running daemon serving the
 account it read at startup.
+
+**The rendered `models` is a table under `MODEL  WINDOW  TIER`.** The `TIER`
+column names the tiers pointing at each id, in the ladder's own order — `opus,
+sonnet, haiku` — and a pinned tier (§7.1) points at its model like any other.
+The mapping is read from the `tiers` method rather than carried a second time
+on this one's payload, and where it cannot be read the column is left off
+rather than printed empty: a blank cell there reads as "no tier maps to this
+model", which is a different statement from "this side does not know". A
+catalog that states no window still says `window unknown`.
 
 **The rendered `status` names the account by the name `accounts` lists it
 under.** The `auth` line leads with it — `auth       work-codex

@@ -1209,7 +1209,7 @@ async fn models_for_a_relay_account_lists_the_second_providers_models() {
     }
     assert_eq!(result["curated"], json!(true));
 
-    let rendered = render::models(&result);
+    let rendered = render::models(&result, None);
     assert!(rendered.contains("claude-opus-4-7"), "{rendered}");
     assert!(
         !rendered.contains("fallback list"),
@@ -1486,7 +1486,7 @@ async fn models_prints_unknown_rather_than_a_number() {
         &json!({ "jsonrpc": "2.0", "id": 1, "method": "models" }).to_string(),
     )
     .await;
-    let rendered = render::models(&response.result.unwrap());
+    let rendered = render::models(&response.result.unwrap(), None);
 
     assert!(rendered.contains("window unknown"), "{rendered}");
     assert!(rendered.contains("fallback list"), "{rendered}");
@@ -4978,12 +4978,15 @@ fn the_rendered_status_names_the_relay_provider_rather_than_its_ordinal() {
 /// The curated `models` note names the provider whose list it is.
 #[test]
 fn the_rendered_models_note_names_the_provider_whose_list_is_curated() {
-    let rendered = render::models(&json!({
-        "models": [],
-        "authoritative": false,
-        "curated": true,
-        "provider": "anthropic",
-    }));
+    let rendered = render::models(
+        &json!({
+            "models": [],
+            "authoritative": false,
+            "curated": true,
+            "provider": "anthropic",
+        }),
+        None,
+    );
 
     assert!(
         rendered.contains("anthropic's list is built in"),

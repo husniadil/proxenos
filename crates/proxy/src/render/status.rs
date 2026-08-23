@@ -401,7 +401,14 @@ pub fn status_at(result: &Value, now: u64) -> String {
     lines.join("\n")
 }
 
-pub fn models(result: &Value) -> String {
+/// The models this daemon can serve, and which tiers point at them.
+///
+/// The tier mapping comes from the `tiers` method rather than this one's
+/// payload, because that method already carries it and a second copy is a
+/// second thing to keep true. `None` where it could not be read — the column
+/// is then left off rather than printed empty, since an empty cell there reads
+/// as "no tier maps to this model", which would be a claim.
+pub fn models(result: &Value, tiers: Option<&Value>) -> String {
     let mut lines = Vec::new();
 
     if field(result, "curated").and_then(Value::as_bool) == Some(true) {
@@ -419,20 +426,70 @@ pub fn models(result: &Value) -> String {
         lines.push("(the catalog could not be fetched; this is the fallback list)".to_owned());
     }
 
-    for model in field(result, "models")
+    let mapping = tiers.and_then(|tiers| field(tiers, "tiers")).cloned();
+
+    let rows: Vec<Vec<String>> = field(result, "models")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-    {
-        let id = field(model, "id").and_then(Value::as_str).unwrap_or("?");
-        // "unknown" rather than a number. Printing a figure nobody measured is
-        // how an assumption becomes a fact.
-        let window = field(model, "context_window")
-            .and_then(Value::as_u64)
-            .map(|window| format!("{window} tokens"))
-            .unwrap_or_else(|| "window unknown".to_owned());
-        lines.push(format!("{id:<24} {window}"));
-    }
+        .map(|model| {
+            let id = field(model, "id").and_then(Value::as_str).unwrap_or("?");
+            // "unknown" rather than a number. Printing a figure nobody measured
+            // is how an assumption becomes a fact.
+            let window = field(model, "context_window")
+                .and_then(Value::as_u64)
+                .map_or_else(
+                    || "window unknown".to_owned(),
+                    |window| format!("{window} tokens"),
+                );
+            match &mapping {
+                Some(mapping) => vec![id.to_owned(), window, tiers_mapping_to(mapping, id)],
+                None => vec![id.to_owned(), window],
+            }
+        })
+        .collect();
 
+    let header: &[&str] = if mapping.is_some() {
+        &["MODEL", "WINDOW", "TIER"]
+    } else {
+        &["MODEL", "WINDOW"]
+    };
+    lines.push(super::table(header, &rows));
     lines.join("\n")
+}
+
+/// The tiers a model id answers for, in the order an operator reads them.
+///
+/// The ladder's own order rather than the mapping's, which arrives sorted by
+/// name: `opus, sonnet, haiku` is how these are spoken about everywhere else,
+/// and `fable, haiku, opus` is only how they sort.
+fn tiers_mapping_to(mapping: &Value, id: &str) -> String {
+    const LADDER: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
+
+    let Some(mapping) = mapping.as_object() else {
+        return String::new();
+    };
+    let mut named: Vec<&String> = mapping
+        .iter()
+        .filter(|(_, value)| {
+            // A tier is either a model id or `{ account, model }` pinning it to
+            // another account. Both name a model, and both point at it.
+            let model = value
+                .as_str()
+                .or_else(|| value.get("model").and_then(Value::as_str));
+            model == Some(id)
+        })
+        .map(|(tier, _)| tier)
+        .collect();
+    named.sort_by_key(|tier| {
+        LADDER
+            .iter()
+            .position(|known| known == &tier.as_str())
+            .unwrap_or(LADDER.len())
+    });
+    named
+        .into_iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
 }

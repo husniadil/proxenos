@@ -138,6 +138,14 @@ vanished. Keys in that file keep working exactly as they did.
   than that verb's payload. `env` renders shell exports and nothing else.
   `statusline` is untouched; its `--json` was never one of these.
 
+- **`models` prints a header table naming which tiers reach each id.** It is
+  `MODEL WINDOW TIER` now; the list of ids and windows left the question an
+  operator actually has — which of these does a turn go to — answerable only by
+  reading `status` beside it. The tiers come from the `tiers` method, which
+  already carries the mapping, so nothing was added to the `models` payload;
+  where that read fails the column is left off rather than printed empty.
+  `window unknown` is unchanged for a catalog that states none.
+
 - **`status` names the serving account, the daemon, and the tier mapping as a
   table.** The `auth` line leads with the name `accounts` lists the account
   under — the string every account verb takes — instead of the word
