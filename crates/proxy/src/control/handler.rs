@@ -1237,6 +1237,9 @@ fn accounts(state: &ControlState) -> Result<Value, ProxyError> {
             .find(|account| account.selected)
             .map(|account| account.name.clone()),
         "accounts": accounts,
+        // Credentials this daemon holds but no longer reads. Skipping one
+        // silently reads as a credential that vanished (§8.4).
+        "ignored_grants": state.credentials.ignored_grants().unwrap_or_default(),
     }))
 }
 

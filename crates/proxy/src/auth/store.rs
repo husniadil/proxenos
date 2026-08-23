@@ -325,6 +325,16 @@ pub trait AccountStore: CredentialStore {
     /// Every stored account, in the order they were added.
     fn accounts(&self) -> Result<Vec<Account>, ProxyError>;
 
+    /// Credentials this store holds but no longer reads.
+    ///
+    /// Empty for a store where the question does not arise. It exists because
+    /// a grant left in the key file by a version that obtained its own is
+    /// skipped now (§8.4), and skipping one silently reads as a credential
+    /// that vanished.
+    fn ignored_grants(&self) -> Result<Vec<String>, ProxyError> {
+        Ok(Vec::new())
+    }
+
     /// Store a grant as an account, returning the name it got.
     ///
     /// This is what a login does. It selects the account **only where nothing

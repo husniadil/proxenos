@@ -53,6 +53,16 @@ impl Accounts {
         ProxyError::authentication(format!("no account named `{name}`; available: {available}"))
     }
 
+    fn ignored(&self) -> Result<Vec<String>, ProxyError> {
+        Ok(self
+            .keys
+            .accounts()?
+            .into_iter()
+            .filter(|account| account.kind == "grant")
+            .map(|account| account.name)
+            .collect())
+    }
+
     fn is_borrowed(&self, name: &str) -> bool {
         self.borrowed
             .profiles()
@@ -116,6 +126,16 @@ impl CredentialStore for Accounts {
 }
 
 impl AccountStore for Accounts {
+    /// Accounts in this daemon's own store that it no longer reads.
+    ///
+    /// A store written before §8.4 holds grants. Nothing obtains or refreshes
+    /// one here now, so they are skipped rather than offered — and said out
+    /// loud rather than skipped silently, because a credential that quietly
+    /// stopped counting reads as one that vanished.
+    fn ignored_grants(&self) -> Result<Vec<String>, ProxyError> {
+        self.ignored()
+    }
+
     /// The borrowed profiles first, then the stored keys.
     ///
     /// Order is the order they were declared and stored in. The selection is
@@ -124,7 +144,15 @@ impl AccountStore for Accounts {
     fn accounts(&self) -> Result<Vec<Account>, ProxyError> {
         let selected = self.selection.read()?;
         let mut listed = self.borrowed.accounts()?;
-        listed.extend(self.keys.accounts()?);
+        // Grants left in the key store are not read any more. Listing one
+        // would offer an account that cannot be spent and cannot be refreshed,
+        // and `ignored_grants` is what says where it went instead.
+        listed.extend(
+            self.keys
+                .accounts()?
+                .into_iter()
+                .filter(|account| account.kind != "grant"),
+        );
 
         let recorded = self.selection.recorded_account_id()?;
         let lone = listed.len() == 1;

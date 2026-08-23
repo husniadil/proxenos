@@ -158,7 +158,12 @@ instead, naming the account, the provider it currently holds, and the
 profile is refused too: one name, one account.
 
 `accounts` lists what this daemon can serve — the declared profiles first, then
-the keys — marking the one serving turns. `--use NAME` switches to another, and
+the keys — marking the one serving turns, naming the store each borrowed row was
+read from, and marking a profile that has become a different account since it
+was chosen. A grant left in `credentials.json` by an older version is **not**
+listed as an account, because nothing reads one any more; it is named in a note
+under the listing instead, since a credential that quietly stopped counting
+reads as one that vanished. `--use NAME` switches to another, and
 its confirmation says how far the switch moved: a switch within one provider
 changes whose quota is spent and reads `still on codex`, while one across
 providers changes which backend answers, which path the turn takes and which

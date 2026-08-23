@@ -777,3 +777,103 @@ async fn accounts_use_moves_between_accounts_whose_catalogs_differ() {
         "neither switch may need the configuration file changed"
     );
 }
+
+/// §8.4 — a grant left in this daemon's own store is not read any more, and
+/// not listed as an account either.
+///
+/// It cannot be spent and cannot be refreshed: nothing here obtains one. But
+/// skipping it silently reads as a credential that vanished, so the listing
+/// says where a subscription comes from now.
+#[test]
+fn a_grant_left_in_the_key_store_is_reported_rather_than_offered() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+
+    // A credentials.json as a version that obtained its own grants wrote it.
+    std::fs::write(
+        home.join("credentials.json"),
+        serde_json::to_string_pretty(&json!({
+            "selected": "acct_old",
+            "accounts": [{
+                "name": "acct_old",
+                "access_token": "access-acct_old",
+                "refresh_token": "refresh-acct_old",
+                "id_token": id_token("acct_old"),
+                "account_id": "acct_old",
+                "expires_at": 4_000_000_000_u64,
+            }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let profile = home.join("profiles").join("work");
+    std::fs::create_dir_all(&profile).unwrap();
+    std::fs::write(
+        profile.join("auth.json"),
+        serde_json::to_string_pretty(&json!({
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": null,
+            "last_refresh": "2026-08-23T08:00:44.123456Z",
+            "tokens": {
+                "access_token": access_token(4_000_000_000),
+                "refresh_token": "rt.1.borrowed",
+                "id_token": id_token("acct_new"),
+                "account_id": "acct_new",
+            },
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("config.toml"),
+        format!(
+            "[upstream]\ncatalog = \"http://127.0.0.1:1/models\"\n\n\
+             [profiles.work]\nprovider = \"codex\"\npath = \"{}\"\n",
+            profile.display()
+        ),
+    )
+    .unwrap();
+
+    let process = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .args(["run", "--port", "0"])
+        .env("PROXENOS_HOME", &home)
+        .env("HOME", dir.path())
+        .env("TMPDIR", dir.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the daemon should start");
+    let socket = home.join("proxenos.sock");
+    for _ in 0..200 {
+        if socket.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(socket.exists(), "the daemon never answered its socket");
+    let daemon = Daemon { dir, process };
+
+    let listed = daemon.run(&["accounts"]);
+
+    assert!(
+        listed.contains("work"),
+        "the borrowed profile serves: {listed}"
+    );
+    assert!(
+        !listed
+            .lines()
+            .any(|line| line.starts_with("* acct_old") || line.starts_with("  acct_old")),
+        "the stored grant is not an account any more: {listed}"
+    );
+    assert!(listed.contains("acct_old"), "but it is named: {listed}");
+    assert!(
+        listed.contains("no longer"),
+        "and said to be unread: {listed}"
+    );
+    assert!(
+        listed.contains("[profiles]"),
+        "with where one comes from: {listed}"
+    );
+}

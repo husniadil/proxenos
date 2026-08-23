@@ -136,7 +136,23 @@ pub fn accounts(result: &Value) -> String {
             .to_owned();
     }
 
-    accounts
+    let ignored = match field(result, "ignored_grants").and_then(Value::as_array) {
+        Some(names) if !names.is_empty() => {
+            let names = names
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "\nnote: {names} in credentials.json is a stored grant, which is no longer \
+                 read. A subscription is borrowed from the profile that holds it — declare \
+                 that profile under `[profiles]`."
+            )
+        }
+        _ => String::new(),
+    };
+
+    let rows = accounts
         .iter()
         .map(|account| {
             let name = field(account, "name")
@@ -198,7 +214,9 @@ pub fn accounts(result: &Value) -> String {
                 .to_owned()
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+
+    format!("{rows}{ignored}")
 }
 
 /// What a rename says it did. Both halves, because the point of the command is

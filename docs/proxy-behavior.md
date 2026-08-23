@@ -1664,6 +1664,13 @@ else, the directory keeps its name, and every turn afterwards is billed to an
 account nobody pointed at them. A profile that cannot be read is never marked —
 it has not changed identity, it has not been read.
 
+**A grant left in this daemon's own store is not read, and is said to be not
+read.** A credential file written by a version that obtained its own grants
+still holds them. Nothing here obtains or refreshes one now, so such an entry is
+skipped rather than offered as an account that cannot be spent — and named in
+the listing, because a credential that quietly stopped counting reads as one
+that vanished.
+
 **The keychain is read by spawning `security`.** The item's ACL trusts that
 binary; a process reading through Security.framework is a different application
 to the keychain and is prompted. One client run reads the item sixteen times,
