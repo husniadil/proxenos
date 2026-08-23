@@ -750,7 +750,7 @@ impl FileStore {
     /// Every write here rewrites the whole file, so two overlapping writers
     /// mean one discards whatever the other has just done. That is a whole
     /// account, not one stale token, and the pair that overlaps in practice is
-    /// real: `login` in the CLI writes this file directly while the daemon may
+    /// real: `accounts add-key` in the CLI writes this file directly while the daemon may
     /// be persisting a refresh.
     ///
     /// The lock is what makes that safe between writers that take it. The

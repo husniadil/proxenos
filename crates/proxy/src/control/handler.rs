@@ -1049,8 +1049,9 @@ fn write_target(
 /// written to the shared table because the section this daemon just created is
 /// not in the snapshot that decides where to write.
 ///
-/// The rest of the configuration is still read once at startup. Nothing else
-/// here is written by the daemon, so nothing else can disagree with itself.
+/// The rest of the configuration is read at startup and again on
+/// `config.reload`, and between those nothing here writes it, so nothing else
+/// can disagree with itself.
 ///
 /// A file that no longer parses keeps the snapshot: the daemon is already
 /// running on it, and refusing a switch over a file the operator has half

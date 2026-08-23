@@ -1211,7 +1211,7 @@ Every write is taken **under a lock the filesystem enforces**, held for as long
 as it takes to read the file, change it, and replace it. Every write rewrites
 the whole file, so two overlapping writers would otherwise mean one discarding
 whatever the other had just done — a whole account, not a stale token — and the
-pair that overlaps in practice is real: `login` in the CLI writes this file
+pair that overlaps in practice is real: `accounts add-key` in the CLI writes this file
 directly while the daemon may be persisting a refresh.
 
 The lock is a file of its own beside the credentials, never read and never
@@ -1278,7 +1278,7 @@ reports a plausible value in place of any of them — an invented expiry would
 drive a refresh that cannot happen, and an invented account id would put a
 header on the wire the endpoint taking a key never asked for.
 
-Every account verb works on either: list, select, rename, forget. What differs
+Every account verb works on either: list, use, rename, remove. What differs
 is where the credential may be spent, and that difference is the point.
 
 **One place resolves a credential into headers**, and every path that

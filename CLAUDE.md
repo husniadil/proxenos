@@ -152,7 +152,7 @@ name a real client or endpoint where that is the accurate explanation for a rule
 — the constraint is on names, not on prose that has to be true to be useful.
 
 **Operator-facing output is the carve-out, and it runs the other way.** What
-`status`, `models`, `usage`, `accounts`, `login`, and a CLI error print must
+`status`, `models`, `usage`, `accounts`, `reload`, and a CLI error print must
 name the real provider — `codex`, `anthropic` — because a role word like "the
 second provider" is this project's internal vocabulary and means nothing to the
 person reading it. Use the store's own provider ids, the same strings

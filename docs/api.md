@@ -1047,7 +1047,7 @@ to guess about.
 §7.0). `accounts.select` and an `accounts.remove` that hands over to another account
 fetch it again as whoever serves now, and their answers carry
 `catalog_refreshed` — a fetch that failed keeps the previous list in force, and
-everything downstream of it still describes that account. A CLI `login` calls
+everything downstream of it still describes that account. A CLI `accounts add-key` calls
 `accounts.select` when it lands **and only when it selected** — storing a key
 that left the selection where it was moved nothing for the catalog to follow.
 Where nothing refetched — a key stored while no daemon was running, or a profile
