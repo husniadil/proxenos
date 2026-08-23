@@ -22,6 +22,15 @@ pub struct ProxyError {
     pub status: StatusCode,
     /// Forwarded verbatim when upstream supplies it.
     pub retry_after: Option<String>,
+    /// Whether the backend said this, as opposed to this proxy deciding it
+    /// before anything was sent.
+    ///
+    /// Both wear the same kind — a lapsed grant this side refuses and a
+    /// credential the backend refuses are each an authentication error — and
+    /// only one of them is a fact about the credential as the backend sees it.
+    /// Recording the first as the second would tell an operator to sign in
+    /// again over a profile this daemon simply could not read (§8.4).
+    pub from_upstream: bool,
 }
 
 impl ProxyError {
@@ -31,6 +40,7 @@ impl ProxyError {
             status,
             message: message.into(),
             retry_after: None,
+            from_upstream: false,
         }
     }
 
@@ -114,7 +124,11 @@ impl ProxyError {
     /// act on a 401 by re-authenticating.
     pub fn from_upstream_status(status: StatusCode, message: impl Into<String>) -> Self {
         let message = message.into();
-        match status {
+        let marked = |error: Self| Self {
+            from_upstream: true,
+            ..error
+        };
+        marked(match status {
             StatusCode::TOO_MANY_REQUESTS => Self::rate_limited(message),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Self::authentication(message),
             // The backend judged the request itself invalid. Saying so is more
@@ -123,7 +137,7 @@ impl ProxyError {
             StatusCode::BAD_REQUEST => Self::invalid_request(message),
             status if status.is_server_error() => Self::overloaded(message),
             status => Self::upstream(status, message),
-        }
+        })
     }
 }
 

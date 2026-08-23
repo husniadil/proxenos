@@ -435,6 +435,7 @@ async fn run_one(probe: &probe::Probe, fixture: &Fixture, backend: &Backend) -> 
         // Injecting here would make a probe's request differ from the fixture
         // it is derived from, for no gain in what the probe establishes.
         usage: Arc::new(crate::usage::UsageStore::default()),
+        refusals: Arc::new(crate::auth::refusals::Refusals::default()),
         instructions: Arc::new(crate::config::InstructionsConfig {
             identity: false,
             append: None,
@@ -835,6 +836,7 @@ async fn run_relay_live(probe: &probe::Probe, relay: &LiveRelay) -> Outcome {
         recorder: None,
         capture: Arc::new(crate::recorder::Switches::default()),
         usage: Arc::new(crate::usage::UsageStore::default()),
+        refusals: Arc::new(crate::auth::refusals::Refusals::default()),
         instructions: Arc::new(crate::config::InstructionsConfig {
             identity: false,
             append: None,
@@ -1001,6 +1003,7 @@ async fn run_relay_replay(probe: &probe::Probe, fixture: &Fixture) -> Outcome {
         recorder: None,
         capture: Arc::new(crate::recorder::Switches::default()),
         usage: Arc::new(crate::usage::UsageStore::default()),
+        refusals: Arc::new(crate::auth::refusals::Refusals::default()),
         instructions: Arc::new(crate::config::InstructionsConfig {
             identity: false,
             append: None,

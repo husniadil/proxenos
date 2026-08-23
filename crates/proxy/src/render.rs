@@ -232,6 +232,15 @@ pub fn accounts_at(result: &Value, now: u64) -> String {
             } else {
                 ""
             };
+            // What the backend made of this credential, where it turned one
+            // away. On the row because it belongs to the account rather than
+            // to the daemon, and ahead of the renewal count because a
+            // credential already refused is past being renewed early.
+            let refused = if field(account, "refused").is_some() {
+                "  (the backend refused this credential — sign in to that profile again)"
+            } else {
+                ""
+            };
             // The fact on the row, and the remedy on `status`: this line is
             // a listing, and the account it belongs to may not be the one an
             // operator is about to act on.
@@ -244,7 +253,7 @@ pub fn accounts_at(result: &Value, now: u64) -> String {
             };
             // Trimmed so a payload without a provider does not leave the
             // padding hanging off the end of the line.
-            format!("{marker} {name:<24} {who:<24}{provider}{source}{changed}{renew}")
+            format!("{marker} {name:<24} {who:<24}{provider}{source}{changed}{refused}{renew}")
                 .trim_end()
                 .to_owned()
         })
@@ -405,6 +414,23 @@ pub fn status_at(result: &Value, now: u64) -> String {
                 .to_owned()
         }
     });
+
+    // The backend's own words, because the operator is about to search for
+    // them. Its own line for the same reason as the renewal below: the
+    // credential is there and readable, and what this says is that the other
+    // end will not take it.
+    if let Some(refused) = auth.and_then(|auth| field(auth, "refused")) {
+        let detail = field(refused, "detail")
+            .and_then(Value::as_str)
+            .unwrap_or("no reason was given");
+        let status = field(refused, "status")
+            .and_then(Value::as_u64)
+            .map_or_else(String::new, |status| format!("{status}: "));
+        lines.push(format!(
+            "refused    the backend turned this credential away ({status}{detail}) — sign in \
+             to that profile again"
+        ));
+    }
 
     // Its own line rather than a suffix on the one above: the account is
     // connected and every turn works, and what this says is that it stops

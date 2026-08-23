@@ -1841,6 +1841,7 @@ fn state_over(accounts: Arc<Accounts>) -> proxenos::control::handler::ControlSta
         credentials: accounts as Arc<dyn proxenos::auth::store::AccountStore>,
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: std::sync::Arc::new(proxenos::auth::refusals::Refusals::default()),
         config: Arc::new(proxenos::config::Config::default()),
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: Some(tokens),
@@ -2209,4 +2210,90 @@ fn status_tells_a_full_store_to_choose_and_an_empty_one_to_sign_in() {
     assert!(empty.contains("claude auth login"), "{empty}");
     assert!(empty.contains("login --key"), "{empty}");
     assert!(!empty.contains("accounts --use"), "{empty}");
+}
+
+// --- what the backend said about a credential -----------------------------
+
+/// A local refusal and a refused credential wear the same error kind and mean
+/// opposite things: one is a profile this daemon could not read, the other is
+/// a credential the backend turned away. Only the second is worth telling an
+/// operator to sign in over.
+#[test]
+fn only_what_the_backend_said_is_marked_as_coming_from_it() {
+    let ours = ProxyError::authentication("the borrowed grant has expired");
+    assert!(!ours.from_upstream);
+
+    let theirs = ProxyError::from_upstream_status(
+        axum::http::StatusCode::UNAUTHORIZED,
+        "invalid access token",
+    );
+    assert!(theirs.from_upstream);
+    assert_eq!(
+        theirs.kind,
+        proxenos_core::anthropic::ErrorKind::AuthenticationError
+    );
+}
+
+/// An unpinned turn is made as whoever is serving, and that is who a refusal
+/// belongs to — resolved when it happens rather than when somebody reads it,
+/// because a switch afterwards would move the blame to another account.
+#[test]
+fn a_refusal_is_filed_under_the_account_that_was_serving() {
+    let refusals = proxenos::auth::refusals::Refusals::default()
+        .serving(Arc::new(|| Some("personal".to_owned())));
+
+    refusals.record(None, 401, "invalid access token");
+
+    let refusal = refusals.get("personal").expect("recorded");
+    assert_eq!(refusal.status, 401);
+    assert!(refusals.get("work").is_none());
+}
+
+/// Clearing an empty store asks nobody who is serving. It is called on every
+/// turn that works, and resolving the serving account is a store read — which
+/// on a borrowed Claude profile is a `security` spawn.
+#[test]
+fn clearing_nothing_does_not_ask_who_is_serving() {
+    let asked = Arc::new(Mutex::new(0));
+    let counter = Arc::clone(&asked);
+    let refusals = proxenos::auth::refusals::Refusals::default().serving(Arc::new(move || {
+        *counter.lock().expect("not poisoned") += 1;
+        Some("personal".to_owned())
+    }));
+
+    refusals.clear(None);
+    assert_eq!(*asked.lock().expect("not poisoned"), 0);
+
+    refusals.record(Some("personal"), 401, "invalid access token");
+    refusals.clear(None);
+    assert_eq!(*asked.lock().expect("not poisoned"), 1);
+    assert!(refusals.get("personal").is_none());
+}
+
+/// Both surfaces say it, and `status` carries the backend's own sentence
+/// because that is what the operator is about to search for.
+#[test]
+fn a_refused_credential_is_said_on_the_row_and_in_the_report() {
+    let row = render::accounts(&listing(serde_json::json!({
+        "name": "work",
+        "kind": "grant",
+        "provider": "codex",
+        "plan": "team",
+        "selected": true,
+        "refused": { "status": 401, "detail": "invalid access token", "at": 1_800_000_000 },
+    })));
+    assert!(row.contains("refused this credential"), "{row}");
+    assert!(row.contains("sign in"), "{row}");
+
+    let report = render::status(&serde_json::json!({
+        "auth": {
+            "connected": true,
+            "account": "work",
+            "provider": "codex",
+            "kind": "grant",
+            "refused": { "status": 401, "detail": "invalid access token", "at": 1_800_000_000 },
+        },
+    }));
+    assert!(report.contains("401"), "{report}");
+    assert!(report.contains("invalid access token"), "{report}");
 }

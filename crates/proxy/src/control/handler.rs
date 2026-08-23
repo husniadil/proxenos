@@ -37,6 +37,11 @@ pub struct ControlState {
     /// The same store the ingress path writes to, so this reports the quota as
     /// of the last turn rather than a figure of its own.
     pub usage: Arc<crate::usage::UsageStore>,
+    /// What the backend last said about a credential it refused, per account.
+    ///
+    /// The same store the turn path writes to, so a refusal that arrived on
+    /// somebody's turn is what this socket reports (§8.4).
+    pub refusals: Arc<crate::auth::refusals::Refusals>,
     /// The authorization flow, if one is running. Held here because there is
     /// exactly one callback port and every front-end shares it.
     /// The configuration this daemon started from.
@@ -242,6 +247,11 @@ fn status(state: &ControlState) -> Value {
                 "plan_source": source,
                 "email": account.email.clone(),
                 "expires_at": account.expires_at,
+                // What the backend last said about this credential, if it
+                // refused one. Distinct from `dead`, which is this side
+                // failing to read or spend the grant at all: this one is a
+                // credential that was read, sent, and turned away (§8.4).
+                "refused": state.refusals.get(&account.name),
                 // When the operator has to sign in to the owning program
                 // again, where that is known at all. Null on a Codex profile
                 // and on a key, which record nothing equivalent (§8.4).
@@ -1250,6 +1260,29 @@ fn serving_account(accounts: &[crate::auth::store::Account]) -> Option<String> {
         .and_then(|account| account.account_id.clone())
 }
 
+/// Each account as it is reported, plus what the backend last said about it.
+///
+/// Merged here rather than carried on `Account`: the store knows what a
+/// credential is and where it came from, and what a backend made of it is
+/// something a turn learned afterwards (§8.4). The row is the place they meet.
+fn with_refusals(state: &ControlState, accounts: &[crate::auth::store::Account]) -> Vec<Value> {
+    accounts
+        .iter()
+        .map(|account| {
+            let mut row = serde_json::to_value(account).unwrap_or_else(|_| json!({}));
+            if let Some(refusal) = state.refusals.get(&account.name)
+                && let Some(object) = row.as_object_mut()
+            {
+                object.insert(
+                    "refused".to_owned(),
+                    serde_json::to_value(&refusal).unwrap_or_else(|_| json!({})),
+                );
+            }
+            row
+        })
+        .collect()
+}
+
 /// `accounts` — every stored grant, and which one serves turns.
 fn accounts(state: &ControlState) -> Result<Value, ProxyError> {
     let accounts = state.credentials.accounts()?;
@@ -1258,7 +1291,7 @@ fn accounts(state: &ControlState) -> Result<Value, ProxyError> {
             .iter()
             .find(|account| account.selected)
             .map(|account| account.name.clone()),
-        "accounts": accounts,
+        "accounts": with_refusals(state, &accounts),
         // Whether these are the operator's own entries or the stock profiles
         // this daemon read because none were written down. A front-end that
         // could not tell would present a found account as a declared one.
@@ -1630,6 +1663,10 @@ async fn forget_account(state: &ControlState, params: Option<&Value>) -> Result<
     // daemon can no longer spend.
     if let Some(name) = &cleared {
         state.usage.forget(name);
+        // And what the backend said about its credential. The account is gone;
+        // a refusal left behind would be advice about signing in to something
+        // that is no longer here.
+        state.refusals.forget(name);
     }
 
     // Handing over to another account is a switch by another name, so what

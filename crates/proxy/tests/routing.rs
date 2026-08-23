@@ -183,6 +183,7 @@ async fn daemon(
         recorder: None,
         capture: Arc::new(proxenos::recorder::Switches::new(None)),
         usage: Arc::clone(&usage),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
         instructions: Arc::new(proxenos::config::InstructionsConfig {
             identity: false,
             append: None,

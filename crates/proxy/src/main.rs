@@ -1144,6 +1144,13 @@ async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
             .tallying_at(proxenos::config::tally_path()),
     );
 
+    // Bound to the same store, for the same reason: a turn made as "whoever is
+    // serving" has to be filed under the account that was serving when it
+    // happened, not whichever one is selected by the time somebody asks.
+    let refusals = Arc::new(proxenos::auth::refusals::Refusals::for_accounts(
+        Arc::clone(&credentials),
+    ));
+
     // Which account's mapping is in force. Read before the mapping is resolved
     // rather than after, because a catalog is one account's menu (§7.0) and a
     // mapping written for one account can name a model another is not offered.
@@ -1265,6 +1272,7 @@ async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
         credentials: Arc::clone(&credentials),
         capture: Arc::clone(&switches),
         usage: Arc::clone(&usage),
+        refusals: Arc::clone(&refusals),
         config: Arc::new(config.clone()),
         shutdown: Arc::clone(&shutdown),
         tokens: Some(Arc::clone(&tokens)),
@@ -1349,6 +1357,7 @@ async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
         )),
         capture: Arc::clone(&switches),
         usage: Arc::clone(&usage),
+        refusals: Arc::clone(&refusals),
         instructions: Arc::new(config.instructions.clone()),
         sessions,
         // §9 — always built, never conditional on what the store holds today.

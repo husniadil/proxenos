@@ -65,6 +65,12 @@ pub struct AppState {
     /// The latest quota snapshot the backend volunteered, for whoever asks
     /// between turns.
     pub usage: Arc<crate::usage::UsageStore>,
+    /// What the backend last said about a credential it refused, per account.
+    ///
+    /// Shared with the control socket, because the turn that learns it is not
+    /// the thing that reports it: a refusal arrives on somebody's turn and is
+    /// read by whoever asks afterwards (§8.4).
+    pub refusals: Arc<crate::auth::refusals::Refusals>,
     /// §2.1 — what the proxy puts around the client's system prompt.
     pub instructions: Arc<crate::config::InstructionsConfig>,
     /// Per-conversation state: calibration, discovered tools, and the baseline
@@ -260,6 +266,18 @@ async fn messages(
 
             return match relay.forward(&account, &headers, uri.query(), body).await {
                 Ok(response) => {
+                    // §8.4 — the relay hands the backend's status straight to
+                    // the client, so a refused credential is a response rather
+                    // than an error here. It is the only thing that can say a
+                    // profile needs signing in again on a provider whose
+                    // profile records no expiry, and nothing else on this path
+                    // would notice it going by.
+                    note_credential(&state, Some(&account), response.status(), || {
+                        format!(
+                            "the backend answered {} for this account's credential",
+                            response.status()
+                        )
+                    });
                     // §9.4 — the second provider states quota in the headers of
                     // every turn, and for a subscription token that is the only
                     // place it states one. Read here rather than polled: it
@@ -466,8 +484,14 @@ async fn messages(
                 )
                 .await
             {
-                Ok((events, _sent)) => events,
-                Err(error) => return error.into_response(),
+                Ok((events, _sent)) => {
+                    state.refusals.clear(account.as_deref());
+                    events
+                }
+                Err(error) => {
+                    note_error(&state, account.as_deref(), &error);
+                    return error.into_response();
+                }
             }
         }
         None => match state
@@ -475,9 +499,15 @@ async fn messages(
             .stream(&translated, Some(&session.cache_key), account.as_deref())
             .await
         {
-            Ok(events) => events,
+            Ok(events) => {
+                state.refusals.clear(account.as_deref());
+                events
+            }
             // Nothing has been written yet, so this can still be a status.
-            Err(error) => return error.into_response(),
+            Err(error) => {
+                note_error(&state, account.as_deref(), &error);
+                return error.into_response();
+            }
         },
     };
 
@@ -498,6 +528,7 @@ async fn messages(
     let (preamble, events) = peek_preamble(events).await;
     for payload in preamble.iter().flatten() {
         if let Some(error) = upstream_refusal(payload) {
+            note_error(&state, account.as_deref(), &error);
             return error.into_response();
         }
     }
@@ -913,6 +944,43 @@ fn is_preamble_event(payload: &str) -> bool {
 ///
 /// The status the backend gave is carried through rather than replaced, so a
 /// 400 stays a 400 and the client's retry logic sees what actually happened.
+/// Remember, or forget, what the backend said about the credential a turn was
+/// made with (§8.4).
+///
+/// Only what the backend said. An authentication error this proxy raised
+/// before anything was sent — a profile it could not read, a grant past its
+/// expiry — is a different fact with a different remedy, and telling an
+/// operator to sign in again over one of those sends them to renew something
+/// that is fine.
+fn note_error(state: &AppState, account: Option<&str>, error: &ProxyError) {
+    if !error.from_upstream {
+        return;
+    }
+    note_credential(state, account, error.status, || error.message.clone());
+}
+
+/// The same, from a status that never became an error — the relay path, where
+/// the backend's answer is handed to the client as it stands.
+fn note_credential(
+    state: &AppState,
+    account: Option<&str>,
+    status: axum::http::StatusCode,
+    detail: impl FnOnce() -> String,
+) {
+    if matches!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED | axum::http::StatusCode::FORBIDDEN
+    ) {
+        state.refusals.record(account, status.as_u16(), detail());
+        return;
+    }
+    // Anything else the backend answered means the credential was accepted,
+    // whatever else went wrong with the turn. A rate limit is not a login
+    // problem, and leaving a stale refusal up would send an operator to sign
+    // in over one.
+    state.refusals.clear(account);
+}
+
 fn upstream_refusal(payload: &str) -> Option<ProxyError> {
     let event: Value = serde_json::from_str(payload).ok()?;
     if event.get("type").and_then(Value::as_str) != Some("error") {

@@ -27,6 +27,8 @@ struct Harness {
     switches: Arc<proxenos::recorder::Switches>,
     /// The same store the control socket answers `usage` from.
     usage: Arc<proxenos::usage::UsageStore>,
+    /// The same store the control socket reads a refused credential from.
+    refusals: Arc<proxenos::auth::refusals::Refusals>,
 }
 
 impl Harness {
@@ -65,6 +67,12 @@ impl Harness {
         let upstream = ReplayServer::start(behavior).await;
         let switches = Arc::new(proxenos::recorder::Switches::new(mode));
         let usage = Arc::new(proxenos::usage::UsageStore::default());
+        // Named, because a refusal is filed under the account that was serving
+        // when it arrived and this harness has no store to ask.
+        let refusals = Arc::new(
+            proxenos::auth::refusals::Refusals::default()
+                .serving(Arc::new(|| Some("serving".to_owned()))),
+        );
 
         let state = AppState {
             policy: Arc::new(proxenos::policy::Policy::new(
@@ -85,6 +93,7 @@ impl Harness {
             recorder: recorder.clone(),
             capture: Arc::clone(&switches),
             usage: Arc::clone(&usage),
+            refusals: Arc::clone(&refusals),
             instructions: Arc::new(proxenos::config::InstructionsConfig {
                 identity: false,
                 append: None,
@@ -106,6 +115,7 @@ impl Harness {
             client: reqwest::Client::new(),
             switches,
             usage,
+            refusals,
         }
     }
 
@@ -876,6 +886,7 @@ async fn the_configured_instructions_reach_the_backend() {
         recorder: None,
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
         instructions: Arc::new(proxenos::config::InstructionsConfig {
             identity: true,
             append: Some("  Answer briefly.  ".to_owned()),
@@ -956,6 +967,7 @@ async fn the_working_budget_reaches_upstream_on_a_default_configuration() {
         recorder: None,
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
         // The shipped default, not a hand-built one.
         instructions: Arc::new(proxenos::config::InstructionsConfig::default()),
         sessions: Arc::new(proxenos::session::SessionStore::new()),
@@ -1522,6 +1534,7 @@ async fn ingress_sends_through_a_conduit_and_uploads_incrementally() {
         recorder: None,
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
         instructions: Arc::new(proxenos::config::InstructionsConfig {
             identity: false,
             append: None,
@@ -1650,6 +1663,7 @@ async fn a_second_turn_uploads_the_new_items_and_not_nothing() {
         recorder: None,
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
         instructions: Arc::new(proxenos::config::InstructionsConfig {
             identity: false,
             append: None,
@@ -1841,6 +1855,7 @@ async fn a_reasoning_turn_does_not_end_the_session() {
         recorder: None,
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
         instructions: Arc::new(proxenos::config::InstructionsConfig {
             identity: false,
             append: None,
@@ -1967,6 +1982,7 @@ async fn a_failed_turn_does_not_advance_the_baseline() {
         recorder: None,
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
         instructions: Arc::new(proxenos::config::InstructionsConfig {
             identity: false,
             append: None,
@@ -2079,6 +2095,7 @@ async fn a_request_larger_than_the_window_is_refused() {
         recorder: None,
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
         instructions: Arc::new(proxenos::config::InstructionsConfig {
             identity: false,
             append: None,
@@ -2156,6 +2173,7 @@ async fn an_unknown_window_does_not_refuse_anything() {
         recorder: None,
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
         instructions: Arc::new(proxenos::config::InstructionsConfig {
             identity: false,
             append: None,
@@ -2231,6 +2249,7 @@ async fn effort_is_capped_by_what_the_model_supports() {
         recorder: None,
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
         instructions: Arc::new(proxenos::config::InstructionsConfig {
             identity: false,
             append: None,
@@ -2299,6 +2318,7 @@ async fn an_unlisted_model_does_not_cap_effort() {
         recorder: None,
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
         instructions: Arc::new(proxenos::config::InstructionsConfig {
             identity: false,
             append: None,
@@ -2643,6 +2663,7 @@ async fn every_turn_of_a_conversation_carries_one_session_id() {
         recorder: None,
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
         instructions: Arc::new(proxenos::config::InstructionsConfig::default()),
         sessions: Arc::new(proxenos::session::SessionStore::new()),
         relay: None,
@@ -2820,4 +2841,93 @@ async fn a_non_streaming_failure_is_an_error_body() {
             .map(|value| value.split(';').next().unwrap_or(value).trim().to_owned()),
         Some("application/json".to_owned())
     );
+}
+
+/// §8.4 — the backend refusing a credential is the only thing that can say a
+/// Codex profile needs signing in again: its profile records no expiry, and
+/// `codex login status` reports "logged in" for a profile whose tokens are
+/// junk. So the refusal is remembered where somebody can read it, rather than
+/// leaving with the turn that met it.
+#[tokio::test]
+async fn a_refused_credential_is_remembered_against_the_account() {
+    let harness = Harness::start(Behavior::Failure {
+        status: 401,
+        body: r#"{"error":{"message":"invalid access token"}}"#.to_owned(),
+        retry_after: None,
+    })
+    .await;
+
+    let response = harness
+        .post(
+            "/v1/messages",
+            json!({
+                "model": "claude-sonnet-5",
+                "max_tokens": 16,
+                "messages": [{ "role": "user", "content": "hi" }],
+            }),
+        )
+        .await;
+    assert_eq!(response.status(), 401);
+
+    let refusal = harness
+        .refusals
+        .get("serving")
+        .expect("the refusal is remembered");
+    assert_eq!(refusal.status, 401);
+    // The backend's own words, because the operator is about to search them.
+    assert!(
+        refusal.detail.contains("invalid access token"),
+        "{refusal:?}"
+    );
+}
+
+/// And a turn that works ends it. Signing in again is what fixes a refusal,
+/// and a warning that outlived the problem would send an operator to renew
+/// something that already works.
+#[tokio::test]
+async fn a_turn_that_works_clears_a_refusal() {
+    let harness = Harness::start(Behavior::Events(vec![
+        json!({ "type": "response.created", "response": { "id": "resp_1" } }),
+        completed(),
+    ]))
+    .await;
+    harness.refusals.record(Some("serving"), 401, "stale");
+
+    harness
+        .post(
+            "/v1/messages",
+            json!({
+                "model": "claude-sonnet-5",
+                "max_tokens": 16,
+                "messages": [{ "role": "user", "content": "hi" }],
+            }),
+        )
+        .await;
+
+    assert!(harness.refusals.get("serving").is_none());
+}
+
+/// A rate limit is not a login problem. Everything the backend answers other
+/// than a refusal means the credential was taken, whatever else went wrong.
+#[tokio::test]
+async fn another_kind_of_failure_is_not_recorded_as_a_refusal() {
+    let harness = Harness::start(Behavior::Failure {
+        status: 429,
+        body: r#"{"error":{"message":"slow down"}}"#.to_owned(),
+        retry_after: Some("30".to_owned()),
+    })
+    .await;
+
+    harness
+        .post(
+            "/v1/messages",
+            json!({
+                "model": "claude-sonnet-5",
+                "max_tokens": 16,
+                "messages": [{ "role": "user", "content": "hi" }],
+            }),
+        )
+        .await;
+
+    assert!(harness.refusals.get("serving").is_none());
 }

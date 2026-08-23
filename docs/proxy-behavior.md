@@ -1739,6 +1739,23 @@ that does not have it answers a question nobody put. A declared one is always
 listed, whatever state it is in, because a row that vanished reads as an entry
 the operator never wrote. The listing says which of the two sets it is showing.
 
+**A credential the backend refuses is remembered against the account that
+spent it.** On the second provider it is the only thing that can say a profile
+needs signing in again: `auth.json` records no date to count down to, and
+`codex login status` does not supply one either — measured, it reads the file
+and reports "logged in" for a profile whose tokens are junk. So the answer
+comes from the backend, on a turn nobody is watching, and is kept where
+somebody can read it: a status, the sentence the backend wrote, and when.
+
+Three things follow. It is filed under the account that was serving at the
+moment of the turn rather than whichever is selected when somebody asks. It is
+cleared by the next turn that works, because signing in again is what fixes one
+and a warning outliving the problem sends an operator to renew what already
+works. And only what the *backend* said counts: a lapsed grant this side
+refuses before sending anything wears the same error kind, and reporting it
+here would tell an operator to sign in over a profile this daemon simply could
+not read.
+
 **A login that has to be renewed is said so before it lapses, on the week it
 matters.** A Claude profile's stored item records `refreshTokenExpiresAt`,
 which is the date its own client counts down to ("your login expires in 3

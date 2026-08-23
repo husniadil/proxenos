@@ -88,6 +88,14 @@ vanished. Keys in that file keep working exactly as they did.
   because that decides whose subscription pays. Writing any entry replaces the
   found set entirely, and the listing says which of the two it is showing.
 
+- **A credential the backend refused, remembered against its account.** On the
+  second provider it is the only signal there is: `auth.json` records no date to
+  count down to, and `codex login status` reads that file and answers "logged
+  in" for a profile whose tokens are junk — measured, not assumed. So a 401 or a
+  403 on a turn is kept with the backend's own sentence and reported on
+  `accounts` and `status`, and the next turn that works clears it. Distinct from
+  `dead`, which is this side failing to read or spend a grant at all.
+
 - **A warning before a borrowed login lapses.** A Claude profile records the
   date its own client counts down to, and within seven days of it `accounts`
   says how long is left and `status` says what renewing takes. It is the one

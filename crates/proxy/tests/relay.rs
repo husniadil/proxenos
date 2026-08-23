@@ -220,6 +220,7 @@ async fn daemon_with(
         recorder: observed.recorder.clone(),
         capture: Arc::clone(&observed.capture),
         usage: Arc::clone(&observed.usage),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
         instructions: Arc::new(proxenos::config::InstructionsConfig {
             identity: true,
             append: None,
@@ -818,6 +819,7 @@ async fn a_relayed_turn_joins_the_served_models_a_status_line_reads() {
         credentials: Arc::clone(&store) as Arc<dyn AccountStore>,
         capture: Arc::clone(&observed.capture),
         usage: Arc::clone(&observed.usage),
+        refusals: std::sync::Arc::new(proxenos::auth::refusals::Refusals::default()),
         config: Arc::new(proxenos::config::Config::default()),
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,

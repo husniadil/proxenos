@@ -146,6 +146,7 @@ fn state(dir: &std::path::Path) -> (ControlState, Arc<Counting>) {
         credentials: Arc::clone(&store) as Arc<dyn AccountStore>,
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: std::sync::Arc::new(proxenos::auth::refusals::Refusals::default()),
         config: Arc::new(proxenos::config::Config::default()),
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
