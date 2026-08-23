@@ -4,7 +4,10 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.12.0]
+
+One figure reported a floor it had not measured; another reported a lifetime it
+could not know. Both now stop at what is actually known about them.
 
 ### Changed
 

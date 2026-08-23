@@ -713,6 +713,56 @@ being made to serve a turn first.
 **Done.** What stays open is named: a figure lives only in the daemon's memory,
 so a restart empties every row until something asks again.
 
+### v0.12.0 — shipped
+
+**Two figures that were wrong about themselves, in opposite directions.** One
+reported a floor it had not measured; the other reported a lifetime it could
+not know.
+
+The per-account token tally reset to zero on every restart, and a supervised
+daemon is replaced on every install, so that was the ordinary case rather than
+a rare one. Nothing upstream can restate it — it is what *this daemon* served,
+counted from completed responses — so a restart did not lose a figure that
+could be asked for again, it replaced a floor with a smaller one that read
+exactly the same. It now lives in `spend.json` under the configuration
+directory, holding an account name and two token counts and no part of any
+credential, and it is read back at startup.
+
+The quota snapshot deliberately does not persist beside it. Upstream still
+holds that one and an ask recovers it exactly, where a percentage read back
+from disk would describe a window that may have reset since — so the empty row
+after a restart is the honest one, and no staleness rendering had to be
+invented for a number nobody would have been able to trust.
+
+Getting that file right took two passes, and the second one is the reason this
+entry exists. The first wrote it with `std::fs::write`, which truncates the
+target and then fills it: a daemon killed between those two leaves a short file
+that parses into nothing, which is read back as a floor of zero — the exact
+defect being fixed, reintroduced in a narrower window. It is now written to a
+sibling carrying the process id, flushed, and renamed over the target, so a
+reader sees the old file or the new one. Two daemons pointed at one directory
+merge by taking whichever count is higher per account, and a write re-reads the
+file before replacing it; that does not close the window and the comment says
+so rather than claiming a guarantee it does not hold.
+
+**A stem that names one credential is worn by two.** `claude setup-token` mints
+a token good for about a year; the harness's own OAuth *access* token begins
+with the same `sk-ant-oat` and lasts hours. Both file as a subscription token,
+both are relayed as bearers, both report the subscription row — and for the
+second all of that is true only until it expires, after which nothing stored
+says why. Classification is unchanged, because a bare bearer has no structure
+to read without decoding it and decoding a credential to classify it is a new
+way for a secret to reach a log. What changed is that the ambiguity is written
+where a reader of `classify()` and a reader of the spec will find it, and
+`login --key` names both credentials on stderr where stdin is a terminal — the
+one moment a person is present to be told. It names the stem and no part of the
+key; a piped login is byte for byte what it was.
+
+**Done when** no figure this daemon reports is smaller than what it measured,
+and no credential is described by a lifetime nothing here can know.
+
+**Done.**
+
 ### Next
 
 Named rather than numbered. Twice now a section here has worn a version that
