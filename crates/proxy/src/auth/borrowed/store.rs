@@ -15,6 +15,7 @@ use super::Host;
 use super::read::GrantReader;
 use super::read::Profile;
 use super::read::grant;
+use crate::auth::selection::Selection;
 use crate::auth::store::Account;
 use crate::auth::store::AccountStore;
 use crate::auth::store::Credential;
@@ -22,7 +23,6 @@ use crate::auth::store::CredentialStore;
 use crate::auth::store::Credentials;
 use crate::auth::store::Provider;
 use crate::error::ProxyError;
-use std::path::Path;
 use std::path::PathBuf;
 
 /// The declared profiles, the host they are resolved against, and where the
@@ -32,13 +32,7 @@ pub struct BorrowedStore {
     reader: Box<dyn GrantReader>,
     host: Host,
     home: PathBuf,
-    selection: PathBuf,
-}
-
-/// What the selection file holds. One name, and room to grow.
-#[derive(serde::Deserialize, serde::Serialize)]
-struct Selection {
-    selected: String,
+    selection: Selection,
 }
 
 impl BorrowedStore {
@@ -47,15 +41,20 @@ impl BorrowedStore {
         reader: Box<dyn GrantReader>,
         host: Host,
         home: impl Into<PathBuf>,
-        selection: impl Into<PathBuf>,
+        selection: Selection,
     ) -> Self {
         Self {
             profiles,
             reader,
             host,
             home: home.into(),
-            selection: selection.into(),
+            selection,
         }
+    }
+
+    /// The profiles this store was built over, in the order declared.
+    pub fn profiles(&self) -> &[Profile] {
+        &self.profiles
     }
 
     /// The profile serving turns.
@@ -66,7 +65,7 @@ impl BorrowedStore {
     /// comes first — the choice decides whose subscription pays, and guessing
     /// at it spends the wrong one invisibly.
     fn selected(&self) -> Result<&Profile, ProxyError> {
-        match self.read_selection()? {
+        match self.selection.read()? {
             Some(name) => self.named(&name).map_err(|_| {
                 ProxyError::authentication(format!(
                     "the selected profile `{name}` is no longer declared in `[profiles]`. \
@@ -98,28 +97,6 @@ impl BorrowedStore {
                     "no profile is called `{name}`. `accounts` lists the declared ones."
                 ))
             })
-    }
-
-    fn read_selection(&self) -> Result<Option<String>, ProxyError> {
-        let raw = match std::fs::read_to_string(&self.selection) {
-            Ok(raw) => raw,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => {
-                return Err(ProxyError::authentication(format!(
-                    "could not read {}: {error}",
-                    self.selection.display()
-                )));
-            }
-        };
-        // An unreadable selection is refused rather than treated as absent:
-        // falling back would move which account pays without saying so.
-        let parsed: Selection = serde_json::from_str(&raw).map_err(|error| {
-            ProxyError::authentication(format!(
-                "{} is not readable: {error}. Choose a profile with `accounts --use NAME`.",
-                self.selection.display()
-            ))
-        })?;
-        Ok(Some(parsed.selected))
     }
 
     fn grant_for(
@@ -199,25 +176,7 @@ impl AccountStore for BorrowedStore {
     /// declared profile serves turns.
     fn select(&self, name: &str) -> Result<(), ProxyError> {
         let profile = self.named(name)?;
-        let body = serde_json::to_string(&Selection {
-            selected: profile.name.clone(),
-        })
-        .map_err(|error| ProxyError::authentication(format!("could not record it: {error}")))?;
-
-        if let Some(parent) = self.selection.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| {
-                ProxyError::authentication(format!(
-                    "could not create {}: {error}",
-                    parent.display()
-                ))
-            })?;
-        }
-        std::fs::write(&self.selection, body).map_err(|error| {
-            ProxyError::authentication(format!(
-                "could not write {}: {error}",
-                self.selection.display()
-            ))
-        })
+        self.selection.write(&profile.name)
     }
 
     fn remove(&self, name: &str) -> Result<(), ProxyError> {
@@ -249,9 +208,4 @@ impl AccountStore for BorrowedStore {
     fn rename(&self, from: &str, _to: &str) -> Result<(), ProxyError> {
         Err(self.read_only("rename", from))
     }
-}
-
-/// Where the selection is kept, beside the other daemon state.
-pub fn selection_path(config_dir: &Path) -> PathBuf {
-    config_dir.join("selected.json")
 }

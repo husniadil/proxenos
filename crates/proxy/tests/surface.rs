@@ -155,11 +155,9 @@ async fn the_runner_writes_one_fixture_per_planned_exchange() {
     let authorizer: Arc<dyn proxenos::auth::authorize::Authorizer> =
         Arc::new(proxenos::auth::authorize::AccountAuthorizer::new(
             Arc::clone(&store) as Arc<dyn proxenos::auth::store::AccountStore>,
-            Arc::new(proxenos::auth::tokens::TokenSource::new(
+            Arc::new(proxenos::auth::grants::Grants::new(
                 Arc::clone(&store) as Arc<dyn CredentialStore>,
-                String::new(),
-                "client-abc",
-                Arc::new(proxenos::auth::tokens::SystemClock),
+                Arc::new(proxenos::auth::grants::SystemClock),
             )),
         ));
 
@@ -253,11 +251,9 @@ async fn one_named_exchange_can_be_captured_without_paying_for_the_rest() {
     let authorizer: Arc<dyn proxenos::auth::authorize::Authorizer> =
         Arc::new(proxenos::auth::authorize::AccountAuthorizer::new(
             Arc::clone(&store) as Arc<dyn proxenos::auth::store::AccountStore>,
-            Arc::new(proxenos::auth::tokens::TokenSource::new(
+            Arc::new(proxenos::auth::grants::Grants::new(
                 Arc::clone(&store) as Arc<dyn CredentialStore>,
-                String::new(),
-                "client-abc",
-                Arc::new(proxenos::auth::tokens::SystemClock),
+                Arc::new(proxenos::auth::grants::SystemClock),
             )),
         ));
 

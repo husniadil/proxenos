@@ -144,7 +144,6 @@ impl Harness {
             credentials: Arc::clone(&store) as Arc<dyn AccountStore>,
             capture: Arc::clone(&switches),
             usage: Arc::clone(&usage),
-            login: Arc::new(proxenos::auth::daemon_login::LoginFlow::default()),
             config: Arc::clone(&config),
             shutdown: Arc::clone(&shutdown),
             // No credentials to ask with, and no endpoint that would answer:
@@ -187,7 +186,7 @@ impl Harness {
     }
 
     /// The same harness, answering on a socket whose daemon holds this grant.
-    async fn with_tokens(self, tokens: Arc<proxenos::auth::tokens::TokenSource>) -> Self {
+    async fn with_tokens(self, tokens: Arc<proxenos::auth::grants::Grants>) -> Self {
         let catalog = r#"{"data":[{"id":"gpt-5.6-terra","context_window":272000}]}"#;
         self.respawn_with(catalog, "gpt-5.6-terra", Some(tokens))
             .await
@@ -247,7 +246,6 @@ impl Harness {
             credentials: Arc::clone(&self.store) as Arc<dyn AccountStore>,
             capture: Arc::clone(&self.switches),
             usage: Arc::clone(&self.usage),
-            login: Arc::new(proxenos::auth::daemon_login::LoginFlow::default()),
             config: Arc::clone(&self.config),
             shutdown: Arc::clone(&self.shutdown),
             tokens: None,
@@ -272,11 +270,9 @@ impl Harness {
     /// fetched again. The daemon starts holding what it fetched for the
     /// account selected now, exactly as `run` does.
     async fn with_catalog_source(self, endpoint: &str) -> Self {
-        let tokens = Arc::new(proxenos::auth::tokens::TokenSource::new(
+        let tokens = Arc::new(proxenos::auth::grants::Grants::new(
             Arc::clone(&self.store) as Arc<dyn CredentialStore>,
-            String::new(),
-            "client-abc",
-            Arc::new(proxenos::auth::tokens::SystemClock),
+            Arc::new(proxenos::auth::grants::SystemClock),
         ));
         let catalog = Arc::new(CatalogSource::new(
             Catalog::fallback(),
@@ -302,7 +298,6 @@ impl Harness {
             credentials: Arc::clone(&self.store) as Arc<dyn AccountStore>,
             capture: Arc::clone(&self.switches),
             usage: Arc::clone(&self.usage),
-            login: Arc::new(proxenos::auth::daemon_login::LoginFlow::default()),
             config: Arc::clone(&self.config),
             shutdown: Arc::clone(&self.shutdown),
             tokens: Some(tokens),
@@ -338,7 +333,7 @@ impl Harness {
         self,
         catalog: &str,
         model: &str,
-        tokens: Option<Arc<proxenos::auth::tokens::TokenSource>>,
+        tokens: Option<Arc<proxenos::auth::grants::Grants>>,
     ) -> Self {
         let tiers: Vec<ResolvedTier> = ["opus", "sonnet", "haiku", "fable"]
             .into_iter()
@@ -363,7 +358,6 @@ impl Harness {
             credentials: Arc::clone(&self.store) as Arc<dyn AccountStore>,
             capture: Arc::clone(&self.switches),
             usage: Arc::clone(&self.usage),
-            login: Arc::new(proxenos::auth::daemon_login::LoginFlow::default()),
             config: Arc::clone(&self.config),
             shutdown: Arc::clone(&self.shutdown),
             tokens,
@@ -396,11 +390,9 @@ impl Harness {
     /// Held apart from `respawn_with` because the endpoint is the whole point:
     /// every other spawn here sets it empty precisely so no test can reach out.
     async fn with_quota_endpoint(self, endpoint: &str) -> Self {
-        let tokens = Arc::new(proxenos::auth::tokens::TokenSource::new(
+        let tokens = Arc::new(proxenos::auth::grants::Grants::new(
             Arc::clone(&self.store) as Arc<dyn CredentialStore>,
-            String::new(),
-            "client-abc",
-            Arc::new(proxenos::auth::tokens::SystemClock),
+            Arc::new(proxenos::auth::grants::SystemClock),
         ));
         let path = self._dir.path().join("control-quota.sock");
         let state = ControlState {
@@ -416,7 +408,6 @@ impl Harness {
             credentials: Arc::clone(&self.store) as Arc<dyn AccountStore>,
             capture: Arc::clone(&self.switches),
             usage: Arc::clone(&self.usage),
-            login: Arc::new(proxenos::auth::daemon_login::LoginFlow::default()),
             config: Arc::clone(&self.config),
             shutdown: Arc::clone(&self.shutdown),
             tokens: Some(tokens),
@@ -458,14 +449,6 @@ async fn every_documented_method_is_answered() {
     let harness = Harness::start().await;
 
     for method in METHODS {
-        // `login` really starts a flow, and the flow binds the one fixed
-        // callback port. Calling it here would contend with the test that
-        // covers it properly — a scheduling failure wearing a behaviour
-        // failure's clothes, and one that only appears when the machine is
-        // busy enough to overlap them. Its vocabulary is established there.
-        if method == "login" {
-            continue;
-        }
         let result = harness.call(method).await;
         match result {
             Ok(_) => {}
@@ -722,7 +705,6 @@ async fn an_unknown_window_is_reported_as_null() {
         credentials: Arc::new(FileStore::new(dir.path().join("c.json"))),
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
-        login: Arc::new(proxenos::auth::daemon_login::LoginFlow::default()),
         config: Arc::new(proxenos::config::Config::default()),
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
@@ -876,7 +858,6 @@ async fn a_malformed_request_is_reported_without_closing_the_socket() {
         credentials: Arc::new(FileStore::new(dir.path().join("c.json"))),
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
-        login: Arc::new(proxenos::auth::daemon_login::LoginFlow::default()),
         config: Arc::new(proxenos::config::Config::default()),
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
@@ -1438,7 +1419,6 @@ async fn status_says_when_the_catalog_was_unavailable() {
         credentials: Arc::new(FileStore::new(dir.path().join("c.json"))),
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
-        login: Arc::new(proxenos::auth::daemon_login::LoginFlow::default()),
         config: Arc::new(proxenos::config::Config::default()),
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
@@ -1475,7 +1455,6 @@ async fn models_prints_unknown_rather_than_a_number() {
         credentials: Arc::new(FileStore::new(dir.path().join("c.json"))),
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
-        login: Arc::new(proxenos::auth::daemon_login::LoginFlow::default()),
         config: Arc::new(proxenos::config::Config::default()),
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
@@ -1552,7 +1531,6 @@ async fn env_states_no_window_when_the_catalog_is_unavailable() {
         credentials: Arc::new(FileStore::new(dir.path().join("c.json"))),
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
-        login: Arc::new(proxenos::auth::daemon_login::LoginFlow::default()),
         config: Arc::new(proxenos::config::Config::default()),
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
@@ -1843,80 +1821,6 @@ async fn the_effort_ceiling_can_be_removed() {
     );
 }
 
-/// The login flow, end to end short of the browser.
-///
-/// One test rather than three, because every assertion here needs the one fixed
-/// callback port and the suite runs tests concurrently — three tests would
-/// contend for it and fail on scheduling rather than on behaviour.
-///
-/// The discriminating assertions are the ones that could pass only if something
-/// was really bound: a method that returned a URL and armed nothing would look
-/// identical to its caller right up to the moment the browser redirected into
-/// nothing.
-#[tokio::test]
-async fn login_arms_a_callback_joins_a_second_caller_and_releases_on_cancel() {
-    let harness = Harness::start().await;
-
-    let first = harness.call("login").await.unwrap();
-    let url = first["authorization_url"].as_str().unwrap().to_owned();
-
-    assert!(url.starts_with("https://"), "{url}");
-    assert!(url.contains("code_challenge"), "{url}");
-    assert_eq!(first["already_in_flight"], json!(false));
-
-    // The redirect target is a fixed port, and something has to be listening on
-    // it before the operator's browser arrives.
-    assert!(
-        tokio::net::TcpStream::connect(("127.0.0.1", 1455))
-            .await
-            .is_ok(),
-        "the callback port should be listening once login has started"
-    );
-
-    // A second caller joins the first. Beginning again would either fail to
-    // bind or replace the state the first flow is waiting to match, leaving the
-    // operator holding a URL whose callback is guaranteed to be rejected.
-    let second = harness
-        .call_with("login", json!({ "label": "spare" }))
-        .await
-        .unwrap();
-    assert_eq!(second["authorization_url"], json!(url));
-    assert_eq!(second["already_in_flight"], json!(true));
-    // The joined flow keeps the name it was started with, and the answer says
-    // so. A caller told only that it joined would go looking for an account
-    // called `spare` that was never going to exist.
-    assert_eq!(
-        second["label"],
-        Value::Null,
-        "the flow it joined carries no label, and this call's is not adopted"
-    );
-
-    harness.call("login.cancel").await.unwrap();
-
-    // Bindable again means genuinely released. A flow that merely forgot its
-    // state would leave the listener holding the port.
-    let rebound = tokio::net::TcpListener::bind(("127.0.0.1", 1455)).await;
-    assert!(rebound.is_ok(), "the callback port should be free again");
-    drop(rebound);
-
-    let again = harness
-        .call_with("login", json!({ "label": "spare" }))
-        .await
-        .unwrap();
-    assert_eq!(again["already_in_flight"], json!(false));
-    assert_eq!(
-        again["label"],
-        json!("spare"),
-        "a flow this call started carries the name it asked for"
-    );
-    assert_ne!(
-        again["authorization_url"],
-        json!(url),
-        "a fresh login is a fresh flow, not the cancelled one"
-    );
-    harness.call("login.cancel").await.unwrap();
-}
-
 /// `tiers.set` takes the same two forms the file does: a model id, or
 /// `{ account, model }` pinning the tier to another account. The pinned form is
 /// the write-time half of the consent gate — the roadmap's rule refuses it at
@@ -2186,96 +2090,31 @@ async fn a_change_that_cannot_be_written_is_not_applied_either() {
     );
 }
 
-/// One loopback reply, then done — enough to have an authorization server
-/// refuse a grant without any test reaching the network.
-async fn refusing_token_endpoint() -> String {
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .unwrap();
-    let url = format!("http://{}/token", listener.local_addr().unwrap());
-
-    tokio::spawn(async move {
-        while let Ok((mut stream, _)) = listener.accept().await {
-            use tokio::io::AsyncReadExt;
-            use tokio::io::AsyncWriteExt;
-
-            // Consume the whole request before answering. Replying first races
-            // the reply against the client still writing its request, and
-            // closing a socket with unread inbound data resets the connection
-            // instead of finishing it — a race the client loses only when the
-            // machine is busy, which made this stub the suite's one flaky
-            // dependency.
-            let mut request = Vec::new();
-            let mut buffer = [0u8; 4096];
-            while let Ok(read) = stream.read(&mut buffer).await {
-                if read == 0 {
-                    break;
-                }
-                request.extend_from_slice(&buffer[..read]);
-                let Some(headers_end) = request
-                    .windows(4)
-                    .position(|window| window == b"\r\n\r\n")
-                    .map(|position| position + 4)
-                else {
-                    continue;
-                };
-                let headers = String::from_utf8_lossy(&request[..headers_end]);
-                let content_length: usize = headers
-                    .lines()
-                    .find_map(|line| {
-                        line.to_ascii_lowercase()
-                            .strip_prefix("content-length:")
-                            .map(str::trim)
-                            .map(str::to_owned)
-                    })
-                    .and_then(|value| value.parse().ok())
-                    .unwrap_or(0);
-                if request.len() >= headers_end + content_length {
-                    break;
-                }
-            }
-
-            let body = r#"{"error":"refresh_token_expired"}"#;
-            let reply = format!(
-                "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            let _ = stream.write_all(reply.as_bytes()).await;
-            let _ = stream.shutdown().await;
-        }
-    });
-
-    url
-}
-
-/// A grant the backend has refused is reported as such.
+/// A grant that cannot be spent is reported as such.
 ///
-/// `connected` stays true — the credential file is still there and still
-/// readable — so without this nothing anywhere says the provider is finished.
-/// A front-end would show it healthy while every turn failed with an
-/// authentication error, which is the worst of both: no figure to act on and
-/// no reason to look.
+/// `connected` stays true — the account is still there and still readable — so
+/// without this nothing anywhere says the provider is finished. A front-end
+/// would show it healthy while every turn failed with an authentication error,
+/// which is the worst of both: no figure to act on and no reason to look.
+///
+/// What makes it true has changed with §8.4: there is no refresh token to be
+/// retired here, so this is the grant having lapsed while the program that owns
+/// the profile has not yet renewed it.
 #[tokio::test]
-async fn status_reports_a_grant_the_backend_refused() {
+async fn status_reports_a_grant_that_cannot_be_spent() {
     let harness = Harness::start().await;
-    harness
-        .store
-        .save(&Credentials {
-            access_token: "a".to_owned(),
-            refresh_token: "r".to_owned(),
-            id_token: None,
-            account_id: Some("acct_9".to_owned()),
-            // In the past, so the next use has to refresh — which is what gets
-            // refused.
-            expires_at: Some(1_000),
-        })
-        .unwrap();
+    let live = Credentials {
+        access_token: "a".to_owned(),
+        refresh_token: "r".to_owned(),
+        id_token: None,
+        account_id: Some("acct_9".to_owned()),
+        expires_at: Some(4_000_000_000),
+    };
+    harness.store.save(&live).unwrap();
 
-    let tokens = Arc::new(proxenos::auth::tokens::TokenSource::new(
+    let tokens = Arc::new(proxenos::auth::grants::Grants::new(
         Arc::clone(&harness.store) as Arc<dyn CredentialStore>,
-        refusing_token_endpoint().await,
-        "client-abc",
-        Arc::new(proxenos::auth::tokens::SystemClock),
+        Arc::new(proxenos::auth::grants::SystemClock),
     ));
 
     let harness = harness.with_tokens(Arc::clone(&tokens)).await;
@@ -2284,14 +2123,17 @@ async fn status_reports_a_grant_the_backend_refused() {
         json!(false)
     );
 
-    let refusal = tokens
-        .access_token()
-        .await
-        .expect_err("the grant should have been refused");
-    assert!(
-        tokens.is_dead(),
-        "the refusal was not treated as terminal: {refusal:?}"
-    );
+    // The same account, lapsed. Nothing is retired and nothing is remembered:
+    // the answer is read from the store each time it is asked.
+    harness
+        .store
+        .save(&Credentials {
+            expires_at: Some(1_000),
+            ..live
+        })
+        .unwrap();
+    assert!(tokens.access_token().is_err());
+    assert!(tokens.is_dead());
 
     let status = harness.call("status").await.unwrap();
     assert_eq!(status["auth"]["connected"], json!(true));
@@ -2764,20 +2606,13 @@ async fn switching_accounts_clears_a_refusal_that_belonged_to_the_old_grant() {
         .unwrap();
     harness.store.select("acct_two").unwrap();
 
-    // A token source whose refresh endpoint refuses, so the grant is marked
-    // dead exactly as a real refusal would mark it. No network: the endpoint
-    // is a loopback stub that answers every request with a dead-grant refusal.
-    let server = RefusingTokens::start().await;
-    let tokens = Arc::new(proxenos::auth::tokens::TokenSource::new(
+    // Nothing is contacted: the grant above has simply lapsed, and §8.4 reads
+    // that from the store rather than asking anyone about it.
+    let tokens = Arc::new(proxenos::auth::grants::Grants::new(
         Arc::clone(&harness.store) as Arc<dyn CredentialStore>,
-        server.url.clone(),
-        "client-abc",
-        Arc::new(proxenos::auth::tokens::SystemClock),
+        Arc::new(proxenos::auth::grants::SystemClock),
     ));
-    tokens
-        .access_token()
-        .await
-        .expect_err("the grant is refused");
+    tokens.access_token().expect_err("the grant is refused");
     assert!(tokens.is_dead());
 
     let harness = harness.with_tokens(Arc::clone(&tokens)).await;
@@ -2799,35 +2634,6 @@ async fn switching_accounts_clears_a_refusal_that_belonged_to_the_old_grant() {
         harness.call("status").await.unwrap()["auth"]["dead"],
         json!(false)
     );
-}
-
-/// A loopback stub that refuses every refresh the way a retired grant is
-/// refused. Nothing here reaches the network.
-struct RefusingTokens {
-    url: String,
-}
-
-impl RefusingTokens {
-    async fn start() -> Self {
-        use axum::routing::post;
-        let app = axum::Router::new().route(
-            "/token",
-            post(|_body: String| async {
-                (
-                    axum::http::StatusCode::BAD_REQUEST,
-                    r#"{"error":"refresh_token_reused"}"#,
-                )
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
-        Self {
-            url: format!("http://{addr}/token"),
-        }
-    }
 }
 
 /// What an operator sees. The account serving turns is marked, because a list
@@ -4199,7 +4005,6 @@ async fn env_for(
         credentials: store as Arc<dyn AccountStore>,
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
-        login: Arc::new(proxenos::auth::daemon_login::LoginFlow::default()),
         config: Arc::new(proxenos::config::Config::default()),
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
@@ -5034,7 +4839,6 @@ fn probe_state(dir: &std::path::Path) -> ControlState {
             as Arc<dyn AccountStore>,
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
-        login: Arc::new(proxenos::auth::daemon_login::LoginFlow::default()),
         config: Arc::new(proxenos::config::Config::default()),
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,

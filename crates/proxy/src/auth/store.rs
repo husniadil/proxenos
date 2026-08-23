@@ -108,7 +108,7 @@ impl KeyFlavour {
         if provider != Provider::Anthropic {
             return None;
         }
-        if key.starts_with(crate::auth::setup_token::SETUP_TOKEN_PREFIX) {
+        if key.starts_with(SETUP_TOKEN_PREFIX) {
             return Some(Self::SubscriptionToken);
         }
         if key.starts_with(API_KEY_PREFIX) {
@@ -122,6 +122,19 @@ impl KeyFlavour {
 /// The version digits after it belong to the issuer, the same reason
 /// `SETUP_TOKEN_PREFIX` stops where it does.
 pub const API_KEY_PREFIX: &str = "sk-ant-api";
+
+/// The stem `claude setup-token` mints a long-lived subscription token under.
+///
+/// The stem, not a whole prefix: a real token begins `sk-ant-oat01-` and the
+/// version digit belongs to the issuer. What the guard is for is telling that
+/// credential apart from an API key, and the stem does that.
+pub const SETUP_TOKEN_PREFIX: &str = "sk-ant-oat";
+
+/// The file keys are kept in, under the configuration directory.
+///
+/// The name predates borrowing and is kept: an operator with keys already has
+/// this file, and renaming it would read as every key having vanished.
+pub const KEYS_FILE: &str = "credentials.json";
 
 impl ApiKey {
     pub fn new(api_key: impl Into<String>) -> Self {

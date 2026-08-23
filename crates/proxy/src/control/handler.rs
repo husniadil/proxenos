@@ -39,7 +39,6 @@ pub struct ControlState {
     pub usage: Arc<crate::usage::UsageStore>,
     /// The authorization flow, if one is running. Held here because there is
     /// exactly one callback port and every front-end shares it.
-    pub login: Arc<crate::auth::daemon_login::LoginFlow>,
     /// The configuration this daemon started from.
     ///
     /// Read once at startup, and that is the model: nothing here routes a turn
@@ -57,7 +56,7 @@ pub struct ControlState {
     /// The grant, for the two things this socket reports about it: whether it
     /// has been refused, and the token a quota request is made with. `None`
     /// where the daemon holds no credentials at all.
-    pub tokens: Option<Arc<crate::auth::tokens::TokenSource>>,
+    pub tokens: Option<Arc<crate::auth::grants::Grants>>,
     pub usage_endpoint: String,
     /// The live conversations. A switch has to reach them: a conduit fixes its
     /// account on the connection at dial and reuses it for the conversation's
@@ -126,8 +125,6 @@ pub async fn dispatch(
             state.capture.stop();
             Ok(json!({ "recording": false }))
         }
-        "login" => login(state, params).await,
-        "login.cancel" => Ok(json!({ "cancelled": state.login.cancel() })),
         "tiers.set" => set_tiers(state, params),
         "effort.set" => set_effort(state, params),
         "cross_account_tiers.set" => set_cross_account(state, params),
@@ -1173,38 +1170,6 @@ fn set_effort(state: &ControlState, params: Option<&Value>) -> Result<Value, Pro
     }))
 }
 
-/// `login` — start the authorization flow, or join the one already running.
-///
-/// Answers with the URL and returns; the flow completes in the background and
-/// `status` is what says whether it did. A control call that blocked until the
-/// operator finished in a browser would hold the socket for minutes and give a
-/// front-end nothing to render in the meantime.
-async fn login(state: &ControlState, params: Option<&Value>) -> Result<Value, ProxyError> {
-    // What to call the account this authorization produces. Without one it is
-    // named by the account id the grant carries.
-    let label = params
-        .and_then(|params| params.get("label"))
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let started = state
-        .login
-        .start(Arc::clone(&state.credentials), label)
-        .await?;
-
-    Ok(json!({
-        "authorization_url": started.url,
-        // Whether this call started the flow or joined one. A caller that
-        // cannot tell would report a second operator's login as its own.
-        "already_in_flight": started.already_in_flight,
-        // The name the account will get. A call that joined a flow already
-        // running gets that flow's label, which is not necessarily the one it
-        // asked for — and a caller that could not tell would go looking for an
-        // account that was never going to exist.
-        "label": started.label,
-        "detail": "open the URL to authorize; `status` reports when it completed",
-    }))
-}
-
 /// The account id of the account serving turns, where there is one.
 /// Whether the account serving turns is on the second provider (§9.1) — the
 /// account an unpinned tier's turns are relayed as.
@@ -1666,7 +1631,7 @@ async fn refresh_usage(state: &ControlState) -> Result<Value, ProxyError> {
     // its own credential; what is shared is a connection pool, not a
     // credential.
     let client = reqwest::Client::new();
-    let now = crate::auth::tokens::Clock::now_unix(&crate::auth::tokens::SystemClock);
+    let now = crate::auth::grants::Clock::now_unix(&crate::auth::grants::SystemClock);
 
     let mut rows = Vec::with_capacity(accounts.len());
     for account in &accounts {
@@ -1746,7 +1711,7 @@ async fn ask_for(
             .map_err(|error| error.message)?
             .grant()
             .is_some_and(|grant| {
-                grant.needs_refresh(now, crate::auth::tokens::REFRESH_MARGIN_SECONDS)
+                grant.needs_refresh(now, crate::auth::grants::EXPIRY_MARGIN_SECONDS)
             })
     {
         return Err(format!(

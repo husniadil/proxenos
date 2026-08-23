@@ -202,11 +202,9 @@ async fn daemon_with(
     let authorizer: Arc<dyn proxenos::auth::authorize::Authorizer> =
         Arc::new(proxenos::auth::authorize::AccountAuthorizer::new(
             Arc::clone(&store) as Arc<dyn AccountStore>,
-            Arc::new(proxenos::auth::tokens::TokenSource::new(
+            Arc::new(proxenos::auth::grants::Grants::new(
                 Arc::clone(&store) as Arc<dyn CredentialStore>,
-                String::new(),
-                "client-abc",
-                Arc::new(proxenos::auth::tokens::SystemClock),
+                Arc::new(proxenos::auth::grants::SystemClock),
             )),
         ));
 
@@ -820,7 +818,6 @@ async fn a_relayed_turn_joins_the_served_models_a_status_line_reads() {
         credentials: Arc::clone(&store) as Arc<dyn AccountStore>,
         capture: Arc::clone(&observed.capture),
         usage: Arc::clone(&observed.usage),
-        login: Arc::new(proxenos::auth::daemon_login::LoginFlow::default()),
         config: Arc::new(proxenos::config::Config::default()),
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,

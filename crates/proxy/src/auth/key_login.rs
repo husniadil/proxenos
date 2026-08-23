@@ -12,9 +12,35 @@
 
 use std::io::{self, IsTerminal, Write};
 
-use crate::auth::setup_token::Guide;
-use crate::auth::setup_token::SETUP_TOKEN_PREFIX;
+use crate::auth::store::SETUP_TOKEN_PREFIX;
 use crate::auth::store::{AccountStore, Provider};
+/// The I/O half: everything the flow says and everything it reads.
+///
+/// It outlived the guided setup-token flow it was written for. That flow is
+/// gone — a subscription is borrowed from the profile that holds it now (§8.4)
+/// — and this is what remains: one seam, so the tty and pipe halves are
+/// testable without a terminal.
+pub trait Guide {
+    /// Where the key comes from, said before it is asked for.
+    fn explain(&mut self) -> std::io::Result<()>;
+    /// Read the key. A terminal implementation must not echo it.
+    fn token(&mut self) -> std::io::Result<String>;
+    /// What to call the account, or `None` when there is nobody to ask.
+    fn name(&mut self) -> std::io::Result<Option<String>>;
+    /// Confirm what was stored. Never the key.
+    fn stored(&mut self, name: &str) -> std::io::Result<()>;
+    /// Which provider this guide files under, where it files under one.
+    fn provider(&self) -> Option<Provider> {
+        None
+    }
+
+    /// Said after an anthropic key whose stem two credentials share was
+    /// stored. Silence by default: a guide with no person behind it has
+    /// nobody to tell.
+    fn shared_stem_caution(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 /// Store a key under `label`, reading it through `guide`.
 ///

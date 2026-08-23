@@ -1120,8 +1120,10 @@ holding that message needs the key that undoes it, not a restatement of it.
 
 ## 8. Credentials
 
-Authentication uses OAuth with PKCE. The proxy operates its own client
-registration and owns its own refresh-token family.
+Authentication is borrowed. This proxy operates no authorization flow of its
+own and holds no refresh-token family: a subscription grant is read from the
+profile of the program that owns it (§8.4), and the only credential it stores
+itself is a key, which has no flow behind it (§8.2).
 
 Credentials belonging to other tools are **read and never written** (§8.4).
 Refresh-token families rotate, and sharing one means two clients writing over
@@ -1131,37 +1133,28 @@ breakage — but a client that does not hold the current token is one refresh
 away from holding nothing. So the tool that owns a grant is the only one that
 may rotate it, and this side spends what it finds.
 
-Refresh requests send `grant_type`, `refresh_token`, and `client_id` — **never
-`scope`**. Including it causes the authorization server to re-scope the grant and
-invalidate sibling refresh-token families. The body is JSON; the authorization
-code exchange that precedes it is form-encoded. They differ, and sending the
-wrong encoding is rejected.
-
 The expiry is a claim inside the access token, and is read from there. That is
 the figure the backend validates against, so it is the one that decides.
 Nothing verifies the signature, and nothing should: the token arrived over TLS
 from the server that issued it, and the proxy is reading its own credentials to
 learn when they lapse — not deciding whether to trust them.
 
-The token response also carries `expires_in`, which agrees with the claim. It is
-the fallback for an access token this proxy cannot read, and only that. Where
-neither can be read the token counts as expired, because refreshing needlessly
-costs one request while using a dead token fails the turn.
+Where the claim cannot be read the token counts as expired, because a turn
+refused early costs one message while a turn started on a dead token fails
+mid-request.
 
 The account id is likewise a claim, read from the id token and sent upstream as
 a header.
 
-Refresh begins ahead of expiry and is single-flight: concurrent requests share one
-in-flight refresh. A refusal naming an expired, reused, or invalidated grant —
-or any 401 — retires that refresh token and requires re-authentication; it is
-never retried in a loop, and the retirement follows the token rather than the
-process holding it (§8.1). Every other refusal is transient and leaves the grant
-alone, because marking it dead on a recoverable failure forces a re-login that a
-retry would have made unnecessary.
+Nothing here refreshes, so there is no single-flight to arrange and no refused
+token to retire. A grant at or past its expiry is refused for the turn, and the
+next turn reads the profile again — which is how a refresh performed by the
+owning program arrives without anything on this side noticing (§8.4).
 
-Credentials sit behind a `CredentialStore` trait. The default implementation is a
-file created `0600`. Platform keychains satisfy the same trait. Credentials never
-appear in process arguments, logs, or the configuration file.
+Credentials sit behind a `CredentialStore` trait. Keys are kept in a file
+created `0600`; grants are read through the same trait from wherever the owning
+program keeps them, which on macOS is a keychain item. Credentials never appear
+in process arguments, logs, or the configuration file.
 
 ### 8.1 More than one account
 

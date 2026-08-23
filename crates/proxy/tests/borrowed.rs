@@ -707,7 +707,7 @@ fn store(
         Box::new(FakeReader(held)),
         borrowed::Host::MacOs,
         HOME,
-        dir.join("selected.json"),
+        proxenos::auth::selection::Selection::new(dir.join("selected.json")),
     )
 }
 

@@ -14,12 +14,12 @@ use pretty_assertions::assert_eq;
 use proxenos::auth::authorize::AccountAuthorizer;
 use proxenos::auth::authorize::Authorizer;
 use proxenos::auth::authorize::Kind;
+use proxenos::auth::grants::Grants;
+use proxenos::auth::grants::SystemClock;
 use proxenos::auth::store::AccountStore;
 use proxenos::auth::store::CredentialStore;
 use proxenos::auth::store::FileStore;
 use proxenos::auth::store::Provider;
-use proxenos::auth::tokens::SystemClock;
-use proxenos::auth::tokens::TokenSource;
 use proxenos::upstream::Transport;
 use proxenos::upstream::http::HttpTransport;
 use std::sync::Arc;
@@ -48,10 +48,8 @@ fn store_with_key(dir: &tempfile::TempDir) -> Arc<FileStore> {
 fn authorizer(store: &Arc<FileStore>) -> Arc<dyn Authorizer> {
     Arc::new(AccountAuthorizer::new(
         Arc::clone(store) as Arc<dyn AccountStore>,
-        Arc::new(TokenSource::new(
+        Arc::new(Grants::new(
             Arc::clone(store) as Arc<dyn CredentialStore>,
-            String::new(),
-            "client-abc",
             Arc::new(SystemClock),
         )),
     ))

@@ -836,12 +836,10 @@ fn authorizer_for(
 ) -> std::sync::Arc<dyn proxenos::auth::authorize::Authorizer> {
     std::sync::Arc::new(proxenos::auth::authorize::AccountAuthorizer::new(
         std::sync::Arc::clone(store),
-        std::sync::Arc::new(proxenos::auth::tokens::TokenSource::new(
+        std::sync::Arc::new(proxenos::auth::grants::Grants::new(
             std::sync::Arc::clone(store)
                 as std::sync::Arc<dyn proxenos::auth::store::CredentialStore>,
-            proxenos::auth::flow::token_endpoint(),
-            proxenos::auth::flow::CLIENT_ID,
-            std::sync::Arc::new(proxenos::auth::tokens::SystemClock),
+            std::sync::Arc::new(proxenos::auth::grants::SystemClock),
         )),
     ))
 }

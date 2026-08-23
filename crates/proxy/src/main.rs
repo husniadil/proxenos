@@ -57,13 +57,10 @@ async fn main() -> Result<()> {
 /// value is entirely in that path. The simpler transport is also the one whose
 /// failures are legible when a probe does fail.
 async fn live_transport() -> Result<Arc<dyn proxenos::upstream::Transport>> {
-    let credentials: Arc<dyn proxenos::auth::store::AccountStore> =
-        Arc::new(proxenos::auth::store::FileStore::new(credential_path()));
-    let tokens = Arc::new(proxenos::auth::tokens::TokenSource::new(
+    let credentials: Arc<dyn proxenos::auth::store::AccountStore> = Arc::new(account_store()?);
+    let tokens = Arc::new(proxenos::auth::grants::Grants::new(
         Arc::clone(&credentials) as Arc<dyn proxenos::auth::store::CredentialStore>,
-        proxenos::auth::flow::token_endpoint(),
-        proxenos::auth::flow::CLIENT_ID,
-        Arc::new(proxenos::auth::tokens::SystemClock),
+        Arc::new(proxenos::auth::grants::SystemClock),
     ));
     let authorizer: Arc<dyn proxenos::auth::authorize::Authorizer> =
         Arc::new(proxenos::auth::authorize::AccountAuthorizer::new(
@@ -148,11 +145,9 @@ fn relay_authorizer(
 ) -> Arc<dyn proxenos::auth::authorize::Authorizer> {
     Arc::new(proxenos::auth::authorize::AccountAuthorizer::new(
         Arc::clone(store),
-        Arc::new(proxenos::auth::tokens::TokenSource::new(
+        Arc::new(proxenos::auth::grants::Grants::new(
             Arc::clone(store) as Arc<dyn proxenos::auth::store::CredentialStore>,
-            proxenos::auth::flow::token_endpoint(),
-            proxenos::auth::flow::CLIENT_ID,
-            Arc::new(proxenos::auth::tokens::SystemClock),
+            Arc::new(proxenos::auth::grants::SystemClock),
         )),
     ))
 }
@@ -165,8 +160,7 @@ async fn doctor(args: cli::DoctorArgs) -> Result<()> {
         // Read once, and read by name from here on. Choosing which account a
         // relayed turn is authorized as is a decision about whose quota is
         // spent, so it is resolved here rather than inside the probe.
-        let store: Arc<dyn proxenos::auth::store::AccountStore> =
-            Arc::new(proxenos::auth::store::FileStore::new(credential_path()));
+        let store: Arc<dyn proxenos::auth::store::AccountStore> = Arc::new(account_store()?);
         let accounts = store.accounts().unwrap_or_default();
         let relay = proxenos::doctor::relay_account(&accounts, args.relay_account.as_deref()).map(
             |account| proxenos::doctor::LiveRelay {
@@ -239,70 +233,17 @@ async fn doctor(args: cli::DoctorArgs) -> Result<()> {
 /// one every later request spends. Printing it leaves the choice where it
 /// belongs, and costs one paste.
 async fn login(args: cli::LoginArgs) -> Result<()> {
-    let store: Arc<dyn proxenos::auth::store::AccountStore> =
-        Arc::new(proxenos::auth::store::FileStore::new(credential_path()));
+    let store: Arc<dyn proxenos::auth::store::AccountStore> = Arc::new(account_store()?);
 
-    if args.setup_token {
-        let name = proxenos::auth::setup_token::run(
-            store.as_ref(),
-            &mut proxenos::auth::setup_token::Terminal,
-            args.label.as_deref(),
-        )?;
-        report_serving(&store, &name).await;
-        return Ok(());
-    }
-
-    if args.key {
-        return store_key(&store, args.label.as_deref(), args.provider).await;
-    }
-
-    // An authorization is performed against one provider's server, so a flag
-    // naming another has nowhere to go. Refused rather than ignored: storing
-    // the grant under the named provider would route turns to an endpoint this
-    // credential was never issued for, and ignoring the flag would report a
-    // login for a provider that did not happen.
-    if args.provider != proxenos::auth::store::Provider::Codex {
+    if !args.key {
         anyhow::bail!(
-            "`--provider {}` is only meaningful with `--key`; the authorization flow \
-             runs against one provider's server, so a grant has no provider to choose",
-            args.provider.as_str()
+            "`login` stores an API key, and nothing else. A subscription grant belongs to the \
+             program whose profile holds it: sign in there, declare the profile under \
+             `[profiles]`, and this daemon reads it. Run `login --key --as NAME` for a key."
         );
     }
 
-    let credentials =
-        proxenos::auth::login::run(Arc::clone(&store), args.label.as_deref(), |url| {
-            println!(
-                "Open this URL to authorize:\n\n{url}\n\n\
-             It authorizes whichever ChatGPT account that browser is signed into. \
-             Sign in as the account you want first, or use a private window to \
-             pick a different one.\n"
-            );
-        })
-        .await?;
-
-    // The name the store filed it under, which is the string `accounts --use`
-    // takes. The account id is not always that name — a label supersedes it,
-    // and a grant carrying no id is named by the store. Resolved by the id the
-    // grant carries rather than by the selection, because a login no longer
-    // moves the selection and the account serving turns is frequently not the
-    // one just stored.
-    let named = args.label.clone().or_else(|| {
-        let wanted = credentials.account_id.as_deref()?;
-        store
-            .accounts()
-            .ok()?
-            .into_iter()
-            .find(|account| account.account_id.as_deref() == Some(wanted))
-            .map(|account| account.name)
-    });
-    match &named {
-        Some(account) => println!("Signed in ({account})."),
-        None => println!("Signed in."),
-    }
-    if let Some(account) = named {
-        report_serving(&store, &account).await;
-    }
-    Ok(())
+    store_key(&store, args.label.as_deref(), args.provider).await
 }
 
 /// Store a key, read from stdin.
@@ -838,8 +779,7 @@ async fn record(args: cli::RecordArgs) -> Result<()> {
 /// fixture is what the shipping path would receive rather than what a
 /// purpose-built client would.
 async fn surface(account: &str, out: Option<std::path::PathBuf>, only: Option<&str>) -> Result<()> {
-    let store: Arc<dyn proxenos::auth::store::AccountStore> =
-        Arc::new(proxenos::auth::store::FileStore::new(credential_path()));
+    let store: Arc<dyn proxenos::auth::store::AccountStore> = Arc::new(account_store()?);
 
     // Refused here rather than at the endpoint. A credential stored for one
     // provider spent against the other's host is a key leaking somewhere it
@@ -857,11 +797,9 @@ async fn surface(account: &str, out: Option<std::path::PathBuf>, only: Option<&s
         );
     }
 
-    let tokens = Arc::new(proxenos::auth::tokens::TokenSource::new(
+    let tokens = Arc::new(proxenos::auth::grants::Grants::new(
         Arc::clone(&store) as Arc<dyn proxenos::auth::store::CredentialStore>,
-        proxenos::auth::flow::token_endpoint(),
-        proxenos::auth::flow::CLIENT_ID,
-        Arc::new(proxenos::auth::tokens::SystemClock),
+        Arc::new(proxenos::auth::grants::SystemClock),
     ));
     let authorizer: Arc<dyn proxenos::auth::authorize::Authorizer> = Arc::new(
         proxenos::auth::authorize::AccountAuthorizer::new(Arc::clone(&store), tokens),
@@ -1042,8 +980,7 @@ async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
     // clamped — a clamp makes an operator's mistake look like it was accepted.
     config.validate()?;
 
-    let credentials: Arc<dyn proxenos::auth::store::AccountStore> =
-        Arc::new(proxenos::auth::store::FileStore::new(credential_path()));
+    let credentials: Arc<dyn proxenos::auth::store::AccountStore> = Arc::new(account_store()?);
 
     // §8.3 — a quota figure is filed under the account that earned it, and an
     // unpinned turn's account is whoever this store has selected when the turn
@@ -1082,11 +1019,9 @@ async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
     let addr = listener.local_addr()?;
     tracing::info!(%addr, "listening");
 
-    let tokens = Arc::new(proxenos::auth::tokens::TokenSource::new(
+    let tokens = Arc::new(proxenos::auth::grants::Grants::new(
         Arc::clone(&credentials) as Arc<dyn proxenos::auth::store::CredentialStore>,
-        proxenos::auth::flow::token_endpoint(),
-        proxenos::auth::flow::CLIENT_ID,
-        Arc::new(proxenos::auth::tokens::SystemClock),
+        Arc::new(proxenos::auth::grants::SystemClock),
     ));
 
     // One authorizer for every path that authenticates: it reads the store per
@@ -1180,7 +1115,6 @@ async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
         credentials: Arc::clone(&credentials),
         capture: Arc::clone(&switches),
         usage: Arc::clone(&usage),
-        login: Arc::new(proxenos::auth::daemon_login::LoginFlow::default()),
         config: Arc::new(config.clone()),
         shutdown: Arc::clone(&shutdown),
         tokens: Some(Arc::clone(&tokens)),
@@ -1306,8 +1240,18 @@ fn serving_account(store: &Arc<dyn proxenos::auth::store::AccountStore>) -> Opti
 /// The same directory the configuration is read from, resolved by the same
 /// function: two copies of this rule drift, and the copy that drifts sends the
 /// daemon looking for credentials somewhere the login never wrote them.
-fn credential_path() -> std::path::PathBuf {
-    proxenos::config::config_dir().join("credentials.json")
+/// The accounts this daemon serves: the declared profiles, and the keys it
+/// holds itself.
+///
+/// Built per command rather than shared, the same way the credential file used
+/// to be opened per command. Nothing is cached between them, so a profile the
+/// operator has just signed into is visible to the next one.
+fn account_store() -> Result<proxenos::auth::accounts::Accounts> {
+    let config = proxenos::config::Config::load()?;
+    Ok(proxenos::auth::accounts::Accounts::from_config(
+        &config,
+        &proxenos::config::config_dir(),
+    )?)
 }
 
 fn init_tracing() {

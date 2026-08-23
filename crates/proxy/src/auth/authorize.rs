@@ -5,9 +5,9 @@
 //! subscription header off a key request: every path that authenticates asks
 //! here rather than assembling its own.
 
+use super::grants::Grants;
 use super::store::AccountStore;
 use super::store::Credential;
-use super::tokens::TokenSource;
 use crate::error::ProxyError;
 use std::sync::Arc;
 
@@ -127,7 +127,7 @@ pub fn selected_kind(store: &Arc<dyn AccountStore>) -> Kind {
 /// because there is nothing to refresh and nothing to expire.
 pub struct AccountAuthorizer {
     store: Arc<dyn AccountStore>,
-    grants: Arc<TokenSource>,
+    grants: Arc<Grants>,
     /// One token source per pinned account, kept for the life of the
     /// authorizer.
     ///
@@ -135,11 +135,11 @@ pub struct AccountAuthorizer {
     /// worth anything: a source discarded after each turn collapses no
     /// concurrent refreshes and forgets which token the backend refused, so
     /// every turn would retry a grant that is already gone.
-    pinned: std::sync::Mutex<std::collections::HashMap<String, Arc<TokenSource>>>,
+    pinned: std::sync::Mutex<std::collections::HashMap<String, Arc<Grants>>>,
 }
 
 impl AccountAuthorizer {
-    pub fn new(store: Arc<dyn AccountStore>, grants: Arc<TokenSource>) -> Self {
+    pub fn new(store: Arc<dyn AccountStore>, grants: Arc<Grants>) -> Self {
         Self {
             store,
             grants,
@@ -148,7 +148,7 @@ impl AccountAuthorizer {
     }
 
     /// The token source for one named account, built once.
-    fn grants_for(&self, account: &str) -> Arc<TokenSource> {
+    fn grants_for(&self, account: &str) -> Arc<Grants> {
         let mut pinned = match self.pinned.lock() {
             Ok(pinned) => pinned,
             // Nothing panics while this is held. If it somehow did, a source
@@ -208,14 +208,14 @@ fn key_authorization(key: &super::store::ApiKey) -> Authorization {
 }
 
 #[async_trait::async_trait]
-impl Authorizer for TokenSource {
-    /// A token source is already bound to one account's slot, so the account a
+impl Authorizer for Grants {
+    /// A reader is already bound to one account's store, so the account a
     /// caller names has been resolved before it gets here.
     async fn authorize(&self, _account: Option<&str>) -> Result<Authorization, ProxyError> {
         let mut headers = vec![
             (
                 axum::http::header::AUTHORIZATION.to_string(),
-                format!("Bearer {}", self.access_token().await?),
+                format!("Bearer {}", self.access_token()?),
             ),
             // §2.8 — required on every subscription path, and its absence is a
             // bare 400 that names nothing.

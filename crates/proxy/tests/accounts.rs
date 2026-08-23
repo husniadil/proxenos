@@ -36,6 +36,19 @@ fn id_token(account: &str) -> String {
     )
 }
 
+/// An access token whose `exp` claim is where a borrowed grant's expiry is
+/// read from. The file itself records none.
+fn access_token(expires_at: u64) -> String {
+    use base64::Engine;
+    let encode = |value: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value);
+    format!(
+        "{}.{}.{}",
+        encode(br#"{"alg":"none"}"#),
+        encode(json!({ "exp": expires_at }).to_string().as_bytes()),
+        encode(b"signature")
+    )
+}
+
 fn grant(account: &str) -> serde_json::Value {
     json!({
         "access_token": format!("access-{account}"),
@@ -73,20 +86,94 @@ impl Daemon {
 
     /// The same daemon, on a configuration file written exactly as given —
     /// for the cases that need the catalog section to say something else.
+    ///
+    /// `credentials` is written the way an operator's machine holds it now: a
+    /// grant goes into a profile directory of the program that owns it, and is
+    /// declared under `[profiles]`; a key stays in this daemon's own store. The
+    /// callers below still describe accounts in one place, and this is where
+    /// that description is put where each half actually lives (§8.4).
     fn start_with_file(credentials: &serde_json::Value, config: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         std::fs::create_dir_all(&home).unwrap();
-        std::fs::write(
-            home.join("credentials.json"),
-            serde_json::to_string_pretty(credentials).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(home.join("config.toml"), config).unwrap();
+
+        let described = match credentials.get("accounts") {
+            Some(serde_json::Value::Array(accounts)) => accounts.clone(),
+            _ => vec![credentials.clone()],
+        };
+
+        let mut profiles = String::new();
+        let mut keys = Vec::new();
+        for account in &described {
+            let name = account
+                .get("name")
+                .or_else(|| account.get("account_id"))
+                .and_then(serde_json::Value::as_str)
+                .expect("an account is named")
+                .to_owned();
+
+            if account.get("kind").and_then(serde_json::Value::as_str) == Some("key") {
+                keys.push(json!({
+                    "name": name,
+                    "kind": "key",
+                    "api_key": account["api_key"],
+                    "provider": account.get("provider").cloned().unwrap_or(json!("codex")),
+                }));
+                continue;
+            }
+
+            let profile = home.join("profiles").join(&name);
+            std::fs::create_dir_all(&profile).unwrap();
+            std::fs::write(
+                profile.join("auth.json"),
+                serde_json::to_string_pretty(&json!({
+                    "auth_mode": "chatgpt",
+                    "OPENAI_API_KEY": null,
+                    "last_refresh": "2026-08-23T08:00:44.123456Z",
+                    "tokens": {
+                        // The expiry a borrowed grant has is the one inside its
+                        // access token, so the figure the caller asked for goes
+                        // there rather than into a field of its own.
+                        "access_token": access_token(
+                            account["expires_at"].as_u64().unwrap_or(4_000_000_000),
+                        ),
+                        "refresh_token": account["refresh_token"],
+                        "id_token": account["id_token"],
+                        "account_id": account["account_id"],
+                    },
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            profiles.push_str(&format!(
+                "\n[profiles.{name}]\nprovider = \"codex\"\npath = \"{}\"\n",
+                profile.display()
+            ));
+        }
+
+        if !keys.is_empty() {
+            std::fs::write(
+                home.join("credentials.json"),
+                serde_json::to_string_pretty(&json!({ "accounts": keys })).unwrap(),
+            )
+            .unwrap();
+        }
+        if let Some(selected) = credentials
+            .get("selected")
+            .and_then(serde_json::Value::as_str)
+        {
+            std::fs::write(
+                home.join("selected.json"),
+                serde_json::to_string(&json!({ "selected": selected })).unwrap(),
+            )
+            .unwrap();
+        }
+        std::fs::write(home.join("config.toml"), format!("{config}{profiles}")).unwrap();
 
         let process = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
             .args(["run", "--port", "0"])
             .env("PROXENOS_HOME", &home)
+            .env("HOME", dir.path())
             .env("TMPDIR", dir.path())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -110,6 +197,7 @@ impl Daemon {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
             .args(args)
             .env("PROXENOS_HOME", self.dir.path().join("home"))
+            .env("HOME", self.dir.path())
             .env("TMPDIR", self.dir.path())
             .output()
             .expect("the binary should run");
@@ -270,66 +358,76 @@ fn an_account_states_its_provider_and_the_reports_name_it() {
     );
 }
 
-/// §2 — `accounts --forget` through the shipping binary. The named account
-/// goes, the rest stay usable, and something still serves turns.
+/// §8.4 — a key this daemon holds can be forgotten; a borrowed profile cannot.
+///
+/// The two are different kinds of thing. A key is ours, and forgetting it is
+/// the whole of what that verb ever meant. A profile belongs to another
+/// program, so the refusal points at the file that declares it rather than
+/// removing something the operator did not mean to lose.
 #[test]
-fn the_binary_forgets_one_account_and_keeps_the_rest() {
+fn the_binary_forgets_a_key_and_refuses_to_forget_a_profile() {
     let daemon = Daemon::start(&json!({
-        "selected": "spare",
+        "selected": "work",
         "accounts": [
-            { "name": "acct_one", "access_token": "access-acct_one",
+            { "name": "work", "access_token": "access-acct_one",
               "refresh_token": "refresh-acct_one", "id_token": id_token("acct_one"),
               "account_id": "acct_one", "expires_at": 4_000_000_000_u64 },
-            { "name": "spare", "access_token": "access-acct_two",
-              "refresh_token": "refresh-acct_two", "id_token": id_token("acct_two"),
-              "account_id": "acct_two", "expires_at": 4_000_000_000_u64 },
+            { "name": "billing", "kind": "key", "api_key": "sk-test-not-a-real-key",
+              "provider": "anthropic" },
         ],
     }));
 
-    let forgotten = daemon.run(&["accounts", "--forget", "spare"]);
-
-    assert!(forgotten.contains("spare"), "{forgotten}");
-    assert!(
-        forgotten.contains("acct_one"),
-        "it should say who serves turns now: {forgotten}"
-    );
+    let forgotten = daemon.run(&["accounts", "--forget", "billing"]);
+    assert!(forgotten.contains("billing"), "{forgotten}");
 
     let listed = daemon.run(&["accounts"]);
-    assert!(!listed.contains("spare"), "{listed}");
-    assert!(listed.starts_with('*'), "{listed}");
-    assert!(listed.contains("acct_one"), "{listed}");
-
-    // The last one can go too, and what is left says what to do about it.
-    daemon.run(&["accounts", "--forget", "acct_one"]);
-    assert!(daemon.run(&["accounts"]).contains("login"));
-}
-
-/// §2 — `accounts --rename` through the shipping binary. What changes is the
-/// name `--use` takes; the grant and the account id stay where they are.
-#[test]
-fn the_binary_renames_an_account_without_touching_its_grant() {
-    let daemon = Daemon::start(&grant("acct_legacy"));
-
-    let renamed = daemon.run(&["accounts", "--rename", "acct_legacy", "work"]);
-    assert!(renamed.contains("work"), "{renamed}");
-
-    let listed = daemon.run(&["accounts"]);
+    assert!(!listed.contains("billing"), "{listed}");
     assert!(listed.contains("work"), "{listed}");
-    assert!(listed.starts_with('*'), "it still serves turns: {listed}");
-    // The address comes from the grant, so seeing it here is what says the
-    // grant survived the rename.
-    assert!(listed.contains("acct_legacy@example.test"), "{listed}");
-
-    // The new name is what selects it now.
-    daemon.run(&["accounts", "--use", "work"]);
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
-        .args(["accounts", "--use", "acct_legacy"])
+        .args(["accounts", "--forget", "work"])
         .env("PROXENOS_HOME", daemon.dir.path().join("home"))
+        .env("HOME", daemon.dir.path())
         .env("TMPDIR", daemon.dir.path())
         .output()
         .unwrap();
-    assert!(!output.status.success(), "the old name should be gone");
+
+    assert!(
+        !output.status.success(),
+        "a profile cannot be forgotten here"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("work"), "{stderr}");
+    assert!(stderr.contains("profiles"), "{stderr}");
+    assert!(daemon.run(&["accounts"]).contains("work"));
+}
+
+/// §8.4 — renaming a borrowed profile is refused, and the refusal says where
+/// the name actually lives.
+///
+/// A profile's name is the key it is declared under, so changing it is an edit
+/// to a file the operator already has open. Accepting the verb here would
+/// leave the daemon calling an account something the configuration does not.
+#[test]
+fn the_binary_refuses_to_rename_a_borrowed_profile() {
+    let daemon = Daemon::start(&grant("acct_legacy"));
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .args(["accounts", "--rename", "acct_legacy", "work"])
+        .env("PROXENOS_HOME", daemon.dir.path().join("home"))
+        .env("HOME", daemon.dir.path())
+        .env("TMPDIR", daemon.dir.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "a profile cannot be renamed here");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("acct_legacy"), "{stderr}");
+    assert!(stderr.contains("profiles"), "{stderr}");
+
+    // And it is still there, under the name it was declared with.
+    let listed = daemon.run(&["accounts"]);
+    assert!(listed.contains("acct_legacy"), "{listed}");
 }
 
 /// §8 — a key is stored without a browser flow, and never through argv.

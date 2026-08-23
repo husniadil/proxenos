@@ -392,3 +392,27 @@ pub(crate) fn remedy(provider: Provider) -> &'static str {
         Provider::Anthropic => CLAUDE_REMEDY,
     }
 }
+
+/// Which host's rules apply to this build.
+///
+/// Windows is refused rather than guessed at: nobody has checked where the
+/// client keeps a grant there, and inventing a location would report every
+/// profile as never signed into for a reason of our own making.
+pub fn host() -> Result<Host, crate::error::ProxyError> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(Host::MacOs)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Ok(Host::Linux)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Err(crate::error::ProxyError::authentication(
+            "borrowing a grant from another program's profile has not been checked on this \
+             platform, so nothing here knows where to look."
+                .to_owned(),
+        ))
+    }
+}

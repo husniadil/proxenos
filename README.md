@@ -178,7 +178,6 @@ points at the cause. Credentials never go in this file.
 Then:
 
 ```sh
-proxenos login             # authenticate
 proxenos run --detach      # start the daemon on loopback, in the background
 proxenos exec claude       # start the client against it
 ```
@@ -192,24 +191,39 @@ eval "$(proxenos env)"     # this shell, routing only
 proxenos settings          # the whole thing, for a settings file you merge it into
 ```
 
-`login` prints a URL rather than opening one. Whichever ChatGPT account that
-browser is signed into is the one being authorized, and that is not a choice to
-make on someone's behalf — open it in a private window to pick a different one.
+There is no `proxenos login` for a subscription, because there is nothing here
+to log into. **The account that pays for a turn is a directory you already
+have**: sign in with the ChatGPT app or `codex login`, then name that directory
+in the configuration file:
 
-Logging in again adds an account rather than replacing the one you have. Each
-holds its own grant, so they do not interfere:
+```toml
+[profiles.personal]
+provider = "codex"
+path = "/Users/me/.codex"
 
-```sh
-proxenos login --as spare        # a second account, under a name you choose
-proxenos accounts                # what is stored; * is the one serving turns
-proxenos accounts --use spare
-proxenos accounts --rename spare work
-proxenos accounts --forget work  # undo a login
+[profiles.work]
+provider = "codex"
+path = "/Users/me/Library/Application Support/Agent Profiles/codex/p/997619b5"
 ```
 
-An account can hold an API key instead of a subscription grant, for anyone who
-has no subscription at all. The key is read from standard input, never from an
-argument, because an argument is visible to every other process on the machine:
+Which account pays is then which profile is selected, and switching costs
+nothing:
+
+```sh
+proxenos accounts                # what is declared; * is the one serving turns
+proxenos accounts --use work
+```
+
+The grant in that directory is **read and never written**. Its refresh token is
+single-use, so exchanging it here would rotate the value the ChatGPT app still
+holds and log you out over there — the failure would surface in that app rather
+than in this one. When a borrowed grant lapses, the program that owns it is what
+renews it: run it once and the next turn picks the new token up.
+
+An account can hold an API key instead, for anyone with no subscription at all.
+That one *is* this daemon's to keep, and it is the only thing `login` stores.
+The key is read from standard input, never from an argument, because an argument
+is visible to every other process on the machine:
 
 ```sh
 proxenos login --key --as api    # pipe the key in, or paste it and end with ctrl-d

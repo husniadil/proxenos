@@ -1749,11 +1749,9 @@ async fn upstream_requests_carry_the_access_token() {
     ]))
     .await;
 
-    let tokens = Arc::new(proxenos::auth::tokens::TokenSource::new(
+    let tokens = Arc::new(proxenos::auth::grants::Grants::new(
         Arc::new(store) as Arc<dyn CredentialStore>,
-        "http://127.0.0.1:1/unused".to_owned(),
-        "client",
-        Arc::new(proxenos::auth::tokens::SystemClock),
+        Arc::new(proxenos::auth::grants::SystemClock),
     ));
 
     let transport = HttpTransport::new(upstream.url.clone())
