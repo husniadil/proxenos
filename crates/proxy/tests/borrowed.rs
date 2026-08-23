@@ -676,3 +676,216 @@ fn an_unreadable_source_names_the_store() {
         "was: {error}"
     );
 }
+
+// --- the declared profiles as a store -------------------------------------
+
+use proxenos::auth::borrowed::store::BorrowedStore;
+use proxenos::auth::store::AccountStore;
+use proxenos::auth::store::CredentialStore;
+
+/// A store over `profiles`, whose sources hold whatever `contents` says, and
+/// whose selection file lives in `dir`.
+fn store(
+    dir: &Path,
+    profiles: Vec<read::Profile>,
+    contents: &[(&read::Profile, String)],
+) -> BorrowedStore {
+    let held = contents
+        .iter()
+        .map(|(profile, raw)| {
+            (
+                profile
+                    .source(borrowed::Host::MacOs, Path::new(HOME))
+                    .label(),
+                raw.clone(),
+            )
+        })
+        .collect();
+
+    BorrowedStore::new(
+        profiles,
+        Box::new(FakeReader(held)),
+        borrowed::Host::MacOs,
+        HOME,
+        dir.join("selected.json"),
+    )
+}
+
+fn a_codex_grant() -> String {
+    auth_json(serde_json::json!({
+        "id_token": id_token("acct_123", "team"),
+        "access_token": access_token(1_800_000_000),
+        "refresh_token": "rt.1.borrowed",
+        "account_id": "acct_123",
+    }))
+}
+
+/// One declared profile is the one serving turns. There is nothing to choose
+/// between, and making an operator choose anyway is ceremony.
+#[test]
+fn a_lone_profile_serves_without_being_selected() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let store = store(dir.path(), vec![work.clone()], &[(&work, a_codex_grant())]);
+
+    let loaded = store.load().expect("loads").expect("a grant");
+
+    assert_eq!(loaded.account_id.as_deref(), Some("acct_123"));
+}
+
+/// Two profiles and no choice is refused rather than resolved to whichever
+/// comes first: the choice decides whose subscription pays.
+#[test]
+fn two_profiles_and_no_selection_refuses() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let spare = profile("spare", Provider::Codex, Some("/profiles/spare"));
+    let store = store(
+        dir.path(),
+        vec![work.clone(), spare],
+        &[(&work, a_codex_grant())],
+    );
+
+    let error = store.load().expect_err("ambiguous").to_string();
+
+    assert!(error.contains("accounts --use"), "was: {error}");
+}
+
+/// Choosing one records it on our side, and the choice survives being read
+/// back by a store built fresh over the same directory.
+#[test]
+fn choosing_a_profile_is_recorded_and_read_back() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let spare = profile("spare", Provider::Codex, Some("/profiles/spare"));
+    let contents = [(&spare, a_codex_grant())];
+
+    let first = store(dir.path(), vec![work.clone(), spare.clone()], &contents);
+    first.select("spare").expect("selects");
+    drop(first);
+
+    let second = store(
+        dir.path(),
+        vec![work, spare.clone()],
+        &[(&spare, a_codex_grant())],
+    );
+    assert!(second.load().expect("loads").is_some());
+    let listed = second.accounts().expect("lists");
+    assert!(listed.iter().any(|it| it.name == "spare" && it.selected));
+    assert!(listed.iter().any(|it| it.name == "work" && !it.selected));
+}
+
+/// A name nothing is declared under is refused, and the refusal says where to
+/// look for the ones that are.
+#[test]
+fn choosing_an_undeclared_profile_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = store(
+        dir.path(),
+        vec![profile("work", Provider::Codex, Some("/profiles/work"))],
+        &[],
+    );
+
+    let error = store.select("nowhere").expect_err("refused").to_string();
+
+    assert!(error.contains("nowhere"), "was: {error}");
+}
+
+/// A selection left behind by an entry the operator has since deleted is
+/// refused by name, rather than silently falling through to another account.
+#[test]
+fn a_selection_naming_a_deleted_profile_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gone = profile("gone", Provider::Codex, Some("/profiles/gone"));
+    let kept = profile("kept", Provider::Codex, Some("/profiles/kept"));
+
+    store(dir.path(), vec![gone, kept.clone()], &[])
+        .select("gone")
+        .expect("selects");
+
+    let error = store(dir.path(), vec![kept], &[])
+        .load()
+        .expect_err("refused")
+        .to_string();
+
+    assert!(error.contains("gone"), "was: {error}");
+    assert!(error.contains("accounts --use"), "was: {error}");
+}
+
+/// Every write refuses, names the profile, and says who may change it. The
+/// refresh path is the one that matters: taking it would rotate a token the
+/// owning program still holds.
+#[test]
+fn every_write_refuses_naming_the_profile() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let store = store(dir.path(), vec![work.clone()], &[(&work, a_codex_grant())]);
+    let credentials = store.load().expect("loads").expect("a grant");
+
+    let refusals = [
+        store.save(&credentials).expect_err("save"),
+        store.clear().expect_err("clear"),
+        store.add(&credentials, Some("work")).expect_err("add"),
+        store.remove("work").expect_err("remove"),
+        store.rename("work", "other").expect_err("rename"),
+        store
+            .add_key("work", "sk-test", Provider::Codex)
+            .expect_err("add_key"),
+        store.save_for("work", &credentials).expect_err("save_for"),
+    ];
+
+    for refusal in refusals {
+        let message = refusal.to_string();
+        assert!(message.contains("work"), "was: {message}");
+        assert!(message.contains("never writes"), "was: {message}");
+    }
+}
+
+/// A declared profile nobody has signed into is still listed. Dropping it
+/// would read as an entry the operator never wrote.
+#[test]
+fn a_profile_with_no_grant_is_still_listed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let empty = profile("empty", Provider::Codex, Some("/profiles/empty"));
+    let store = store(
+        dir.path(),
+        vec![work.clone(), empty],
+        &[(&work, a_codex_grant())],
+    );
+
+    let listed = store.accounts().expect("lists");
+
+    let row = listed.iter().find(|it| it.name == "empty").expect("listed");
+    assert_eq!(row.account_id, None);
+    assert_eq!(row.expires_at, None);
+    assert_eq!(row.provider, "codex");
+}
+
+/// A pinned tier asks for one account by name, and the selection is the wrong
+/// answer to that question.
+#[test]
+fn a_named_profile_answers_regardless_of_the_selection() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let spare = profile("spare", Provider::Codex, Some("/profiles/spare"));
+    let other = auth_json(serde_json::json!({
+        "id_token": id_token("acct_spare", "pro"),
+        "access_token": access_token(1_800_000_000),
+        "refresh_token": "rt.1.spare",
+        "account_id": "acct_spare",
+    }));
+    let store = store(
+        dir.path(),
+        vec![work.clone(), spare.clone()],
+        &[(&work, a_codex_grant()), (&spare, other)],
+    );
+    store.select("work").expect("selects");
+
+    let credential = store.credential_for("spare").expect("reads spare");
+
+    assert_eq!(
+        credential.grant().and_then(|it| it.account_id.as_deref()),
+        Some("acct_spare")
+    );
+}

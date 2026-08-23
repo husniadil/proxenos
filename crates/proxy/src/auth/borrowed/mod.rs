@@ -369,6 +369,7 @@ pub fn source(provider: Provider, host: Host, config_dir: Option<&Path>, home: &
 }
 
 pub mod read;
+pub mod store;
 
 impl Source {
     /// What to call this source in a message: the one an operator can go and

@@ -1577,6 +1577,28 @@ removing it. That is indistinguishable from a profile nobody signed into, and
 both want the same answer, so an empty half is refused by name rather than
 carried as a grant with an odd expiry.
 
+**Which profile serves turns is this side's state, and the only thing about a
+borrowed account this daemon writes.** It is kept beside the other daemon state
+rather than in the configuration document, for the same reason the token tally
+is: `accounts --use` is a runtime verb and the document is the operator's.
+
+**One declared profile serves without being chosen. More than one, with nothing
+chosen, is refused.** There is nothing to choose between in the first case, and
+in the second the choice decides whose subscription pays — resolving it to
+whichever entry comes first spends the wrong one invisibly. A selection naming
+an entry the operator has since deleted is refused by name for the same reason,
+rather than falling through to another account.
+
+**A declared profile nobody has signed into is still listed.** It is an entry
+the operator wrote, and dropping it from the listing would read as one they
+never wrote; what is unknown about it is reported absent.
+
+**Every other write refuses, naming the profile.** Adding, renaming, forgetting
+and saving are verbs of a store that owns what it holds, and this one does not.
+The refusal says what does: the program that owns the profile changes what is
+inside it, and the configuration file is where this daemon's view of it is
+edited.
+
 **The keychain is read by spawning `security`.** The item's ACL trusts that
 binary; a process reading through Security.framework is a different application
 to the keychain and is prompted. One client run reads the item sixteen times,
