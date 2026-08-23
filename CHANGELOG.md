@@ -4,7 +4,11 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.11.0]
+
+An account held as a spare can now state its own headroom without first being
+made to serve a turn, and a key on the second provider is no longer two
+credentials sharing one sentence.
 
 ### Changed
 

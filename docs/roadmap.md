@@ -676,6 +676,43 @@ something this daemon has not observed.
 a subscription setup token are stored as the same credential kind, so one
 sentence has to serve two meterings and can only be right about one.
 
+### v0.11.0 — shipped
+
+**A spare account can be asked what it has left.** The meter listed every stored
+account and could only ever fill in one of them, because both routes a figure
+took filed it under whichever account was serving turns. So the headroom that
+decides whether to switch to a spare was reachable only by switching to it
+first, and an account that cannot be selected at all — a plan whose catalog is
+missing a mapped model — had no route to a figure at any point.
+
+`usage.refresh` now asks once per stored account, each on its own credential,
+and files each answer under its own name. Nothing about which account serves
+turns is read or written by that sweep. A row whose credential cannot hold a
+subscription figure is not asked and keeps the sentence it had; a row that is
+asked and refused says so on its own line and leaves the others alone. The one
+account the sweep will not refresh is one the operator did not select: rotating
+a token family for an unused grant retires a token another holder may still be
+using, and a figure is not worth that.
+
+The CLI got the door to it. `usage --refresh` asks; a bare `usage` asks for
+nothing and stays free, and the `--json` shape is the same either way, because a
+status line parses it.
+
+**A key is two credentials wearing one word.** Closing what v0.10.0 named as
+open: a Claude subscription setup token and an anthropic API key were both
+stored as `key` and read the same line, though one draws down a subscription and
+the other has no ceiling and bills per token. The store records which of the two
+a key is — a classification of shape, never any part of the secret — and each
+has a line of its own. A key stored before the field existed, or whose stem
+matches neither, gets a third line claiming neither: a prefix is evidence and
+not proof, and nothing re-reads a stored secret to classify it after the fact.
+
+**Done when** an account held as a spare can state its own headroom without
+being made to serve a turn first.
+
+**Done.** What stays open is named: a figure lives only in the daemon's memory,
+so a restart empties every row until something asks again.
+
 ### Next
 
 Named rather than numbered. Twice now a section here has worn a version that
