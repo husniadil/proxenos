@@ -1,9 +1,8 @@
-//! Storing a key read from stdin, over the seam `--setup-token` already uses.
+//! Storing a key read from stdin.
 //!
-//! The two flags are two front doors to one stored credential, so they read
-//! stdin through one trait rather than two. What differs is only what the
-//! terminal half says and where a key is allowed to come from: `--key` takes
-//! any secret, and validates nothing about its shape.
+//! Behind a trait rather than reading stdin directly, so the terminal half and
+//! the pipe half are testable without a terminal. `--key` takes any secret and
+//! validates nothing about its shape.
 //!
 //! Silence while reading a tty reads as a hang. The prompt is written to
 //! **stderr** and only where a person is typing, so a piped key stays byte for
@@ -113,9 +112,8 @@ impl Terminal {
             err: Box::new(io::stderr()),
             read: Box::new(move || {
                 if interactive {
-                    // Hidden, the same way `--setup-token` reads a token: a
-                    // key echoed while it is typed is on the screen and in the
-                    // scrollback of whoever walks past.
+                    // Hidden: a key echoed while it is typed is on the
+                    // screen and in the scrollback of whoever walks past.
                     rpassword::read_password()
                 } else {
                     let mut key = String::new();
