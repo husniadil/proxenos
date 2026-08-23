@@ -564,7 +564,8 @@ and says what a run did not touch, and an isolated home or a mistaken re-store
 cannot reach past itself.
 
 **Done.** The control socket's method names are frozen from this release on —
-`docs/api.md` §6 names the nineteen that are bound — which is what made
+§6 named nineteen at the time; `login` and `login.cancel` went with the flow
+(§6 above), so `docs/api.md` §6 now names seventeen — which is what made
 `tiers.get` → `tiers` the last free rename. What is deliberately not here:
 capability probes driven live against the relay, which need the serving account
 switched for the length of a run and stay in §L.
