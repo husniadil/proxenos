@@ -1670,7 +1670,6 @@ async fn refresh_usage(state: &ControlState) -> Result<Value, ProxyError> {
     // its own credential; what is shared is a connection pool, not a
     // credential.
     let client = reqwest::Client::new();
-    let now = crate::auth::grants::Clock::now_unix(&crate::auth::grants::SystemClock);
 
     let mut rows = Vec::with_capacity(accounts.len());
     for account in &accounts {
@@ -1678,7 +1677,7 @@ async fn refresh_usage(state: &ControlState) -> Result<Value, ProxyError> {
         // belongs to the account it happened to, and a sweep that abandoned
         // itself on the first one would leave every later row blank — which
         // reads as "no quota left to show" rather than "not asked".
-        let mut row = match ask_for(state, &authorizer, &client, account, now).await {
+        let mut row = match ask_for(state, &authorizer, &client, account).await {
             Ok(snapshot) => {
                 // Recorded where the stream path records its own, under the
                 // account it was asked for as, and saying it was asked for
@@ -1726,7 +1725,6 @@ async fn ask_for(
     authorizer: &crate::auth::authorize::AccountAuthorizer,
     client: &reqwest::Client,
     account: &crate::auth::store::Account,
-    now: u64,
 ) -> Result<crate::usage::Snapshot, String> {
     // Only where a figure is possible. A key holds no subscription
     // entitlement, and the long-lived subscription token that wears the same
@@ -1739,28 +1737,20 @@ async fn ask_for(
         return Err(unavailable(state, account));
     }
 
-    // Asking may not refresh a grant this operator did not select. A refresh
-    // rotates a token family, and a second holder of the same grant — a CLI
-    // signed in as the account — is left holding a token the rotation retired,
-    // by a sweep it never asked for. The serving account is the exception: its
-    // grant is refreshed by every turn already, so asking as it changes
-    // nothing that was not already happening.
-    if !account.selected
-        && state
-            .credentials
-            .credential_for(&account.name)
-            .map_err(|error| error.message)?
-            .grant()
-            .is_some_and(|grant| {
-                grant.needs_refresh(now, crate::auth::grants::EXPIRY_MARGIN_SECONDS)
-            })
-    {
-        return Err(format!(
-            "the grant stored for `{}` has expired, and asking for a figure will not refresh a \
-             grant this daemon was not told to spend; select it or log in as it again",
-            account.name
-        ));
-    }
+    // A lapsed grant is asked about before it is spent, and the wait is the
+    // point: the caller wants the figure that comes after the refresh, and
+    // answering first would answer with the grant it was called about. Only
+    // where asking can work at all — the rule, and both of its refusals, live
+    // in `refresh_borrowed` (§8.4).
+    //
+    // Off the runtime, because it runs a process and waits for it. Nothing
+    // else on this daemon should stop while a client starts up.
+    let credentials = Arc::clone(&state.credentials);
+    let asked = account.name.clone();
+    tokio::task::spawn_blocking(move || credentials.refresh_borrowed(&asked))
+        .await
+        .map_err(|error| format!("could not ask for a refresh: {error}"))?
+        .map_err(|error| error.message)?;
 
     let authorization = authorizer
         .authorize(Some(&account.name))

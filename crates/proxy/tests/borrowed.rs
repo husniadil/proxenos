@@ -705,8 +705,10 @@ fn store(
     BorrowedStore::new(
         profiles,
         Box::new(FakeReader(held)),
-        borrowed::Host::MacOs,
-        HOME,
+        Ok(proxenos::auth::borrowed::store::Platform {
+            host: borrowed::Host::MacOs,
+            home: PathBuf::from(HOME),
+        }),
         proxenos::auth::selection::Selection::new(dir.join("selected.json")),
     )
 }
@@ -1394,4 +1396,190 @@ fn a_key_still_reads_as_a_key() {
     })));
 
     assert!(rendered.contains("key"), "{rendered}");
+}
+
+/// A host nothing has been checked on refuses at the profile that needs it,
+/// not at startup.
+///
+/// An operator with no `[profiles]` is spending a key, which needs neither a
+/// checked host nor a home directory. Refusing to build the store there would
+/// refuse a configuration that is entirely valid — and on Windows that is
+/// every configuration.
+#[test]
+fn an_unchecked_host_does_not_stop_a_store_with_no_profiles() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = BorrowedStore::new(
+        Vec::new(),
+        Box::new(FakeReader::empty()),
+        Err("nobody has checked this platform".to_owned()),
+        proxenos::auth::selection::Selection::new(dir.path().join("selected.json")),
+    );
+
+    assert!(store.accounts().expect("lists").is_empty());
+}
+
+/// Declare a profile on such a host and the refusal names it and says why,
+/// rather than reporting a profile that was never signed into.
+#[test]
+fn an_unchecked_host_refuses_the_profile_that_needs_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = BorrowedStore::new(
+        vec![profile("work", Provider::Codex, Some("/profiles/work"))],
+        Box::new(FakeReader::empty()),
+        Err("nobody has checked this platform".to_owned()),
+        proxenos::auth::selection::Selection::new(dir.path().join("selected.json")),
+    );
+
+    // Still listed: it is an entry the operator wrote.
+    let listed = store.accounts().expect("lists");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].source, None);
+
+    let refusal = store.load().expect_err("cannot be read here").to_string();
+    assert!(refusal.contains("work"), "{refusal}");
+    assert!(refusal.contains("checked this platform"), "{refusal}");
+}
+
+// --- the refresh a lapsed profile actually gets ---------------------------
+
+use proxenos::auth::accounts::Accounts;
+use proxenos::auth::store::FileStore;
+
+/// A store over one profile, whose client records that it was run.
+fn accounts_over(
+    dir: &Path,
+    profiles: Vec<read::Profile>,
+    contents: &[(&read::Profile, String)],
+    client: Arc<FakeClient>,
+) -> Accounts {
+    struct Recording(Arc<FakeClient>);
+    impl poke::Client for Recording {
+        fn refresh(&self, config_dir: Option<&Path>) -> Result<(), ProxyError> {
+            self.0.refresh(config_dir)
+        }
+    }
+
+    Accounts::new(
+        store(dir, profiles, contents),
+        FileStore::new(dir.join("credentials.json")),
+        proxenos::auth::selection::Selection::new(dir.join("selected.json")),
+        Box::new(Recording(client)),
+        dir.to_path_buf(),
+    )
+}
+
+fn claude_blob(expires_at: u64, refresh_expires_at: u64) -> String {
+    keychain_blob(serde_json::json!({
+        "accessToken": "sk-ant-oat01-borrowed",
+        "refreshToken": "sk-ant-ort01-borrowed",
+        "expiresAt": expires_at * 1_000,
+        "refreshTokenExpiresAt": refresh_expires_at * 1_000,
+        "subscriptionType": "max",
+    }))
+}
+
+/// A lapsed Claude profile gets the client run against it, and the caller
+/// waits: the figure it wants is the one that comes after the refresh.
+#[test]
+fn asking_for_a_lapsed_claude_profile_runs_the_client() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let personal = profile("personal", Provider::Anthropic, Some("/profiles/personal"));
+    let client = Arc::new(FakeClient::default());
+    let accounts = accounts_over(
+        dir.path(),
+        vec![personal.clone()],
+        &[(&personal, claude_blob(1, 4_000_000_000))],
+        Arc::clone(&client),
+    );
+
+    let ran = accounts
+        .refresh_borrowed("personal")
+        .expect("asking is allowed here");
+
+    assert!(ran, "the client was run");
+    assert_eq!(
+        client.runs.lock().expect("not poisoned").as_slice(),
+        [Some(PathBuf::from("/profiles/personal"))]
+    );
+}
+
+/// A profile that has not lapsed is left alone. A run per request would spend
+/// a turn to confirm something already true.
+#[test]
+fn asking_for_a_live_profile_runs_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let personal = profile("personal", Provider::Anthropic, Some("/profiles/personal"));
+    let client = Arc::new(FakeClient::default());
+    let accounts = accounts_over(
+        dir.path(),
+        vec![personal.clone()],
+        &[(&personal, claude_blob(4_000_000_000, 4_100_000_000))],
+        Arc::clone(&client),
+    );
+
+    assert!(!accounts.refresh_borrowed("personal").expect("allowed"));
+    assert!(client.runs.lock().expect("not poisoned").is_empty());
+}
+
+/// Codex is never run, and the refusal says why rather than leaving the caller
+/// to wonder what happened.
+#[test]
+fn asking_for_a_lapsed_codex_profile_refuses_without_running_anything() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let client = Arc::new(FakeClient::default());
+    let lapsed = auth_json(serde_json::json!({
+        "access_token": access_token(1),
+        "refresh_token": "rt.1.borrowed",
+        "account_id": "acct_123",
+    }));
+    let accounts = accounts_over(
+        dir.path(),
+        vec![work.clone()],
+        &[(&work, lapsed)],
+        Arc::clone(&client),
+    );
+
+    let refusal = accounts
+        .refresh_borrowed("work")
+        .expect_err("Codex is never run")
+        .to_string();
+
+    assert!(refusal.contains("work"), "{refusal}");
+    assert!(refusal.contains("spends quota"), "{refusal}");
+    assert!(client.runs.lock().expect("not poisoned").is_empty());
+}
+
+/// A profile whose refresh token has lapsed too is not run: the client would
+/// blank the stored grant rather than renew it.
+#[test]
+fn asking_for_a_dead_refresh_token_refuses_without_running_anything() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let personal = profile("personal", Provider::Anthropic, Some("/profiles/personal"));
+    let client = Arc::new(FakeClient::default());
+    let accounts = accounts_over(
+        dir.path(),
+        vec![personal.clone()],
+        &[(&personal, claude_blob(1, 2))],
+        Arc::clone(&client),
+    );
+
+    let refusal = accounts
+        .refresh_borrowed("personal")
+        .expect_err("nothing can be asked")
+        .to_string();
+
+    assert!(refusal.contains("blank"), "{refusal}");
+    assert!(client.runs.lock().expect("not poisoned").is_empty());
+}
+
+/// A key has nobody to ask, and says so by answering that nothing was run.
+#[test]
+fn asking_about_a_key_runs_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = Arc::new(FakeClient::default());
+    let accounts = accounts_over(dir.path(), Vec::new(), &[], Arc::clone(&client));
+
+    assert!(!accounts.refresh_borrowed("whatever").expect("allowed"));
+    assert!(client.runs.lock().expect("not poisoned").is_empty());
 }

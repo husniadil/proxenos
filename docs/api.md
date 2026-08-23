@@ -1023,6 +1023,15 @@ unpinned turn onto that account's provider and spends that provider's
 subscription. The operator asked for it, but a name does not state a provider,
 and only the daemon holds the answer.
 
+**`usage.refresh` can block while the owning client runs.** Where the account
+it is asked about is a borrowed Claude profile whose grant has lapsed, the
+client is run once before the figure is asked for, and the answer waits for it
+(`proxy-behavior.md` §8.4) — the figure the caller wants is the one after the
+refresh. The wait is bounded, one run per profile is serialised by a lock, and
+the two cases that cannot be helped refuse instead: the other provider, which is
+never run, and a profile whose refresh token has lapsed too, where running the
+client would blank what is left of the grant.
+
 **`usage.refresh` is not the primary path and does not replace it.** The backend
 volunteers a snapshot at the head of every stream; that one is free, rides a turn
 already being made, and is what `usage` reports. This exists for the cases that

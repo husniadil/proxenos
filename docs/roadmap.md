@@ -157,6 +157,13 @@ OAuth with PKCE, the `CredentialStore` trait with its file implementation,
 scope-free single-flight refresh, dead-grant marking, catalog fetch with TTL
 cache and fallback, four-tier validation, the `[1m]` rejection.
 
+**Since withdrawn.** The flow, the refresher and everything built on them were
+removed once a grant could be read from the profile of the program that owns it
+(`proxy-behavior.md` §8.4). The trait, the catalog work and the tier rules
+stand; what this phase built around obtaining a credential does not. The record
+stays because the phase happened, and because §8.4 is a decision about
+ownership that only makes sense against what it replaced.
+
 **Done when** the authorization URL is built to spec, a refresh request provably
 omits `scope`, concurrent refreshes collapse to one upstream call, an
 invalid-grant response marks the connection dead without retrying, an incomplete
@@ -280,8 +287,9 @@ a daemon running a policy nobody chose.
 
 Two things arrived with it that this section had not anticipated, both because a
 front-end that is not a terminal needs them. **`login` over the control socket**
-returns the authorization URL and completes in the background, sharing one
-callback port rather than handing out a URL whose callback would be refused. And
+returned the authorization URL and completed in the background, sharing one
+callback port rather than handing out a URL whose callback would be refused —
+withdrawn with the rest of the flow (§6 above). And
 **`usage.refresh`** asks the backend for a quota figure, covering the one case
 the volunteered snapshot cannot — a front-end with a figure to show on a daemon
 that has served no turn yet.

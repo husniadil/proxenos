@@ -335,6 +335,15 @@ pub trait AccountStore: CredentialStore {
         Ok(Vec::new())
     }
 
+    /// Ask whoever owns this account's credential to refresh it, where that is
+    /// possible at all, and return once they have finished.
+    ///
+    /// `false` where nothing was run. A store that owns what it holds has
+    /// nobody to ask, which is why the default answers so.
+    fn refresh_borrowed(&self, _name: &str) -> Result<bool, ProxyError> {
+        Ok(false)
+    }
+
     /// Store a grant as an account, returning the name it got.
     ///
     /// This is what a login does. It selects the account **only where nothing

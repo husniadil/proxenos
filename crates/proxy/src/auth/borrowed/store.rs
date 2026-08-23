@@ -30,24 +30,34 @@ use std::path::PathBuf;
 pub struct BorrowedStore {
     profiles: Vec<Profile>,
     reader: Box<dyn GrantReader>,
-    host: Host,
-    home: PathBuf,
+    /// What a profile is resolved against, or why it cannot be.
+    ///
+    /// Held as an outcome rather than as a value, so a host nothing has been
+    /// checked on refuses at the profile that needs it instead of at startup.
+    /// An operator with no `[profiles]` at all is spending a key, which needs
+    /// neither of these — and refusing to start there would be refusing a
+    /// configuration that is entirely valid.
+    platform: Result<Platform, String>,
     selection: Selection,
+}
+
+/// Where profiles live on this machine.
+pub struct Platform {
+    pub host: Host,
+    pub home: PathBuf,
 }
 
 impl BorrowedStore {
     pub fn new(
         profiles: Vec<Profile>,
         reader: Box<dyn GrantReader>,
-        host: Host,
-        home: impl Into<PathBuf>,
+        platform: Result<Platform, String>,
         selection: Selection,
     ) -> Self {
         Self {
             profiles,
             reader,
-            host,
-            home: home.into(),
+            platform,
             selection,
         }
     }
@@ -55,6 +65,19 @@ impl BorrowedStore {
     /// The profiles this store was built over, in the order declared.
     pub fn profiles(&self) -> &[Profile] {
         &self.profiles
+    }
+
+    /// One profile by name, and the grant it currently holds.
+    ///
+    /// What deciding whether to ask the owning client for a refresh needs: the
+    /// profile says which directory to run it against, and the grant says
+    /// whether asking can work at all (§8.4).
+    pub fn profile_and_grant(
+        &self,
+        name: &str,
+    ) -> Result<(&Profile, crate::auth::borrowed::read::Grant), ProxyError> {
+        let profile = self.named(name)?;
+        Ok((profile, self.grant_for(profile)?))
     }
 
     /// The profile serving turns.
@@ -103,7 +126,10 @@ impl BorrowedStore {
         &self,
         profile: &Profile,
     ) -> Result<crate::auth::borrowed::read::Grant, ProxyError> {
-        grant(self.reader.as_ref(), profile, self.host, &self.home)
+        let platform = self.platform.as_ref().map_err(|reason| {
+            ProxyError::authentication(format!("`{}` cannot be read here: {reason}", profile.name))
+        })?;
+        grant(self.reader.as_ref(), profile, platform.host, &platform.home)
     }
 
     /// Why a write was refused, worded for the operator who attempted it.
@@ -156,7 +182,14 @@ impl AccountStore for BorrowedStore {
                     // Where an operator can go and look. Named even when the
                     // grant could not be read: that is the case where knowing
                     // which directory was tried matters most.
-                    source: Some(profile.source(self.host, &self.home).label()),
+                    // Named where the profile can be located at all. On a host
+                    // nothing has been checked on there is no location to name,
+                    // and the row says what it can rather than inventing one.
+                    source: self
+                        .platform
+                        .as_ref()
+                        .ok()
+                        .map(|platform| profile.source(platform.host, &platform.home).label()),
                     name: profile.name.clone(),
                     kind: "grant",
                     provider: profile.provider.as_str(),

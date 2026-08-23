@@ -224,20 +224,25 @@ impl Authorizer for AccountAuthorizer {
             };
         }
 
+        // One listing, and the account it names is then read once by name.
+        // Asking the store for the selected credential as well would resolve
+        // the selection a second time and read every profile again.
         let serving = self
             .store
-            .accounts()
-            .ok()
-            .and_then(|accounts| accounts.into_iter().find(|account| account.selected));
-        let provider = provider_named(serving.as_ref().map(|account| account.provider));
+            .accounts()?
+            .into_iter()
+            .find(|account| account.selected)
+            .ok_or_else(|| {
+                ProxyError::authentication(
+                    "no account is serving turns; declare a profile under `[profiles]` or store \
+                     a key with `login --key --as NAME`",
+                )
+            })?;
+        let provider = provider_named(Some(serving.provider));
 
-        match self.store.credential()? {
-            Some(Credential::Grant(_)) => grant_authorization(&self.grants, provider),
-            Some(Credential::Key(key)) => Ok(key_authorization(&key, provider)),
-            None => Err(ProxyError::authentication(
-                "no account is available; declare a profile under `[profiles]` or store a key \
-                 with `login --key --as NAME`",
-            )),
+        match self.store.credential_for(&serving.name)? {
+            Credential::Grant(_) => grant_authorization(&self.grants, provider),
+            Credential::Key(key) => Ok(key_authorization(&key, provider)),
         }
     }
 }
@@ -265,9 +270,13 @@ fn key_authorization(key: &super::store::ApiKey, provider: Provider) -> Authoriz
 /// nothing else. Sending either provider's extras to the other is how a
 /// borrowed grant would fail with a message about the wrong half.
 fn grant_authorization(grants: &Grants, provider: Provider) -> Result<Authorization, ProxyError> {
+    // One read. The bearer and the account id come out of the same grant,
+    // because on a profile whose credential lives in a keychain each read is a
+    // process spawn.
+    let credentials = grants.credentials()?;
     let mut headers = vec![(
         axum::http::header::AUTHORIZATION.to_string(),
-        format!("Bearer {}", grants.access_token()?),
+        format!("Bearer {}", credentials.access_token),
     )];
 
     match provider {
@@ -278,7 +287,7 @@ fn grant_authorization(grants: &Grants, provider: Provider) -> Result<Authorizat
                 "originator".to_owned(),
                 crate::upstream::http::ORIGINATOR.to_owned(),
             ));
-            if let Some(account) = grants.account_id() {
+            if let Some(account) = credentials.account_id {
                 headers.push(("chatgpt-account-id".to_owned(), account));
             }
         }

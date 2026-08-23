@@ -24,14 +24,29 @@ pub struct Accounts {
     borrowed: BorrowedStore,
     keys: FileStore,
     selection: Selection,
+    /// What runs the program that owns a profile, and where its lock lives.
+    ///
+    /// Held here rather than reached for at the call site so the whole rule —
+    /// which profiles may be asked, under what lock, with what deadline — has
+    /// one home (§8.4).
+    client: Box<dyn crate::auth::borrowed::poke::Client>,
+    locks: std::path::PathBuf,
 }
 
 impl Accounts {
-    pub fn new(borrowed: BorrowedStore, keys: FileStore, selection: Selection) -> Self {
+    pub fn new(
+        borrowed: BorrowedStore,
+        keys: FileStore,
+        selection: Selection,
+        client: Box<dyn crate::auth::borrowed::poke::Client>,
+        locks: impl Into<std::path::PathBuf>,
+    ) -> Self {
         Self {
             borrowed,
             keys,
             selection,
+            client,
+            locks: locks.into(),
         }
     }
 
@@ -76,9 +91,31 @@ impl Accounts {
     /// of either kind is that account — there is nothing to choose between —
     /// and more than one is refused rather than resolved to whichever comes
     /// first, because the choice decides whose subscription pays.
+    /// Every account's name, without reading a single credential.
+    ///
+    /// Resolving the selection needs names and nothing else, and reading the
+    /// grants to get them costs one process per profile on a host that keeps
+    /// them in a keychain.
+    fn names(&self) -> Result<Vec<String>, ProxyError> {
+        let mut names: Vec<String> = self
+            .borrowed
+            .profiles()
+            .iter()
+            .map(|profile| profile.name.clone())
+            .collect();
+        names.extend(
+            self.keys
+                .accounts()?
+                .into_iter()
+                .filter(|account| account.kind != "grant")
+                .map(|account| account.name),
+        );
+        Ok(names)
+    }
+
     fn selected(&self) -> Result<String, ProxyError> {
         if let Some(name) = self.selection.read()? {
-            if self.accounts()?.iter().any(|account| account.name == name) {
+            if self.names()?.iter().any(|listed| listed == &name) {
                 return Ok(name);
             }
             return Err(ProxyError::authentication(format!(
@@ -87,14 +124,14 @@ impl Accounts {
             )));
         }
 
-        let listed = self.accounts()?;
+        let listed = self.names()?;
         match listed.as_slice() {
             [] => Err(ProxyError::authentication(
                 "no accounts are available. Declare a profile under `[profiles]`, or store a \
                  key with `login --key --as NAME`."
                     .to_owned(),
             )),
-            [only] => Ok(only.name.clone()),
+            [only] => Ok(only.clone()),
             _ => Err(ProxyError::authentication(
                 "more than one account is available and none is selected. \
                  Choose one with `accounts --use NAME`."
@@ -126,6 +163,44 @@ impl CredentialStore for Accounts {
 }
 
 impl AccountStore for Accounts {
+    /// Ask the program that owns a profile to refresh it, where that can work.
+    ///
+    /// Blocking, by design: the caller wants the figure that comes *after* the
+    /// refresh, and returning before the client has exited would answer with
+    /// the stale grant it was called about. `Ok(false)` means nothing was run,
+    /// which is the answer for a key, for a grant that is still usable, and
+    /// for the provider that is never asked (§8.4).
+    fn refresh_borrowed(&self, name: &str) -> Result<bool, ProxyError> {
+        use crate::auth::borrowed::poke;
+        use crate::auth::grants::Clock;
+
+        if !self.is_borrowed(name) {
+            return Ok(false);
+        }
+        let (profile, grant) = self.borrowed.profile_and_grant(name)?;
+        let now = crate::auth::grants::SystemClock.now_unix();
+
+        match poke::decide(
+            profile.provider,
+            grant.credentials.expires_at,
+            grant.refresh_token_expires_at,
+            now,
+        ) {
+            poke::Decision::Usable => Ok(false),
+            poke::Decision::Hopeless(reason) => Err(ProxyError::authentication(format!(
+                "`{name}` has expired and {reason}"
+            ))),
+            poke::Decision::Ask => {
+                poke::under_lock(
+                    self.client.as_ref(),
+                    &poke::lock_path(&self.locks, name),
+                    profile.config_dir.as_deref(),
+                )?;
+                Ok(true)
+            }
+        }
+    }
+
     /// Accounts in this daemon's own store that it no longer reads.
     ///
     /// A store written before §8.4 holds grants. Nothing obtains or refreshes
@@ -280,16 +355,29 @@ impl Accounts {
             })
             .collect();
 
+        // Resolved, not required. A configuration with no `[profiles]` is a key
+        // account's, and it needs neither a checked host nor a home directory —
+        // refusing to start there would refuse a configuration that is valid.
+        let platform = crate::auth::borrowed::host()
+            .map_err(|error| error.message)
+            .and_then(|host| {
+                Ok(crate::auth::borrowed::store::Platform {
+                    host,
+                    home: home()?,
+                })
+            });
+
         Ok(Self::new(
             BorrowedStore::new(
                 profiles,
                 Box::new(crate::auth::borrowed::read::HostReader),
-                crate::auth::borrowed::host()?,
-                home()?,
+                platform,
                 Selection::new(Selection::path_in(config_dir)),
             ),
             FileStore::new(config_dir.join(crate::auth::store::KEYS_FILE)),
             Selection::new(Selection::path_in(config_dir)),
+            Box::new(crate::auth::borrowed::poke::ClaudeClient::default()),
+            config_dir.to_path_buf(),
         ))
     }
 }
@@ -298,12 +386,10 @@ impl Accounts {
 ///
 /// Refused rather than defaulted: every stock profile is named relative to it,
 /// so a wrong answer here reads as "that profile was never signed into".
-fn home() -> Result<std::path::PathBuf, ProxyError> {
+fn home() -> Result<std::path::PathBuf, String> {
     std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
         .ok_or_else(|| {
-            ProxyError::authentication(
-                "`HOME` is not set, and every stock profile is named relative to it.".to_owned(),
-            )
+            "`HOME` is not set, and every stock profile is named relative to it".to_owned()
         })
 }

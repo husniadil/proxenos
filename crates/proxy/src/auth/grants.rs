@@ -59,11 +59,13 @@ impl Grants {
     }
 
     /// The account the current grant belongs to, where it carries one.
+    ///
+    /// Reads the store, so a caller that also wants the token asks for
+    /// `credentials()` once instead of asking here as well: on a profile whose
+    /// grant lives in a keychain, every read is a process.
     pub fn account_id(&self) -> Option<String> {
-        self.store
-            .load()
+        self.credentials()
             .ok()
-            .flatten()
             .and_then(|credentials| credentials.account_id)
     }
 
@@ -84,6 +86,11 @@ impl Grants {
     /// exchanging the refresh token would rotate the value that program still
     /// holds and log the operator out of it (§8.4).
     pub fn access_token(&self) -> Result<String, ProxyError> {
+        Ok(self.credentials()?.access_token)
+    }
+
+    /// The whole grant, once, for a caller that needs more than the bearer.
+    pub fn credentials(&self) -> Result<crate::auth::store::Credentials, ProxyError> {
         let credentials = self.store.load()?.ok_or_else(|| {
             ProxyError::authentication(
                 "no grant is available. `accounts` lists the declared profiles.".to_owned(),
@@ -98,6 +105,6 @@ impl Grants {
             ));
         }
 
-        Ok(credentials.access_token)
+        Ok(credentials)
     }
 }

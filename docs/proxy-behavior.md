@@ -1360,9 +1360,13 @@ anthropic key beginning `sk-ant-oat` **names both credentials on stderr where
 stdin is a terminal**: the one moment a person is present to be told what a
 short-lived paste will do. It says the stem, never any part of the key. Where
 stdin is a pipe it says nothing, on either stream, because a scripted login's
-output is read by something (§ the `--key` contract in `api.md`). The guided
-`--setup-token` flow says nothing extra either: it has already named where the
-token comes from.
+output is read by something (§ the `--key` contract in `api.md`).
+
+The caution is what remains of a distinction that used to matter more. The
+guided `--setup-token` flow that stored one of those two credentials is gone:
+what it existed to provide is now borrowed from the profile that holds it
+(§8.4), with a refresh behind it rather than a token that stops working with
+nothing said.
 
 A fourth follows from the catalog rather than the pairing. The key endpoint's
 model list is real and authoritative — it answers with every model the key can
@@ -1570,9 +1574,14 @@ removing it. That is indistinguishable from a profile nobody signed into, and
 both want the same answer, so an empty half is refused by name rather than
 carried as a grant with an odd expiry.
 
-**A lapsed grant may be asked about, and only Claude is ever asked.** The one
-move available here is to run the program that owns the profile, wait for it to
-exit, and read the profile again: the rotation happens inside that program,
+**A lapsed grant may be asked about, and only Claude is ever asked.** What asks
+is a request for a quota figure (`usage --refresh`): the caller wants the figure
+that comes *after* a refresh, so it waits for one. A turn does not ask — it
+refuses on a lapsed grant and says whose program renews it — because a turn that
+blocked while a client started up would spend a minute before its first byte.
+
+The one move available here is to run the program that owns the profile, wait
+for it to exit, and read the profile again: the rotation happens inside that program,
 which is the only process allowed to perform it. `claude -p` on the cheapest
 tier is that run, with stdin closed — without which the client waits several
 seconds for input that never comes — and a deadline, after which the process is
