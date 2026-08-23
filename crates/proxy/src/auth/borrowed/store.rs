@@ -1,7 +1,7 @@
 //! `docs/proxy-behavior.md` §8.4 — the declared profiles, as a store.
 //!
 //! `CredentialStore` and `AccountStore` describe a store that owns what it
-//! holds: it adds, saves, renames and forgets. None of those is this store's
+//! holds: it adds, saves, renames and removes. None of those is this store's
 //! to do, because the grants belong to other programs. So every write refuses,
 //! naming the profile and what to do instead, and the one piece of state that
 //! *is* ours lives on our side: which account is selected.
@@ -271,7 +271,7 @@ impl AccountStore for BorrowedStore {
     }
 
     fn remove(&self, name: &str) -> Result<(), ProxyError> {
-        Err(self.read_only("forget", name))
+        Err(self.read_only("remove", name))
     }
 
     fn credential(&self) -> Result<Option<Credential>, ProxyError> {

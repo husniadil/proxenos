@@ -66,7 +66,7 @@ fn clearing_removes_the_credentials() {
     store.clear().unwrap();
 
     assert!(store.load().unwrap().is_none());
-    // Clearing what is already gone is not an error: `accounts.forget` must be safe
+    // Clearing what is already gone is not an error: `accounts.remove` must be safe
     // to run twice.
     store.clear().unwrap();
 }

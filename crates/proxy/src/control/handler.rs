@@ -103,7 +103,7 @@ pub async fn dispatch(
             }))
         }
         "usage" => Ok(usage(state)),
-        "accounts.forget" => forget_account(state, params).await,
+        "accounts.remove" => remove_account(state, params).await,
         "accounts" => accounts(state),
         "accounts.select" => select_account(state, params).await,
         "accounts.rename" => rename_account(state, params),
@@ -1631,13 +1631,13 @@ fn authorizer(state: &ControlState) -> Option<crate::auth::authorize::AccountAut
     })
 }
 
-/// `accounts.forget` — forget one account.
+/// `accounts.remove` — remove one account.
 ///
 /// With nothing named it clears the account serving turns, which is what a
 /// caller that knows of only one means by it. The rest stay usable, and the
 /// answer says which one went: a front-end that could not tell would have to
 /// guess what it just did.
-async fn forget_account(state: &ControlState, params: Option<&Value>) -> Result<Value, ProxyError> {
+async fn remove_account(state: &ControlState, params: Option<&Value>) -> Result<Value, ProxyError> {
     let named = params
         .and_then(|params| params.get("account"))
         .and_then(Value::as_str);
@@ -1655,7 +1655,7 @@ async fn forget_account(state: &ControlState, params: Option<&Value>) -> Result<
             Some(name.to_owned())
         }
         None => {
-            // Clearing what is already gone is not an error: forgetting has
+            // Clearing what is already gone is not an error: removing has
             // always been safe to run twice.
             state.credentials.clear()?;
             serving.clone()
@@ -1676,10 +1676,10 @@ async fn forget_account(state: &ControlState, params: Option<&Value>) -> Result<
 
     // Handing over to another account is a switch by another name, so what
     // travels with a switch travels here: the conversations bound to the grant
-    // that went, and the catalog that described its plan. Forgetting an idle
-    // account changes nothing about the account serving turns — while
-    // forgetting its refusal would leave `status` reporting a healthy grant
-    // while every dispatch failed.
+    // that went, and the catalog that described its plan. Removing an idle
+    // account changes nothing about the account serving turns — while dropping
+    // its refusal would leave `status` reporting a healthy grant while every
+    // dispatch failed.
     let handed_over = cleared.is_some() && cleared == serving;
     if handed_over {
         state.usage.forget_unattributed();
@@ -1688,8 +1688,8 @@ async fn forget_account(state: &ControlState, params: Option<&Value>) -> Result<
 
     let remaining = state.credentials.accounts()?;
     Ok(json!({
-        "forgotten": cleared,
-        // Who serves turns now. Forgetting the account that was serving hands
+        "removed": cleared,
+        // Who serves turns now. Removing the account that was serving hands
         // over to another, and a caller that has to ask a second question to
         // learn which is a caller that will report the wrong one.
         "serving": remaining.iter().find(|account| account.selected).map(|account| account.name.clone()),

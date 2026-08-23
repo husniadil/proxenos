@@ -1654,12 +1654,12 @@ fn stand_in(dir: &Path, body: &str) -> PathBuf {
     script
 }
 
-/// Forgetting with nothing named means the account serving turns, and a
-/// borrowed profile is not this daemon's to forget. Before this it forwarded
+/// Removing with nothing named means the account serving turns, and a
+/// borrowed profile is not this daemon's to remove. Before this it forwarded
 /// to the key store, which removed whatever *it* had marked as chosen and let
 /// the answer claim the profile had gone.
 #[test]
-fn forgetting_the_serving_profile_refuses_and_leaves_the_keys_alone() {
+fn removing_the_serving_profile_refuses_and_leaves_the_keys_alone() {
     let dir = tempfile::tempdir().expect("tempdir");
     let work = profile("work", Provider::Codex, Some("/profiles/work"));
     let accounts = accounts_over(
@@ -1687,10 +1687,10 @@ fn forgetting_the_serving_profile_refuses_and_leaves_the_keys_alone() {
     );
 }
 
-/// Where a key serves, forgetting without a name removes that key and takes
+/// Where a key serves, removing without a name drops that key and takes
 /// the selection with it — the same thing naming it would have done.
 #[test]
-fn forgetting_the_serving_key_removes_that_key() {
+fn removing_the_serving_key_removes_that_key() {
     let dir = tempfile::tempdir().expect("tempdir");
     let work = profile("work", Provider::Codex, Some("/profiles/work"));
     let accounts = accounts_over(
@@ -1704,7 +1704,7 @@ fn forgetting_the_serving_key_removes_that_key() {
         .expect("a key is stored");
     accounts.select("spare").expect("the key serves");
 
-    accounts.clear().expect("a key is this daemon's to forget");
+    accounts.clear().expect("a key is this daemon's to remove");
 
     let listed = accounts.accounts().expect("lists");
     assert_eq!(listed.len(), 1);
@@ -1715,14 +1715,14 @@ fn forgetting_the_serving_key_removes_that_key() {
     );
 }
 
-/// Nothing held at all is not an error: forgetting has always been safe to run
+/// Nothing held at all is not an error: removing has always been safe to run
 /// twice, and the second run finds an empty store.
 #[test]
-fn forgetting_an_empty_store_is_not_an_error() {
+fn removing_an_empty_store_is_not_an_error() {
     let dir = tempfile::tempdir().expect("tempdir");
     let accounts = accounts_over(dir.path(), Vec::new(), &[], Arc::new(FakeClient::default()));
 
-    accounts.clear().expect("nothing to forget");
+    accounts.clear().expect("nothing to remove");
 }
 
 /// A signed-in `auth.json`, whose grant is live until `expires_at`.
@@ -2317,30 +2317,30 @@ fn a_null_refusal_is_not_reported_as_one() {
     assert!(!rendered.contains("refused"), "{rendered}");
 }
 
-/// Forgetting one account out of several says which account serves now, and
+/// Removing one account out of several says which account serves now, and
 /// where none does, says to choose rather than to sign in.
 ///
 /// Seen live: a leftover forgotten out of a store that still held two accounts
 /// answered "no accounts left", which is advice to add a third.
 #[test]
-fn forgetting_says_what_is_left_rather_than_assuming_nothing_is() {
-    let none_chosen = render::forgotten_account(&serde_json::json!({
-        "forgotten": "codex",
+fn removing_says_what_is_left_rather_than_assuming_nothing_is() {
+    let none_chosen = render::removed_account(&serde_json::json!({
+        "removed": "codex",
         "serving": serde_json::Value::Null,
         "remaining": 2,
     }));
     assert!(none_chosen.contains("accounts --use"), "{none_chosen}");
     assert!(!none_chosen.contains("no accounts left"), "{none_chosen}");
 
-    let empty = render::forgotten_account(&serde_json::json!({
-        "forgotten": "codex",
+    let empty = render::removed_account(&serde_json::json!({
+        "removed": "codex",
         "serving": serde_json::Value::Null,
         "remaining": 0,
     }));
     assert!(empty.contains("no accounts left"), "{empty}");
 
-    let serving = render::forgotten_account(&serde_json::json!({
-        "forgotten": "codex",
+    let serving = render::removed_account(&serde_json::json!({
+        "removed": "codex",
         "serving": "work-codex",
         "remaining": 2,
     }));

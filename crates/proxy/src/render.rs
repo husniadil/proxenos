@@ -284,31 +284,31 @@ pub fn renamed_account(result: &Value) -> String {
     }
 }
 
-/// What forgetting an account says it did, and who is left serving turns.
+/// What removing an account says it did, and who is left serving turns.
 ///
-/// The second half matters: forgetting the account that was serving hands over
+/// The second half matters: removing the account that was serving hands over
 /// to another one, and an operator who is not told has to go and look.
-pub fn forgotten_account(result: &Value) -> String {
-    let forgotten = field(result, "forgotten")
+pub fn removed_account(result: &Value) -> String {
+    let removed = field(result, "removed")
         .and_then(Value::as_str)
         .unwrap_or("nothing");
     if let Some(serving) = field(result, "serving").and_then(Value::as_str) {
-        return format!("forgot {forgotten}; serving turns as {serving}");
+        return format!("removed {removed}; serving turns as {serving}");
     }
     // Nothing is serving, and the two reasons for that want opposite advice.
-    // Seen live: forgetting a leftover out of a store that still held two
+    // Seen live: removing a leftover out of a store that still held two
     // accounts answered "no accounts left".
     if field(result, "remaining")
         .and_then(Value::as_u64)
         .is_some_and(|remaining| remaining > 0)
     {
         return format!(
-            "forgot {forgotten}; no account is serving turns — choose one with \
+            "removed {removed}; no account is serving turns — choose one with \
              `proxenos accounts --use NAME`"
         );
     }
     format!(
-        "forgot {forgotten}; no accounts left — declare a profile under `[profiles]`, \
+        "removed {removed}; no accounts left — declare a profile under `[profiles]`, \
          or store a key with `proxenos login --key --as NAME`"
     )
 }

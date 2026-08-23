@@ -151,11 +151,11 @@ pub(crate) async fn accounts(args: cli::AccountsArgs) -> Result<()> {
     if let Some(name) = args.forget {
         let result = control::call(
             &control::default_path(),
-            "accounts.forget",
+            "accounts.remove",
             Some(serde_json::json!({ "account": name })),
         )
         .await?;
-        println!("{}", render::forgotten_account(&result));
+        println!("{}", render::removed_account(&result));
         return Ok(());
     }
 

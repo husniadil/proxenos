@@ -263,7 +263,7 @@ fn with_trailing_newline(mut text: String) -> String {
 pub fn rename_account(document: &str, from: &str, to: &str) -> Result<Option<String>, ProxyError> {
     let mut lines: Vec<String> = document.lines().map(str::to_owned).collect();
 
-    // A section under the destination name blocks this. Forgetting an account
+    // A section under the destination name blocks this. Removing an account
     // leaves its section behind, so the name can be free in the store and taken
     // in the file — and moving onto it would define one table twice, which TOML
     // refuses. The daemon would then fail to start on a file the operator never

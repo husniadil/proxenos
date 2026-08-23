@@ -806,7 +806,7 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 | Method | Returns | v0.1 |
 |---|---|---|
 | `status` | connection state, whether the grant has been **refused** — `dead` where this side cannot spend it and `refused` carrying the backend's own words where it was sent and turned away — when the serving account's login has to be renewed (`login_expires_at`, absent where no such date exists), plan and which source reported it, the tier mapping and the effort ceiling, any mapped model the catalog withholds, whether the catalog was authoritative, the client policy in effect, and the build and `instance` serving the socket | yes |
-| `accounts.forget` | forgets one account — the selected one, or `{"account": name}` — and answers with the name it cleared and the one serving turns afterwards; the rest stay usable, and an idle account's removal leaves the serving grant's quota alone. Only a key is this daemon's to forget: a borrowed profile is refused either way, naming the `[profiles]` entry that would actually remove it | no — was `disconnect` |
+| `accounts.remove` | removes one account — the selected one, or `{"account": name}` — and answers with the name it cleared and the one serving turns afterwards; the rest stay usable, and an idle account's removal leaves the serving grant's quota alone. Only a key is this daemon's to drop: a borrowed profile is refused either way, naming the `[profiles]` entry that would actually remove it | no — was `disconnect`, then `accounts.forget` |
 | `accounts` | every stored account, what kind of credential each holds, and which one serves turns, plus `discovered` — whether these are the operator's own `[profiles]` entries or the stock profile of each program, read because none were declared; each borrowed row also carries the profile it was read from and, for a Claude profile, `login_expires_at` — the date the operator has to sign in again. No tokens | no — v0.3 |
 | `accounts.select` | `{"account": name}`, the account every following turn is made as, the provider now serving and the one serving a moment ago (absent where nothing was) — one select moves every unpinned turn onto that provider's subscription — whether the catalog was refetched for it, and the tier mapping now in force; refuses, and moves nothing, where that account's mapping names a model its catalog does not have, naming whose menu refused and how to give that account its own mapping | no — v0.3 |
 | `accounts.rename` | `{"account": from, "name": to}`, the name this daemon calls an account by, and whether an account section moved with it; the grant and the account id are untouched | no — v0.3 |
@@ -843,8 +843,11 @@ and `usage.refresh` among them. A lone `.get` was one name a caller had to
 remember separately for no capability it bought. Renamed rather than aliased,
 for the reason below.
 
-**`disconnect` is gone and `accounts.forget` replaces it**, and the answer's
-`disconnected` field is `forgotten`. The old name shipped in v0.1, when there
+**`disconnect` is gone and `accounts.remove` replaces it**, and the answer's
+`disconnected` field is `removed`. `accounts.forget` was the first replacement
+and is gone in turn: the store's own verb is `remove`, every refusal it can
+answer with says "remove", and one method spelling the operation a third way
+was a name an operator had to translate. The old name shipped in v0.1, when there
 was one account and disconnecting from it was the whole idea; with a store of
 several, forgetting one is an account operation and every other account
 operation is `accounts.<verb>`. Keeping it would have left one method outside
@@ -950,8 +953,8 @@ the ingress authenticates through, so the next turn is made as the account
 named rather than the one this socket merely reports. Quota does not move with
 it and does not need to: every figure is held under the account that earned it
 (`proxy-behavior.md` §8.3), so what `usage` reports at the top follows the
-selection by itself, and each account's own figure stays valid. `accounts.forget`
-drops the figure of the account it forgets, serving or idle, because that
+selection by itself, and each account's own figure stays valid. `accounts.remove`
+drops the figure of the account it removes, serving or idle, because that
 entitlement belongs to an account this daemon can no longer spend.
 
 Live conversations are dropped with it. A conduit fixes its account on the
@@ -984,7 +987,7 @@ providers in the store, the row that leaves it out is the one an operator has
 to guess about.
 
 **A catalog belongs to the account it was fetched for** (`proxy-behavior.md`
-§7.0). `accounts.select` and an `accounts.forget` that hands over to another account
+§7.0). `accounts.select` and an `accounts.remove` that hands over to another account
 fetch it again as whoever serves now, and their answers carry
 `catalog_refreshed` — a fetch that failed keeps the previous list in force, and
 everything downstream of it still describes that account. A CLI `login` calls
@@ -1419,8 +1422,8 @@ Semantic versioning does not bind a zero major, and nothing outside this
 project's own CLI has ever spoken the socket — the CLI and the daemon are one
 binary, so a rename lands on both at once. A name that turns out wrong is
 therefore renamed on a minor bump, said in the changelog, and gone rather than
-left beside its replacement. `accounts.forget` arrived that way, and so did the
-project's own name: everything `codex-cc-proxy` and `CODEX_CC_PROXY_*` named is
+left beside its replacement. `accounts.forget` arrived that way and left the
+same way, renamed to `accounts.remove`; so did the project's own name: everything `codex-cc-proxy` and `CODEX_CC_PROXY_*` named is
 `proxenos` and `PROXENOS_*` from v0.5.0, one rename with no aliases kept. The exception
 ends when a second caller exists — the graphical front-end is the one planned,
 and any other program that speaks this socket ends it just as well — and it ends
@@ -1431,9 +1434,9 @@ about a version number.
 **The bound method set is the whole of §3's table, named here so the freeze is
 a contract rather than folklore.** From v0.7.0 — the release that ships the
 graphical front-end, and with it the second caller the exception above is a
-statement about — these seventeen names are fixed: `status`, `shutdown`,
+statement about — these names are fixed: `status`, `shutdown`,
 `accounts`, `accounts.select`, `accounts.rename`,
-`accounts.forget`, `models`, `tiers`, `tiers.set`, `effort.set`,
+`accounts.remove`, `models`, `tiers`, `tiers.set`, `effort.set`,
 `cross_account_tiers.set`, `usage`, `usage.refresh`, `env`, `doctor`,
 `record.start`, `record.stop`. `doctor` is bound although it is not implemented:
 a reserved name that appears later must mean what its name said all along. The

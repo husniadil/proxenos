@@ -163,20 +163,20 @@ impl CredentialStore for Accounts {
         ))
     }
 
-    /// Forget the account serving turns, which is what `accounts.forget` with
+    /// Remove the account serving turns, which is what `accounts.remove` with
     /// nothing named means.
     ///
     /// Resolved through the selection rather than handed to the key store: the
     /// selection lives here now, and the key store's own idea of which account
-    /// is chosen is no longer this daemon's. Left to it, a nameless forget on
+    /// is chosen is no longer this daemon's. Left to it, a nameless removal on
     /// a machine serving from a borrowed profile removed some other key and
-    /// reported the profile's name as the thing it had forgotten.
+    /// reported the profile's name as the thing it had removed.
     ///
     /// So it goes through `remove`, and inherits both of its answers: a key is
     /// removed, and a borrowed profile is refused with the edit that would
-    /// actually forget it.
+    /// actually remove it.
     fn clear(&self) -> Result<(), ProxyError> {
-        // Nothing held at all: forgetting has always been safe to run twice,
+        // Nothing held at all: removing has always been safe to run twice,
         // and the second run is this. An ambiguous selection is still refused,
         // because that one has an account to name.
         if self.names()?.is_empty() {
@@ -299,8 +299,8 @@ impl AccountStore for Accounts {
         self.selection.write(name, chosen.account_id.as_deref())
     }
 
-    /// Forgetting a key removes it. Forgetting a borrowed profile is an edit
-    /// to the configuration file, and the refusal says so rather than removing
+    /// Removing a key drops it. Removing a borrowed profile is an edit to the
+    /// configuration file, and the refusal says so rather than removing
     /// something the operator did not mean.
     fn remove(&self, name: &str) -> Result<(), ProxyError> {
         if self.is_borrowed(name) {

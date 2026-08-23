@@ -308,10 +308,10 @@ fn a_figure_carries_how_it_was_come_by_and_when() {
     assert_eq!(store.latest_for("spare").unwrap().source, Source::Fetch);
 }
 
-/// **Build 4, at the store.** Forgetting an account drops its figure and
+/// **Build 4, at the store.** Removing an account drops its figure and
 /// nothing else: the rest stay valid because each is held under its own name.
 #[test]
-fn forgetting_an_account_drops_only_its_own_figure() {
+fn removing_an_account_drops_only_its_own_figure() {
     let store = store_serving("main");
     store.record_for(None, &snapshot(11.0), Source::Turn);
     store.record_for(Some("spare"), &snapshot(77.0), Source::Turn);
@@ -765,11 +765,11 @@ fn a_turn_no_account_can_be_named_for_is_not_tallied() {
     assert_eq!(store.spent_for("main").total(), 0);
 }
 
-/// Forgetting an account drops what was served as it, along with its figure:
+/// Removing an account drops what was served as it, along with its figure:
 /// the tally answers "how much has this account spent through this daemon",
 /// and there is no such account.
 #[test]
-fn forgetting_an_account_drops_what_was_served_as_it() {
+fn removing_an_account_drops_what_was_served_as_it() {
     let store = store_serving("main");
     store.record_spend(None, 100, 20);
     store.record_spend(Some("spare"), 900, 90);

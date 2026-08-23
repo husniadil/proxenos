@@ -89,7 +89,7 @@ pub const METHODS: [&str; 17] = [
     "accounts",
     "accounts.select",
     "accounts.rename",
-    "accounts.forget",
+    "accounts.remove",
     "models",
     "tiers",
     "tiers.set",

@@ -387,7 +387,7 @@ pub trait AccountStore: CredentialStore {
     /// Choose the account that serves turns from now on.
     fn select(&self, name: &str) -> Result<(), ProxyError>;
 
-    /// Forget one account, leaving the rest usable.
+    /// Remove one account, leaving the rest usable.
     fn remove(&self, name: &str) -> Result<(), ProxyError>;
 
     /// The credential of the account serving turns, of either kind.
@@ -927,9 +927,9 @@ impl CredentialStore for FileStore {
         })
     }
 
-    /// Forget the account serving turns, leaving the rest usable.
+    /// Remove the account serving turns, leaving the rest usable.
     ///
-    /// Clearing what is already gone is not an error: `accounts.forget` must be
+    /// Clearing what is already gone is not an error: `accounts.remove` must be
     /// safe to run twice.
     fn clear(&self) -> Result<(), ProxyError> {
         self.update(|file| {
@@ -1027,7 +1027,7 @@ impl AccountStore for FileStore {
             {
                 return Err(ProxyError::invalid_request(format!(
                     "`{name}` already names an account holding a grant; \
-                     forget it first, or store the key under another name"
+                     remove it first, or store the key under another name"
                 )));
             }
 
@@ -1043,7 +1043,7 @@ impl AccountStore for FileStore {
             {
                 return Err(ProxyError::invalid_request(format!(
                     "`{name}` already names a {} key; \
-                     forget it first with `accounts --forget {name}`, \
+                     remove it first with `accounts --forget {name}`, \
                      or store the key under another name",
                     entry.provider.as_str()
                 )));
@@ -1128,7 +1128,7 @@ impl AccountStore for FileStore {
                 && held != index
             {
                 return Err(ProxyError::invalid_request(format!(
-                    "`{to}` already names another account; forget it or pick another name"
+                    "`{to}` already names another account; remove it or pick another name"
                 )));
             }
 
@@ -1263,11 +1263,11 @@ impl CredentialStore for AccountSlot {
     }
 
     /// Refused. A slot exists to authenticate one account's requests, and
-    /// forgetting an account is `AccountStore::remove` — reached through here
+    /// removing an account is `AccountStore::remove` — reached through here
     /// it would clear whichever account a refresh happened to be pointed at.
     fn clear(&self) -> Result<(), ProxyError> {
         Err(ProxyError::invalid_request(format!(
-            "`{}` is bound for authorizing turns and cannot forget an account",
+            "`{}` is bound for authorizing turns and cannot remove an account",
             self.account
         )))
     }
