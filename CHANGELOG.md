@@ -64,6 +64,13 @@ vanished. Keys in that file keep working exactly as they did.
   spends quota and rotates the token, and a profile whose refresh token has
   lapsed too, where a failed refresh blanks what is left of the stored grant.
 
+- **`claude_program`, for the client this daemon runs on its own behalf.**
+  Unset, the bare name `claude` is resolved through the daemon's `PATH` — which
+  is the shell's only when the daemon was started from one. A daemon started by
+  launchd inherits almost none, so write the path out there or the refresh above
+  refuses with `could not run \`claude\``. The same key settles the version the
+  second provider's quota request is made as.
+
 - **Who is paying, on every surface that has room for it.** Each row names the
   store it was read from; the status line receives the serving account whether
   or not a figure is known; `exec` prints one line before the client starts. And
@@ -76,7 +83,9 @@ vanished. Keys in that file keep working exactly as they did.
 - **A credential now says whose endpoints it belongs to**, as well as which of
   that provider's two it reaches. The relay asks about the provider, since a
   borrowed grant and a stored key on that provider are spent at the same
-  endpoint. Each provider's subscription path is addressed as its own client.
+  endpoint. Each provider's subscription path is addressed as its own client. Both transports on the first provider's side ask the same
+  question before the endpoint has to, so an account on the other provider is
+  refused here rather than upstream, where the answer names neither half.
 
 - **`auth.dead` keeps its question and changes its answer.** There is no refused
   token to retire, so it means the grant cannot be spent as it stands, and it
