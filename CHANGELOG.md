@@ -129,6 +129,26 @@ vanished. Keys in that file keep working exactly as they did.
 
 ### Changed
 
+- **`usage` prints a header table, one row per window.** Every account row used
+  to end in the same long sentence — "codex reports quota when a turn is made;
+  this daemon has recorded no turn as this account yet" — repeated once per
+  account, which is a paragraph where four cells would do. It is
+  `NAME PROVIDER USED RESETS SOURCE AS OF` now, with a `*` on the account
+  serving turns and one row per window, since an account can hold a five-hour
+  window beside a seven-day one and each has its own reset. A row with no
+  figure says why in the AS OF cell — `no turn yet`, `no relayed turn yet`,
+  `per token`, `not reported` — and the long explanation is one note under the
+  table, said once, naming `usage --refresh` as the way to fill the empty rows.
+  The `usage` payload gained `reason` and `served_tokens` per account so the
+  renderer reads a code rather than matching on prose; `--json` is otherwise
+  unchanged.
+
+- **`status` prints the tier table in ladder order.** The payload is an
+  unordered object and arrived sorted by name, so the four rows read `fable,
+  haiku, opus, sonnet` — an order nothing else in this proxy uses. They read
+  `opus, sonnet, haiku, fable` now, which is what `models` already prints in
+  its TIER column.
+
 - **`--json` means one thing everywhere: the control socket's payload for that
   verb, unrendered.** It already meant that on `accounts` and `usage`, and now
   means it on `status` and `models` too, which had no way to hand over what they

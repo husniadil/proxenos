@@ -529,17 +529,30 @@ fn per_account(state: &ControlState) -> Vec<Value> {
                     figure
                 }
                 // Absent, with the reason — which differs, and each reason
-                // sends whoever reads it somewhere different.
-                None => json!({
-                    "known": false,
-                    "detail": unavailable(state, &account),
-                }),
+                // sends whoever reads it somewhere different. The sentence is
+                // for a reader; the code beside it is for a renderer, which
+                // cannot tell those cases apart by matching on prose.
+                None => {
+                    let (reason, detail) = unavailable(state, &account);
+                    json!({
+                        "known": false,
+                        "reason": reason,
+                        "detail": detail,
+                    })
+                }
             };
 
             if let Some(object) = entry.as_object_mut() {
                 object.insert("account".to_owned(), json!(account.name));
                 object.insert("provider".to_owned(), json!(account.provider));
                 object.insert("serving".to_owned(), json!(account.selected));
+                // What this daemon has counted as the account (§6.1). Carried
+                // on every row rather than only on a metered one: it is a
+                // count, and a row with a quota percentage has one too.
+                object.insert(
+                    "served_tokens".to_owned(),
+                    json!(state.usage.spent_for(&account.name).total()),
+                );
             }
             entry
         })
@@ -556,12 +569,21 @@ fn serving_unavailable(state: &ControlState) -> String {
         .find(|account| account.selected)
         .map_or_else(
             || "the backend reports quota when a turn is made; none has been made yet".to_owned(),
-            |account| unavailable(state, &account),
+            |account| unavailable(state, &account).1,
         )
 }
 
-/// Why an account has no figure.
-fn unavailable(state: &ControlState, account: &crate::auth::store::Account) -> String {
+/// Why an account has no figure: a code a renderer can act on, and the
+/// sentence a reader gets.
+///
+/// Two answers to one question because they are read by different things. The
+/// sentence says everything; the code is the same fact in a word, so a table
+/// can put `no turn yet` in a cell without matching on prose that is free to
+/// be reworded.
+fn unavailable(
+    state: &ControlState,
+    account: &crate::auth::store::Account,
+) -> (&'static str, String) {
     // Every reason names the provider it is about. The block prints one row
     // per account and the providers differ between rows, so "this provider"
     // leaves the reader to work out which one the sentence means.
@@ -579,9 +601,12 @@ fn unavailable(state: &ControlState, account: &crate::auth::store::Account) -> S
                     // key: not a figure pending but a ceiling that does not
                     // exist. No cost is stated and none is estimated; the one
                     // honest quantity beside it is what this daemon counted.
-                    return format!(
-                        "an anthropic API key has no quota ceiling; it is metered per token, \
-                         so nothing here bounds its spend ({served})"
+                    return (
+                        "metered",
+                        format!(
+                            "an anthropic API key has no quota ceiling; it is metered per token, \
+                             so nothing here bounds its spend ({served})"
+                        ),
                     );
                 }
                 Some("subscription_token") => {}
@@ -591,10 +616,13 @@ fn unavailable(state: &ControlState, account: &crate::auth::store::Account) -> S
                 // other sentences would be claiming it does — one that a
                 // figure is coming, one that none ever will.
                 _ => {
-                    return format!(
-                        "this daemon has not recorded which kind of anthropic key this account \
-                         holds, so it cannot say whether a quota figure will ever arrive for it \
-                         ({served})"
+                    return (
+                        "unknown_key_kind",
+                        format!(
+                            "this daemon has not recorded which kind of anthropic key this \
+                             account holds, so it cannot say whether a quota figure will ever \
+                             arrive for it ({served})"
+                        ),
                     );
                 }
             }
@@ -609,16 +637,22 @@ fn unavailable(state: &ControlState, account: &crate::auth::store::Account) -> S
         // the same as the account having relayed none: a turn relayed by a CLI
         // process reads the same headers and exits with them. The sentence
         // says which of the two it is describing.
-        return format!(
-            "{provider} states quota on every turn; this daemon has recorded no relayed \
-             turn as this account yet"
+        return (
+            "no_relayed_turn",
+            format!(
+                "{provider} states quota on every turn; this daemon has recorded no relayed \
+                 turn as this account yet"
+            ),
         );
     }
     if account.provider != crate::auth::store::Provider::Codex.as_str() {
         // `roadmap.md` §L — whether this provider answers a quota question at
         // all is unmeasured, and a figure of zero would be an answer nobody
         // gave.
-        return format!("{provider} does not report a quota to this proxy yet");
+        return (
+            "not_reported",
+            format!("{provider} does not report a quota to this proxy yet"),
+        );
     }
     if account.kind == "key" {
         // §8.2 — the figure is a subscription entitlement, and a key is not
@@ -634,14 +668,22 @@ fn unavailable(state: &ControlState, account: &crate::auth::store::Account) -> S
         // restarts (§6.1), which is a floor under its real spend rather than
         // the whole of it, and is said to be one.
         let served = served_as(state, &account.name);
-        return format!(
-            "a key has no quota ceiling; it is metered per token, so nothing here bounds its spend ({served})"
+        return (
+            "metered",
+            format!(
+                "a key has no quota ceiling; it is metered per token, so nothing here bounds \
+                 its spend ({served})"
+            ),
         );
     }
     // Same reading as the relay case above: the store speaks for itself, and a
     // turn made outside this daemon leaves it nothing to speak from.
-    format!(
-        "{provider} reports quota when a turn is made; this daemon has recorded no turn as this account yet"
+    (
+        "no_turn",
+        format!(
+            "{provider} reports quota when a turn is made; this daemon has recorded no turn \
+             as this account yet"
+        ),
     )
 }
 
@@ -2026,7 +2068,7 @@ async fn ask_for(
     // grant, which on the second provider is what borrowing made possible
     // (§8.4).
     if account.kind != "grant" {
-        return Err(unavailable(state, account));
+        return Err(unavailable(state, account).1);
     }
 
     // A lapsed grant is asked about before it is spent, and the wait is the

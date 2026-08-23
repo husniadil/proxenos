@@ -593,24 +593,30 @@ fn a_window_that_has_reset_says_so_on_the_meter() {
 
     // Between the 5h reset and the 7d one.
     let rendered = proxenos::render::usage_at(&result, 1_787_350_000);
-    let five_hour = rendered
-        .lines()
-        .find(|line| line.starts_with("5h"))
-        .unwrap_or_else(|| panic!("no 5h line in:\n{rendered}"));
-    let seven_day = rendered
-        .lines()
-        .find(|line| line.starts_with("7d"))
-        .unwrap_or_else(|| panic!("no 7d line in:\n{rendered}"));
+    let five_hour = row_for(&rendered, "of 5h");
+    let seven_day = row_for(&rendered, "of 7d");
 
-    assert!(five_hour.contains("window has since reset"), "{rendered}");
+    assert!(five_hour.contains("already reset"), "{rendered}");
     assert!(
-        !seven_day.contains("window has since reset"),
+        !seven_day.contains("already reset"),
         "the seven-day figure is still true:\n{rendered}"
     );
 
-    // Before either reset, neither figure has outlived its window.
+    // Before either reset, neither figure has outlived its window, and the
+    // cell says when each comes back instead.
     let fresh = proxenos::render::usage_at(&result, 1_787_338_000);
-    assert!(!fresh.contains("window has since reset"), "{fresh}");
+    assert!(!fresh.contains("already reset"), "{fresh}");
+    assert!(row_for(&fresh, "of 5h").contains("in 13m"), "{fresh}");
+    assert!(row_for(&fresh, "of 7d").contains("in 9h"), "{fresh}");
+}
+
+/// The row a figure is rendered on.
+fn row_for(rendered: &str, figure: &str) -> String {
+    rendered
+        .lines()
+        .find(|line| line.contains(figure))
+        .expect("the figure should be on a row")
+        .to_owned()
 }
 
 /// The provider's own warning, its own threshold, and its own answer to which
@@ -623,25 +629,101 @@ fn the_meter_carries_the_providers_own_words() {
     result["accounts"] = serde_json::json!([]);
 
     let rendered = proxenos::render::usage_at(&result, 1_787_338_000);
-    let line = |prefix: &str| {
-        rendered
-            .lines()
-            .find(|line| line.starts_with(prefix))
-            .unwrap_or_else(|| panic!("no {prefix} line in:\n{rendered}"))
-            .to_owned()
-    };
 
     // The seven-day window is the one the provider named, and the one it
     // warned about.
-    assert!(line("7d").contains("decides"), "{rendered}");
-    assert!(line("7d").contains("past the provider's 75%"), "{rendered}");
+    assert!(
+        row_for(&rendered, "of 7d").contains("decides"),
+        "{rendered}"
+    );
+    assert!(
+        row_for(&rendered, "of 7d").contains("past the provider's 75%"),
+        "{rendered}"
+    );
     // The five-hour window was allowed with no warning, and saying nothing is
     // the accurate thing to say about it.
-    assert!(!line("5h").contains("decides"), "{rendered}");
-    assert!(!line("5h").contains("past the provider's"), "{rendered}");
+    assert!(
+        !row_for(&rendered, "of 5h").contains("decides"),
+        "{rendered}"
+    );
+    assert!(
+        !row_for(&rendered, "of 5h").contains("past the provider's"),
+        "{rendered}"
+    );
     // The overage window is named by the provider's word for it, because it
     // has no duration to be named by.
-    assert!(line("overage").contains("0% used"), "{rendered}");
+    assert!(rendered.contains("0% of overage"), "{rendered}");
+}
+
+/// The whole table, verbatim: one account per state a row can be in, and one
+/// account holding two windows at once.
+///
+/// A column layout is exactly the kind of thing that reads well in the diff
+/// and wrong in the terminal, so this asserts the characters rather than a
+/// substring of them.
+#[test]
+fn the_meter_is_a_table_one_row_per_window() {
+    let result = json!({
+        "known": true,
+        "plan": "team",
+        "limit_reached": false,
+        "accounts": [
+            {
+                "known": true,
+                "account": "work-codex",
+                "provider": "codex",
+                "serving": true,
+                "source": "turn",
+                "measured_at": 1_787_337_760u64,
+                "served_tokens": 12_000,
+                "windows": [
+                    { "used_percent": 42.0, "window_minutes": 300, "resets_at": 1_787_349_520u64 },
+                    { "used_percent": 18.0, "window_minutes": 10080, "resets_at": 1_787_856_400u64 },
+                ],
+            },
+            {
+                "known": false,
+                "account": "spare-codex",
+                "provider": "codex",
+                "serving": false,
+                "reason": "no_turn",
+                "served_tokens": 0,
+                "detail": "codex reports quota when a turn is made; this daemon has recorded no turn as this account yet",
+            },
+            {
+                "known": false,
+                "account": "personal-claude",
+                "provider": "anthropic",
+                "serving": false,
+                "reason": "no_relayed_turn",
+                "served_tokens": 0,
+                "detail": "anthropic states quota on every turn; this daemon has recorded no relayed turn as this account yet",
+            },
+            {
+                "known": false,
+                "account": "openai-api",
+                "provider": "codex",
+                "serving": false,
+                "reason": "metered",
+                "served_tokens": 1_540,
+                "detail": "a key has no quota ceiling",
+            },
+        ],
+    });
+
+    let rendered = proxenos::render::usage_at(&result, 1_787_338_000);
+    assert_eq!(
+        rendered,
+        "\
+plan       team
+  NAME             PROVIDER   USED       RESETS     SOURCE     AS OF
+* work-codex       codex      42% of 5h  in 3h 12m  last turn  4m ago
+                              18% of 7d  in 6d
+  spare-codex      codex      -          -          -          no turn yet
+  personal-claude  anthropic  -          -          -          no relayed turn yet
+  openai-api       codex      1540 tok   -          -          per token
+note: an empty row is this daemon's record rather than the account's — a figure arrives with the next turn served as it, or now with `usage --refresh`; a metered row has no ceiling to report, and its count is what this daemon served as it rather than the whole of its spend."
+    );
 }
 
 /// One `accounts use` moves every unpinned turn onto that account's provider
@@ -705,13 +787,10 @@ fn the_meter_and_the_predicate_agree_on_what_has_reset() {
                     }
                 },
             );
-            let line = rendered
-                .lines()
-                .find(|line| line.starts_with(&name))
-                .unwrap_or_else(|| panic!("no {name} line at {now} in:\n{rendered}"));
+            let line = row_for(&rendered, &format!("of {name}"));
 
             assert_eq!(
-                line.contains("window has since reset"),
+                line.contains("already reset"),
                 window.is_stale_at(now),
                 "at {now}, the meter and the predicate disagree about {name}:\n{rendered}"
             );
@@ -719,7 +798,7 @@ fn the_meter_and_the_predicate_agree_on_what_has_reset() {
             // over is not a zero — that would be a number the provider never
             // gave, and it reads as headroom.
             assert!(
-                line.contains(&format!("{:.0}% used", window.used_percent)),
+                line.contains(&format!("{:.0}% of {name}", window.used_percent)),
                 "the figure must survive the marking:\n{rendered}"
             );
         }

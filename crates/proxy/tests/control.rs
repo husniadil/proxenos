@@ -4577,13 +4577,22 @@ async fn the_rendered_usage_names_every_account() {
 
     // No turn as the serving account has reached this daemon, and it says so
     // rather than borrowing the pinned account's figure.
-    assert!(
-        rendered.contains("this daemon has recorded no turn"),
+    let row = |name: &str| {
+        rendered
+            .lines()
+            .find(|line| line.contains(name))
+            .unwrap_or_else(|| panic!("no row for {name} in:\n{rendered}"))
+    };
+    assert!(row("main").contains("no turn yet"), "{rendered}");
+    assert!(row("spare").contains("77% of 5h"), "{rendered}");
+    assert!(row("spare").contains("last turn"), "{rendered}");
+    // And the long sentence is said once, under the table, rather than on
+    // every row that has no figure.
+    assert_eq!(
+        rendered.matches("`usage --refresh`").count(),
+        1,
         "{rendered}"
     );
-    assert!(rendered.contains("spare"), "{rendered}");
-    assert!(rendered.contains("77% used"), "{rendered}");
-    assert!(rendered.contains("rode a turn"), "{rendered}");
 }
 
 /// What a person actually reads, verbatim, for the account that bills per
@@ -4614,10 +4623,16 @@ async fn the_rendered_usage_line_for_a_key_does_not_read_as_reassurance() {
 
     assert_eq!(
         line,
-        "  billing                  no figure — a key has no quota ceiling; it is metered per token, so nothing here bounds its spend (1540 tokens served as it by this daemon, and turns made elsewhere are not counted)"
+        "  billing  codex     1540 tok   -           -          per token"
+    );
+    // The count is not a ceiling, and the note under the table is where that
+    // is said — once, rather than in every metered row.
+    assert!(
+        rendered.contains("a metered row has no ceiling to report"),
+        "{rendered}"
     );
     // And the subscription beside it still shows the percentage it always did.
-    assert!(rendered.contains("93% used"), "{rendered}");
+    assert!(rendered.contains("93% of 5h"), "{rendered}");
 }
 
 /// **Build 4, at the socket.** A select changes which account the answer is

@@ -228,8 +228,16 @@ pub fn status_at(result: &Value, now: u64) -> String {
     // model as a parenthesis. A column says the same thing where the eye is
     // already looking for it.
     if let Some(tiers) = field(result, "tiers").and_then(Value::as_object) {
-        let mapped: Vec<(String, String, String)> = tiers
-            .iter()
+        // The ladder's own order, not the map's. The payload is an unordered
+        // object and arrives sorted by name, so the four rows printed as
+        // `fable, haiku, opus, sonnet` — which is only how they sort. The
+        // model list already answers this question in ladder order, and one
+        // surface ordering these two ways is a surface an operator has to
+        // re-read.
+        let mut ordered: Vec<(&String, &Value)> = tiers.iter().collect();
+        ordered.sort_by_key(|(tier, _)| rung(tier));
+        let mapped: Vec<(String, String, String)> = ordered
+            .into_iter()
             .map(|(tier, value)| {
                 // A pinned tier arrives as `{ account, model }` — the same two
                 // shapes the configuration takes — and says so in its state,
@@ -458,14 +466,24 @@ pub fn models(result: &Value, tiers: Option<&Value>) -> String {
     lines.join("\n")
 }
 
+/// The ladder, in the order these are spoken about everywhere else. A tier
+/// nobody named sorts after every tier that was.
+const LADDER: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
+
+/// Where a tier sits on the ladder.
+fn rung(tier: &str) -> usize {
+    LADDER
+        .iter()
+        .position(|known| *known == tier)
+        .unwrap_or(LADDER.len())
+}
+
 /// The tiers a model id answers for, in the order an operator reads them.
 ///
 /// The ladder's own order rather than the mapping's, which arrives sorted by
 /// name: `opus, sonnet, haiku` is how these are spoken about everywhere else,
 /// and `fable, haiku, opus` is only how they sort.
 fn tiers_mapping_to(mapping: &Value, id: &str) -> String {
-    const LADDER: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
-
     let Some(mapping) = mapping.as_object() else {
         return String::new();
     };
@@ -481,12 +499,7 @@ fn tiers_mapping_to(mapping: &Value, id: &str) -> String {
         })
         .map(|(tier, _)| tier)
         .collect();
-    named.sort_by_key(|tier| {
-        LADDER
-            .iter()
-            .position(|known| known == &tier.as_str())
-            .unwrap_or(LADDER.len())
-    });
+    named.sort_by_key(|tier| rung(tier));
     named
         .into_iter()
         .map(String::as_str)

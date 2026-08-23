@@ -128,7 +128,10 @@ proxenos exec       run a command with that configuration applied
 proxenos reload     re-read config.toml into the running daemon
 proxenos stop       ask the running daemon to stop
 proxenos doctor     probe backend capabilities (--live answers from the real one)
-proxenos usage      what quota is left (--refresh asks, per account)
+proxenos usage      what quota is left (--refresh asks, per account), as a
+                    header table: `NAME PROVIDER USED RESETS SOURCE AS OF`,
+                    with a `*` on the account serving turns and one row per
+                    window (--json prints the socket's own payload)
 proxenos statusline wrap a status-line script, adding that quota
 proxenos record     capture exchanges as fixtures
 ```
@@ -396,8 +399,8 @@ binary is in: `doctor` has to establish something on a first run, and a run that
 skipped every probe for want of a checkout would establish nothing at the
 moment it is most likely to be run.
 
-`usage` reports the serving account's quota as of its last turn. It costs
-nothing to ask: the backend opens every stream with a snapshot, before it says
+`usage` reports every account's quota as a table, the serving account's plan
+above it. It costs nothing to ask: the backend opens every stream with a snapshot, before it says
 anything about the response, so the figure rides along with a turn already being
 made and is never polled. Before any turn has been made it says so rather than
 answering with zeroes. `--json` emits the snapshot as it stands, for a status
@@ -412,6 +415,20 @@ about which account serves turns moves, a failure belongs to the row it
 happened on, and an unselected account's expired grant is never refreshed. The
 document `--json` emits is the same one either way — asking changes the figures
 in it, never its shape.
+
+**One row per window, and the long sentences under the table rather than on
+it.** An account can hold a five-hour window beside a seven-day one, each with
+its own reset, so the window rows after the first repeat neither the name nor
+the freshness — those belong to the account. USED carries the percentage and
+the window it is of, plus the provider's own words about that window where it
+stated any. RESETS counts down to the reset the provider gave, or says the
+window has already reset. SOURCE is `last turn` or `asked`. AS OF is the age of
+the figure, and on a row that has none it is the reason in a cell — `no turn
+yet`, `no relayed turn yet`, `per token` for a metered account, `not reported`
+for a provider that states none. A metered row's USED cell carries the tally of
+§6.1 instead of a percentage, because it has no ceiling to state one against.
+The explanation of an empty row is one note under the table, said once however
+many rows are empty, and it names `usage --refresh` as the way to fill them.
 
 **A figure per account, not per daemon.** A pinned tier's turns spend the
 account it names (`proxy-behavior.md` §7.1), so a daemon can hold two live
@@ -894,7 +911,7 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 | `accounts.rename` | `{"account": from, "name": to}`, the name this daemon calls an account by, and whether an account section moved with it; the grant and the account id are untouched | no — v0.3 |
 | `models` | catalog, whether it is the fallback list, and whether it was fetched for an account other than the one serving turns | yes |
 | `tiers` | tier mapping | no — was `tiers.get` |
-| `usage` | the serving account's quota as of its last turn, or that no turn has been made, plus `models` — the ids this daemon serves — and `accounts`, one entry per stored account with its own figure, its freshness, and `unavailable` where it has none. Each window carries `used_percent`, `window_minutes`, `resets_at`, and — where the provider stated them — `status`, `surpassed_threshold`, `representative`, and `label` for a window no duration identifies | yes |
+| `usage` | the serving account's quota as of its last turn, or that no turn has been made, plus `models` — the ids this daemon serves — and `accounts`, one entry per stored account with its own figure, its freshness, and `unavailable` where it has none. Each account entry also carries `served_tokens`, the §6.1 tally, and an entry with no figure carries `reason` beside its `detail` — `no_turn`, `no_relayed_turn`, `metered`, `unknown_key_kind`, `not_reported` — the same fact in a word, so a renderer never matches on prose. Each window carries `used_percent`, `window_minutes`, `resets_at`, and — where the provider stated them — `status`, `surpassed_threshold`, `representative`, and `label` for a window no duration identifies | yes |
 | `usage.refresh` | asks the backend for a figure now, **per account** — every stored account whose credential can hold one, each on its own credential and each recorded under its own name. The answer is the serving account's outcome plus `accounts`, one entry per stored account carrying either its figure or the sentence saying why it has none. Nothing about which account serves turns is read or changed | yes |
 | `env` | the §2.2 block: `variables`, and `settings` always present | yes |
 | `shutdown` | `{"stopping": true, "version": ...}`, then the process goes once the answer is written | yes |
@@ -1188,6 +1205,11 @@ a second holder of the same grant would be left holding a token retired by a
 sweep it never asked for. Such a row says its grant has expired and what to do
 about it. The serving account is the exception, because every turn already
 refreshes it.
+
+**The tier table is printed in ladder order.** `tiers` is an unordered object
+and arrives sorted by name, which is `fable, haiku, opus, sonnet` — an order
+nothing else uses. `status` prints `opus, sonnet, haiku, fable`, which is the
+order `models` already lists the same four tiers in.
 
 **`status` reports the version of the build serving the socket.** It is not
 necessarily the build that asked: one file is both, and replacing it does not

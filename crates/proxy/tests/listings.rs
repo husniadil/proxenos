@@ -705,6 +705,28 @@ fn the_tier_rows_lead_with_a_header_and_carry_state_in_a_column() {
     );
 }
 
+/// The four rows are the ladder, in the order the ladder is spoken in.
+///
+/// The payload is an unordered object and arrives sorted by name, so without
+/// this the report printed `fable, haiku, opus, sonnet` — which is only how
+/// they sort, and is not the order the model list prints the same four in.
+#[test]
+fn the_tier_rows_are_in_ladder_order() {
+    let rendered = proxenos::render::status_at(&a_daemon(), NOW);
+    let tiers: Vec<String> = rendered
+        .lines()
+        .skip_while(|line| !line.starts_with("TIER"))
+        .skip(1)
+        .take(4)
+        .filter_map(|line| cells(line).first().map(|cell| (*cell).to_owned()))
+        .collect();
+    assert_eq!(
+        tiers,
+        vec!["opus", "sonnet", "haiku", "fable"],
+        "{rendered}"
+    );
+}
+
 /// An ordinary mapping has no state to report, and gets no column for one.
 ///
 /// A header over four blank cells is a column the reader looks at and learns
