@@ -30,11 +30,11 @@ use std::path::PathBuf;
 
 /// Where an operator signs a Codex profile in, named in every refusal that
 /// wants them to.
-const CODEX_REMEDY: &str = "in the ChatGPT app or with `codex login`";
+pub(crate) const CODEX_REMEDY: &str = "in the ChatGPT app or with `codex login`";
 
 /// Where an operator signs a Claude profile in. Running the client once is the
 /// whole of it: it completes the sign-in and writes the item this reads.
-const CLAUDE_REMEDY: &str = "by running `claude` in that profile";
+pub(crate) const CLAUDE_REMEDY: &str = "by running `claude` in that profile";
 
 /// The `auth_mode` a ChatGPT subscription is filed under.
 ///
@@ -365,5 +365,29 @@ pub fn source(provider: Provider, host: Host, config_dir: Option<&Path>, home: &
                 .join(CODEX_CREDENTIALS_FILE),
         },
         Provider::Anthropic => Source::Claude(claude_source(host, config_dir, home)),
+    }
+}
+
+pub mod read;
+
+impl Source {
+    /// What to call this source in a message: the one an operator can go and
+    /// look at. Never any part of what it holds.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Codex { auth_json } => auth_json.display().to_string(),
+            Self::Claude(ClaudeSource::File { path }) => path.display().to_string(),
+            Self::Claude(ClaudeSource::Keychain { service }) => {
+                format!("keychain item `{service}`")
+            }
+        }
+    }
+}
+
+/// What to tell an operator whose profile holds no grant, by provider.
+pub(crate) fn remedy(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Codex => CODEX_REMEDY,
+        Provider::Anthropic => CLAUDE_REMEDY,
     }
 }

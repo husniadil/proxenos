@@ -542,3 +542,137 @@ fn naming_the_stock_claude_directory_is_a_different_profile() {
 
     assert_ne!(stock, named);
 }
+
+// --- reading one profile's grant ------------------------------------------
+//
+// Through a fake reader: the rules being checked are about what a source
+// yields, and a test that needs a real keychain and a signed-in profile is a
+// test that stops running.
+
+use proxenos::auth::borrowed::read;
+use proxenos::error::ProxyError;
+use std::collections::HashMap;
+
+struct FakeReader(HashMap<String, String>);
+
+impl FakeReader {
+    fn holding(source: &borrowed::Source, raw: &str) -> Self {
+        Self(HashMap::from([(source.label(), raw.to_owned())]))
+    }
+
+    fn empty() -> Self {
+        Self(HashMap::new())
+    }
+}
+
+impl read::GrantReader for FakeReader {
+    fn read(&self, source: &borrowed::Source) -> Result<Option<String>, ProxyError> {
+        Ok(self.0.get(&source.label()).cloned())
+    }
+}
+
+fn profile(name: &str, provider: Provider, config_dir: Option<&str>) -> read::Profile {
+    read::Profile {
+        name: name.to_owned(),
+        provider,
+        config_dir: config_dir.map(PathBuf::from),
+    }
+}
+
+const HOME: &str = "/Users/husni";
+
+fn read_grant(
+    reader: &dyn read::GrantReader,
+    profile: &read::Profile,
+) -> Result<read::Grant, ProxyError> {
+    read::grant(reader, profile, borrowed::Host::MacOs, Path::new(HOME))
+}
+
+/// A Codex profile describes its account from the id token it carries.
+#[test]
+fn a_codex_grant_is_described_by_its_id_token() {
+    let profile = profile("work", Provider::Codex, Some("/profiles/work"));
+    let source = profile.source(borrowed::Host::MacOs, Path::new(HOME));
+    let raw = auth_json(serde_json::json!({
+        "id_token": token_with(serde_json::json!({
+            "email": "someone@example.com",
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "acct_123",
+                "chatgpt_plan_type": "team",
+            },
+        })),
+        "access_token": access_token(1_800_000_000),
+        "refresh_token": "rt.1.borrowed",
+        "account_id": "acct_123",
+    }));
+
+    let grant = read_grant(&FakeReader::holding(&source, &raw), &profile).expect("reads");
+
+    assert_eq!(grant.plan.as_deref(), Some("team"));
+    assert_eq!(grant.email.as_deref(), Some("someone@example.com"));
+    assert_eq!(grant.refresh_token_expires_at, None);
+}
+
+/// A Claude grant carries a subscription type and no email, and the second
+/// expiry that decides whether a refresh can be asked for at all.
+#[test]
+fn a_claude_grant_carries_its_plan_and_its_refresh_deadline() {
+    let profile = profile("personal", Provider::Anthropic, None);
+    let source = profile.source(borrowed::Host::MacOs, Path::new(HOME));
+    let raw = keychain_blob(serde_json::json!({
+        "accessToken": "sk-ant-oat01-borrowed",
+        "refreshToken": "sk-ant-ort01-borrowed",
+        "expiresAt": 1_800_000_000_000u64,
+        "refreshTokenExpiresAt": 1_890_000_000_000u64,
+        "subscriptionType": "max",
+    }));
+
+    let grant = read_grant(&FakeReader::holding(&source, &raw), &profile).expect("reads");
+
+    assert_eq!(grant.plan.as_deref(), Some("max"));
+    assert_eq!(grant.email, None);
+    assert_eq!(grant.refresh_token_expires_at, Some(1_890_000_000));
+}
+
+/// A source that is not there at all is the same answer as one holding
+/// nothing usable: sign in to that profile. The remedy names the right program.
+#[test]
+fn an_absent_source_reads_as_a_refusal_naming_the_remedy() {
+    let codex = read_grant(
+        &FakeReader::empty(),
+        &profile("work", Provider::Codex, Some("/profiles/work")),
+    )
+    .expect_err("nothing is there");
+    assert!(codex.to_string().contains("codex login"), "was: {codex}");
+    assert!(
+        codex.to_string().contains("/profiles/work/auth.json"),
+        "was: {codex}"
+    );
+
+    let claude = read_grant(
+        &FakeReader::empty(),
+        &profile("personal", Provider::Anthropic, None),
+    )
+    .expect_err("nothing is there");
+    assert!(claude.to_string().contains("`claude`"), "was: {claude}");
+    assert!(
+        claude.to_string().contains("Claude Code-credentials"),
+        "was: {claude}"
+    );
+}
+
+/// A source holding something unreadable refuses with the store named, rather
+/// than being reported as a profile that does not exist.
+#[test]
+fn an_unreadable_source_names_the_store() {
+    let profile = profile("work", Provider::Codex, Some("/profiles/work"));
+    let source = profile.source(borrowed::Host::MacOs, Path::new(HOME));
+
+    let error =
+        read_grant(&FakeReader::holding(&source, "{ not json"), &profile).expect_err("unreadable");
+
+    assert!(
+        error.to_string().contains("/profiles/work/auth.json"),
+        "was: {error}"
+    );
+}
