@@ -1733,3 +1733,86 @@ fn codex_auth(expires_at: u64) -> String {
         "account_id": "acct_123",
     }))
 }
+
+// --- the reader that actually touches the machine -------------------------
+//
+// Everything above is proven against grants that were never written anywhere,
+// which is the point of the trait. What that leaves unproven is the one
+// implementation that does touch a disk and a keychain, so these read real
+// bytes off a real filesystem.
+//
+// The keychain's *success* path is not here and cannot be: proving it needs an
+// item in the operator's own login keychain, which a test suite has no
+// business writing. What is proven is the answer that decides whether a
+// profile reads as absent or as broken.
+
+use proxenos::auth::borrowed::read::GrantReader as _;
+use proxenos::auth::borrowed::read::HostReader;
+
+/// A profile directory that was signed into: the file is read back verbatim,
+/// so what the parser above receives is what the owning program wrote.
+#[test]
+fn the_host_reader_reads_a_profile_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("auth.json");
+    let raw = codex_auth(NOW + 3_600);
+    std::fs::write(&path, &raw).expect("written");
+
+    let read = HostReader
+        .read(&borrowed::Source::Codex { auth_json: path })
+        .expect("the file is readable");
+
+    assert_eq!(read.as_deref(), Some(raw.as_str()));
+}
+
+/// A directory that was never signed into is absent, not an error: the store
+/// above turns that into "sign in to that profile", which is what it is.
+#[test]
+fn a_profile_that_was_never_signed_into_reads_as_absent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let read = HostReader
+        .read(&borrowed::Source::Claude(borrowed::ClaudeSource::File {
+            path: dir.path().join(".credentials.json"),
+        }))
+        .expect("absent is an answer");
+
+    assert_eq!(read, None);
+}
+
+/// Anything else is reported, naming the path. A profile that cannot be read
+/// is a different problem from one that was never signed into, and the two
+/// must not arrive as the same sentence.
+#[test]
+fn a_profile_that_cannot_be_read_names_the_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // A directory where a file belongs: readable to `stat`, refused to `read`.
+    let path = dir.path().join("auth.json");
+    std::fs::create_dir(&path).expect("created");
+
+    let refusal = HostReader
+        .read(&borrowed::Source::Codex {
+            auth_json: path.clone(),
+        })
+        .expect_err("this is not a grant")
+        .to_string();
+
+    assert!(refusal.contains(&path.display().to_string()), "{refusal}");
+}
+
+/// A keychain item that is not there is absent rather than a failure, which is
+/// `security` exiting 44. Read wrong, every Claude profile on a machine reads
+/// as broken instead of as not signed in.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_keychain_item_that_is_not_there_reads_as_absent() {
+    let read = HostReader
+        .read(&borrowed::Source::Claude(
+            borrowed::ClaudeSource::Keychain {
+                service: "proxenos-no-such-item-9f3c2a".to_owned(),
+            },
+        ))
+        .expect("absent is an answer");
+
+    assert_eq!(read, None);
+}
