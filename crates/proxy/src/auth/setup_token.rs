@@ -85,6 +85,11 @@ pub trait Guide {
     fn name(&mut self) -> io::Result<Option<String>>;
     /// Confirm what was stored. Never the token.
     fn stored(&mut self, name: &str) -> io::Result<()>;
+    /// Which provider this guide files under, where it files under one. The
+    /// setup-token flow always means anthropic, so it does not answer.
+    fn provider(&self) -> Option<Provider> {
+        None
+    }
 }
 
 /// Collect a setup token and store it as a named Anthropic account.

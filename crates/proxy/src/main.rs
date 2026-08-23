@@ -307,43 +307,17 @@ async fn login(args: cli::LoginArgs) -> Result<()> {
 
 /// Store a key, read from stdin.
 ///
-/// **Never from an argument.** A command line is visible to every process on
-/// the machine and lands in the shell's history file; §8 keeps credentials out
-/// of argv, and this is the path that would break that rule if it took one.
-///
-/// The name is required: a key carries no account id to be named by, and the
-/// name is what selects it afterwards.
+/// The reading half lives in `auth::key_login`, over the same `Guide` seam
+/// `--setup-token` uses, so the tty and pipe halves are testable without a
+/// terminal.
 async fn store_key(
     store: &Arc<dyn proxenos::auth::store::AccountStore>,
     label: Option<&str>,
     provider: proxenos::auth::store::Provider,
 ) -> Result<()> {
-    let Some(name) = label else {
-        anyhow::bail!(
-            "name the account with `--as NAME`: a key carries no id to be named by, \
-             and the name is what `accounts --use` takes"
-        );
-    };
-
-    // Silence while reading a tty reads as a hang: nothing has been printed,
-    // and the only hint that ctrl-d is wanted arrives after an empty read —
-    // once the operator has already guessed. Said to stderr and only where a
-    // person is typing, so a piped key stays exactly as it was.
-    if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        eprintln!("Paste the {} key, then press ctrl-d:", provider.as_str());
-    }
-
-    let mut key = String::new();
-    std::io::Read::read_to_string(&mut std::io::stdin(), &mut key)
-        .map_err(|error| anyhow::anyhow!("could not read the key from stdin: {error}"))?;
-    let key = key.trim();
-    if key.is_empty() {
-        anyhow::bail!("no key on stdin; pipe it in, or paste it and end with ctrl-d");
-    }
-
-    store.add_key(name, key, provider)?;
-    println!("Stored a {} key as {name}.", provider.as_str());
-    report_serving(store, name).await;
+    let mut guide = proxenos::auth::key_login::Terminal::stdio(provider);
+    let name = proxenos::auth::key_login::run(store.as_ref(), &mut guide, label)?;
+    report_serving(store, &name).await;
     Ok(())
 }
 

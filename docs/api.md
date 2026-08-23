@@ -131,7 +131,11 @@ and `--setup-token` — and in the daemon's `login` (§3) as well as the CLI's:
 which flag stored the credential is not a reason for it to mean something
 different. `--key` stores a key read from **stdin**
 instead of starting an authorization: no browser, and the secret never appears
-in a command line. `--as NAME` is required with it, because a key carries no id
+in a command line. Where stdin is a terminal it says on **stderr** what it is
+waiting for and reads from a **hidden prompt**, the same way `--setup-token`
+does and over the same seam; where stdin is a pipe it says nothing at all, so
+`printf '%s' "$KEY" | proxenos login --key ...` writes to stdout only the line
+naming what it stored. `--as NAME` is required with it, because a key carries no id
 to be named by. `--provider` states which provider's endpoints the key is spent
 against — `codex` by default, `anthropic` for a key that serves turns through
 the relay (`proxy-behavior.md` §9). Storing a key under a name that already
