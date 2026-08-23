@@ -6,7 +6,7 @@
 //!
 //! Silence while reading a tty reads as a hang. The prompt is written to
 //! **stderr** and only where a person is typing, so a piped key stays byte for
-//! byte what it was: `printf '%s' "$KEY" | proxenos login --key ...` prints
+//! byte what it was: `printf '%s' "$KEY" | proxenos accounts add-key NAME --provider P` prints
 //! nothing that a reader of its stdout did not already see.
 
 use std::io::{self, IsTerminal, Write};
@@ -41,28 +41,18 @@ pub trait Guide {
     }
 }
 
-/// Store a key under `label`, reading it through `guide`.
+/// Store a key under `name`, reading it through `guide`.
 ///
-/// Returns the name it was filed under, which is the string `accounts --use`
+/// Returns the name it was filed under, which is the string `accounts use`
 /// takes.
 ///
 /// **Never from an argument.** A command line is visible to every process on
 /// the machine and lands in the shell's history file; §8 keeps credentials out
 /// of argv, and this is the path that would break that rule if it took one.
-pub fn run(
-    store: &dyn AccountStore,
-    guide: &mut dyn Guide,
-    label: Option<&str>,
-) -> anyhow::Result<String> {
-    // The name is required: a key carries no account id to be named by, and
-    // the name is what selects it afterwards.
-    let Some(name) = label else {
-        anyhow::bail!(
-            "name the account with `--as NAME`: a key carries no id to be named by, \
-             and the name is what `accounts --use` takes"
-        );
-    };
-
+pub fn run(store: &dyn AccountStore, guide: &mut dyn Guide, name: &str) -> anyhow::Result<String> {
+    // The name is a positional on `accounts add-key`, so it cannot be missing
+    // by the time this is called: a key carries no account id to be named by,
+    // and the name is what selects it afterwards.
     guide.explain()?;
     let key = guide.token()?;
     let key = key.trim();
@@ -144,7 +134,7 @@ impl Guide for Terminal {
     }
 
     fn name(&mut self) -> io::Result<Option<String>> {
-        // `--key` never asks: `--as NAME` is required, and the flow refuses
+        // `add-key` never asks: NAME is a positional, and the verb refuses
         // before anything is read without one.
         Ok(None)
     }
@@ -238,7 +228,7 @@ mod tests {
         let (_home, store) = temp_store();
         let (mut guide, out, err) = terminal(Provider::Codex, false, "sk-test-piped\n");
 
-        let name = run(store.as_ref(), &mut guide, Some("robot")).expect("a stored key");
+        let name = run(store.as_ref(), &mut guide, "robot").expect("a stored key");
 
         assert_eq!(name, "robot");
         assert_eq!(out.text(), "Stored a codex key as robot.\n");
@@ -252,7 +242,7 @@ mod tests {
         let (_home, store) = temp_store();
         let (mut guide, out, err) = terminal(Provider::Anthropic, true, "sk-test-typed");
 
-        run(store.as_ref(), &mut guide, Some("personal-claude")).expect("a stored key");
+        run(store.as_ref(), &mut guide, "personal-claude").expect("a stored key");
 
         let said = err.text();
         assert!(said.contains("Paste the anthropic key"), "{said}");
@@ -269,24 +259,10 @@ mod tests {
         let (_home, store) = temp_store();
         let (mut guide, out, err) = terminal(Provider::Codex, true, "sk-unguessable-4d1f7c");
 
-        run(store.as_ref(), &mut guide, Some("robot")).expect("a stored key");
+        run(store.as_ref(), &mut guide, "robot").expect("a stored key");
 
         assert!(!out.text().contains("4d1f7c"), "{}", out.text());
         assert!(!err.text().contains("4d1f7c"), "{}", err.text());
-    }
-
-    /// A name is required before anything is read: there is nothing to file a
-    /// key under, and asking for a secret first would waste the paste.
-    #[test]
-    fn a_key_without_a_name_is_refused_before_it_is_read() {
-        let (_home, store) = temp_store();
-        let (mut guide, out, err) = terminal(Provider::Codex, true, "sk-test");
-
-        let error = run(store.as_ref(), &mut guide, None).expect_err("no name");
-
-        assert!(error.to_string().contains("--as NAME"), "{error}");
-        assert_eq!(out.text(), "");
-        assert_eq!(err.text(), "");
     }
 
     /// The stem `sk-ant-oat` belongs to two credentials with lifetimes three
@@ -297,7 +273,7 @@ mod tests {
         let (_home, store) = temp_store();
         let (mut guide, out, err) = terminal(Provider::Anthropic, true, "sk-ant-oat01-typed");
 
-        run(store.as_ref(), &mut guide, Some("personal-claude")).expect("a stored key");
+        run(store.as_ref(), &mut guide, "personal-claude").expect("a stored key");
 
         let said = err.text();
         assert!(said.contains("two different credentials"), "{said}");
@@ -314,7 +290,7 @@ mod tests {
         let (_home, store) = temp_store();
         let (mut guide, out, err) = terminal(Provider::Anthropic, false, "sk-ant-oat01-piped\n");
 
-        run(store.as_ref(), &mut guide, Some("personal-claude")).expect("a stored key");
+        run(store.as_ref(), &mut guide, "personal-claude").expect("a stored key");
 
         assert_eq!(out.text(), "Stored a anthropic key as personal-claude.\n");
         assert_eq!(err.text(), "");
@@ -327,7 +303,7 @@ mod tests {
         let (_home, store) = temp_store();
         let (mut guide, _out, err) = terminal(Provider::Codex, true, "sk-ant-oat01-typed");
 
-        run(store.as_ref(), &mut guide, Some("robot")).expect("a stored key");
+        run(store.as_ref(), &mut guide, "robot").expect("a stored key");
 
         assert!(
             !err.text().contains("two different credentials"),
@@ -342,7 +318,7 @@ mod tests {
         let (_home, store) = temp_store();
         let (mut guide, _out, _err) = terminal(Provider::Codex, false, "   \n");
 
-        let error = run(store.as_ref(), &mut guide, Some("robot")).expect_err("no key");
+        let error = run(store.as_ref(), &mut guide, "robot").expect_err("no key");
 
         assert!(error.to_string().contains("no key on stdin"), "{error}");
     }

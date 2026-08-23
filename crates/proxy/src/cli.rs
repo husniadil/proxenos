@@ -15,9 +15,7 @@ pub struct Cli {
 pub enum Command {
     /// Start the daemon.
     Run(RunArgs),
-    /// Authenticate. Adds an account; it never replaces one.
-    Login(LoginArgs),
-    /// Stored accounts, and which one serves turns.
+    /// Stored accounts: list them, add one, choose one, drop one.
     Accounts(AccountsArgs),
     /// Connection, tier mapping, and whether the catalog was reachable.
     Status,
@@ -83,79 +81,107 @@ pub enum SupervisorAction {
     Status,
 }
 
+/// The account verbs.
+///
+/// One sub-verb per thing an operator does, each naming its account
+/// positionally. The surface before this used flags as actions — `--use`,
+/// `--forget` and `--rename` on one struct, and a `login` whose two unrelated
+/// halves were told apart by `--key` and `--profile` — so what a command did
+/// was decided by which flags were present, and the account it did it to was
+/// spelled `--as` in one verb and `--use` in another. Three words for one
+/// thing is three things to remember.
 #[derive(Debug, clap::Args)]
-pub struct LoginArgs {
-    /// Store a key read from stdin.
-    ///
-    /// The only thing `login` does. A subscription grant belongs to the program
-    /// whose profile holds it and is read from there (`proxy-behavior.md`
-    /// §8.4), so there is nothing else here to start.
-    ///
-    /// The secret arrives on stdin and never as an argument: an argument is
-    /// visible to every process on the machine and lands in shell history.
+pub struct AccountsArgs {
+    #[command(subcommand)]
+    pub action: Option<AccountsAction>,
+    /// Print the socket's own payload instead of the table.
     #[arg(long)]
-    pub key: bool,
+    pub json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AccountsAction {
+    /// Stored accounts, and which one serves turns. The default.
+    List(ListArgs),
     /// Sign in to a new profile of the owning program, and declare it.
     ///
     /// Runs that program's own login against a directory this daemon then
     /// borrows the grant from. Nothing here sees a token: the client
     /// authenticates and writes, and this side reads the profile afterwards
-    /// and writes the `[profiles]` entry naming it.
-    #[arg(long, conflicts_with = "key")]
-    pub profile: bool,
-    /// Where the new profile lives. Only with `--profile`.
+    /// and writes the `[profiles]` entry naming it. **This daemon obtains no
+    /// subscription grant of its own** — there is no authorization flow here
+    /// and no callback port.
+    Login(AccountLoginArgs),
+    /// Store an API key, read from stdin.
+    ///
+    /// The secret arrives on stdin and never as an argument: an argument is
+    /// visible to every process on the machine and lands in shell history.
+    AddKey(AddKeyArgs),
+    /// Serve every following turn as this account.
+    Use(NamedArgs),
+    /// Change what an account is called here, leaving its grant alone.
+    Rename(RenameArgs),
+    /// Remove this account, leaving the rest usable.
+    Remove(NamedArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ListArgs {
+    /// Print the socket's own payload instead of the table.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct AccountLoginArgs {
+    /// What to call the account this login produces.
+    pub name: String,
+    /// Which program's profile this is, and therefore which endpoint the
+    /// grant inside it is spent against.
+    ///
+    /// Required rather than defaulted. A login that silently chose one signs
+    /// in to a program the operator may not have meant, and the wrong answer
+    /// is only found out later, from an account that cannot serve.
+    #[arg(long, value_enum)]
+    pub provider: proxenos::auth::store::Provider,
+    /// Where the new profile lives.
     ///
     /// Absent, it goes under this daemon's own directory. A path given here is
     /// what gets declared, so it is also how an existing profile directory —
     /// one another tool made — is signed into and adopted.
-    // `conflicts_with` rather than `requires`: a flag that defaults to false
-    // reads as present to clap, so requiring `--profile` would never refuse
-    // anything. What has to be refused is the pairing that means nothing — a
-    // key has no directory — and that is a conflict.
-    #[arg(long, value_name = "DIR", conflicts_with = "key")]
+    #[arg(long, value_name = "DIR")]
     pub path: Option<std::path::PathBuf>,
-    /// What to call the account this authorization produces.
+}
+
+#[derive(Debug, clap::Args)]
+pub struct AddKeyArgs {
+    /// What to call the account this key becomes.
     ///
-    /// Without one it is named by the account id the grant carries. A label is
-    /// a local name for the account and never reaches the backend.
-    #[arg(long = "as", value_name = "NAME")]
-    pub label: Option<String>,
-    /// Which provider this login is about.
+    /// Required, because a key carries no id to be named by.
+    pub name: String,
+    /// Whose endpoints the stored key is spent against.
     ///
-    /// With `--key`, whose endpoints the stored key is spent against. With
-    /// `--profile`, which program is run to sign the profile in. The default
-    /// is the provider this project started with, so a login that names none
-    /// does what it always did.
-    #[arg(long, value_enum, default_value_t = proxenos::auth::store::Provider::Codex)]
+    /// Required rather than defaulted: the two providers refuse each other's
+    /// credentials, and a key that silently claimed the wrong one fails as an
+    /// authentication error naming the credential rather than the choice.
+    #[arg(long, value_enum)]
     pub provider: proxenos::auth::store::Provider,
 }
 
 #[derive(Debug, clap::Args)]
-pub struct AccountsArgs {
-    /// Serve every following turn as this account.
-    ///
-    /// A switch rather than a listing, which is why it is a flag: an account
-    /// changed by a mistyped positional is a turn billed to the wrong one.
-    #[arg(long = "use", value_name = "NAME")]
-    pub select: Option<String>,
-    /// Forget this account, leaving the rest usable.
-    ///
-    /// The name is required: an account is gone once this returns, and the
-    /// operator naming which one is the whole safeguard.
-    #[arg(long = "forget", value_name = "NAME", conflicts_with = "select")]
-    pub forget: Option<String>,
-    /// Change what an account is called here, leaving its grant alone.
-    ///
-    /// Both halves, old name first. A login carrying no `--as` names the
-    /// account by the id the backend knows it by, and changing that should not
-    /// cost an authorization.
-    #[arg(
-        long = "rename",
-        value_names = ["FROM", "TO"],
-        num_args = 2,
-        conflicts_with_all = ["select", "forget"]
-    )]
-    pub rename: Option<Vec<String>>,
+pub struct NamedArgs {
+    /// The account this is about.
+    pub name: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct RenameArgs {
+    /// The account as it is called now.
+    #[arg(value_name = "OLD")]
+    pub from: String,
+    /// What to call it instead.
+    #[arg(value_name = "NEW")]
+    pub to: String,
 }
 
 #[derive(Debug, clap::Args)]
@@ -328,59 +354,79 @@ mod tests {
         assert!(!args.detach);
     }
 
-    /// A key is not an authorization, and the secret is never an argument.
+    /// The secret is never an argument. A command line is visible to every
+    /// process on the machine and lands in shell history, so there is nowhere
+    /// on it to put a key.
     #[test]
-    fn login_can_store_a_key_instead_of_starting_a_flow() {
-        let cli = Cli::try_parse_from(["proxenos", "login", "--key", "--as", "billing"]).unwrap();
-        let Command::Login(args) = cli.command else {
-            panic!("login should parse");
-        };
-        assert!(args.key);
-        assert_eq!(args.label.as_deref(), Some("billing"));
-
-        // There is nowhere to put a secret on the command line.
-        assert!(Cli::try_parse_from(["proxenos", "login", "--key", "sk-secret"]).is_err());
-    }
-
-    /// A stored key names the provider it is spent against, and defaults to
-    /// the one this project started with.
-    ///
-    /// `roadmap.md` v0.6.0 — routing reads the provider off the account, so
-    /// this flag is what puts an account on the second provider's path at all.
-    /// The secret still has nowhere to go on the command line: the provider is
-    /// a name, and the key stays on stdin.
-    #[test]
-    fn login_key_names_the_provider_it_is_for() {
+    fn add_key_takes_a_name_and_never_the_secret() {
         let cli = Cli::try_parse_from([
             "proxenos",
+            "accounts",
+            "add-key",
+            "billing",
+            "--provider",
+            "codex",
+        ])
+        .unwrap();
+        let Command::Accounts(args) = cli.command else {
+            panic!("accounts should parse");
+        };
+        let Some(AccountsAction::AddKey(args)) = args.action else {
+            panic!("add-key should parse");
+        };
+        assert_eq!(args.name, "billing");
+        assert_eq!(args.provider, proxenos::auth::store::Provider::Codex);
+
+        // A second positional is the only place a secret could go, and there
+        // is no second positional.
+        assert!(
+            Cli::try_parse_from([
+                "proxenos",
+                "accounts",
+                "add-key",
+                "billing",
+                "--provider",
+                "codex",
+                "sk-secret",
+            ])
+            .is_err()
+        );
+    }
+
+    /// Both account-adding verbs state their provider. Neither defaults: the
+    /// two providers refuse each other's credentials, and a silent default is
+    /// found out from an account that cannot serve.
+    #[test]
+    fn adding_an_account_states_its_provider() {
+        assert!(Cli::try_parse_from(["proxenos", "accounts", "add-key", "relay"]).is_err());
+        assert!(Cli::try_parse_from(["proxenos", "accounts", "login", "work"]).is_err());
+
+        let cli = Cli::try_parse_from([
+            "proxenos",
+            "accounts",
             "login",
-            "--key",
-            "--as",
-            "relay",
+            "work",
             "--provider",
             "anthropic",
         ])
         .unwrap();
-        let Command::Login(args) = cli.command else {
+        let Command::Accounts(args) = cli.command else {
+            panic!("accounts should parse");
+        };
+        let Some(AccountsAction::Login(args)) = args.action else {
             panic!("login should parse");
         };
+        assert_eq!(args.name, "work");
         assert_eq!(args.provider, proxenos::auth::store::Provider::Anthropic);
-
-        // Naming none is the provider this verb has always meant.
-        let cli = Cli::try_parse_from(["proxenos", "login", "--key", "--as", "billing"]).unwrap();
-        let Command::Login(args) = cli.command else {
-            panic!("login should parse");
-        };
-        assert_eq!(args.provider, proxenos::auth::store::Provider::Codex);
+        assert_eq!(args.path, None);
 
         // A provider this proxy has no path for is refused at the boundary
         // rather than stored and discovered on the first turn.
         assert!(
             Cli::try_parse_from([
                 "proxenos",
-                "login",
-                "--key",
-                "--as",
+                "accounts",
+                "add-key",
                 "x",
                 "--provider",
                 "gemini",
@@ -389,102 +435,81 @@ mod tests {
         );
     }
 
-    /// The two kinds of login are different verbs wearing one name, and the
-    /// parser is what keeps them apart: one stores a secret this daemon keeps,
-    /// the other runs somebody else's client. A path belongs only to the
-    /// second.
+    /// A profile login names where the profile goes, which is also how a
+    /// directory another tool made is adopted.
     #[test]
-    fn login_separates_signing_in_to_a_profile_from_storing_a_key() {
+    fn a_profile_login_can_name_its_directory() {
         let cli = Cli::try_parse_from([
             "proxenos",
+            "accounts",
             "login",
-            "--profile",
-            "--as",
             "work",
             "--provider",
-            "anthropic",
+            "codex",
+            "--path",
+            "/profiles/work",
         ])
         .unwrap();
-        let Command::Login(args) = cli.command else {
+        let Command::Accounts(args) = cli.command else {
+            panic!("accounts should parse");
+        };
+        let Some(AccountsAction::Login(args)) = args.action else {
             panic!("login should parse");
         };
-        assert!(args.profile);
-        assert!(!args.key);
-        assert_eq!(args.label.as_deref(), Some("work"));
-
-        assert!(Cli::try_parse_from(["proxenos", "login", "--profile", "--key"]).is_err());
-        // A path names where a profile goes, and a key has no directory.
-        assert!(Cli::try_parse_from(["proxenos", "login", "--key", "--path", "/tmp/x"]).is_err());
+        assert_eq!(
+            args.path.as_deref(),
+            Some(std::path::Path::new("/profiles/work"))
+        );
     }
 
-    /// `--setup-token` is gone with the flow behind it, and the parser is where
-    /// that has to be true: a flag still accepted here would take an operator
-    /// as far as a refusal from somewhere else, about something else.
+    /// Top-level `login` is gone with the flag pair that told its two halves
+    /// apart, and the parser is where that has to be true: a verb still
+    /// accepted here would take an operator as far as a refusal from somewhere
+    /// else, about something else. `--setup-token` went the same way, with the
+    /// flow behind it.
     #[test]
-    fn login_no_longer_takes_setup_token() {
+    fn the_top_level_login_verb_is_gone() {
+        assert!(Cli::try_parse_from(["proxenos", "login", "--key", "--as", "billing"]).is_err());
+        assert!(Cli::try_parse_from(["proxenos", "login", "--profile", "--as", "work"]).is_err());
         assert!(Cli::try_parse_from(["proxenos", "login", "--setup-token"]).is_err());
     }
 
-    /// A login names the account it produces, so an operator holding two of
-    /// them has something to call each.
-    #[test]
-    fn login_takes_a_label() {
-        let cli = Cli::try_parse_from(["proxenos", "login", "--as", "work"]).unwrap();
-        let Command::Login(args) = cli.command else {
-            panic!("login should parse");
-        };
-        assert_eq!(args.label.as_deref(), Some("work"));
-
-        let cli = Cli::try_parse_from(["proxenos", "login"]).unwrap();
-        let Command::Login(args) = cli.command else {
-            panic!("login should parse");
-        };
-        assert_eq!(args.label, None);
-    }
-
-    /// Renaming takes both halves and stands alone. One of them missing would
-    /// leave the command guessing which account it was about.
+    /// Renaming takes both halves. One of them missing would leave the
+    /// command guessing which account it was about.
     #[test]
     fn accounts_renames_with_both_halves_or_not_at_all() {
-        let cli = Cli::try_parse_from(["proxenos", "accounts", "--rename", "old", "new"]).unwrap();
+        let cli = Cli::try_parse_from(["proxenos", "accounts", "rename", "old", "new"]).unwrap();
         let Command::Accounts(args) = cli.command else {
             panic!("accounts should parse");
         };
-        assert_eq!(
-            args.rename.as_deref(),
-            Some(["old".to_owned(), "new".to_owned()].as_slice())
-        );
+        let Some(AccountsAction::Rename(args)) = args.action else {
+            panic!("rename should parse");
+        };
+        assert_eq!(args.from, "old");
+        assert_eq!(args.to, "new");
 
-        assert!(Cli::try_parse_from(["proxenos", "accounts", "--rename", "old"]).is_err());
-        assert!(
-            Cli::try_parse_from([
-                "proxenos", "accounts", "--rename", "old", "new", "--use", "other"
-            ])
-            .is_err()
-        );
+        assert!(Cli::try_parse_from(["proxenos", "accounts", "rename", "old"]).is_err());
+        assert!(Cli::try_parse_from(["proxenos", "accounts", "rename"]).is_err());
     }
 
-    /// Forgetting names its account and cannot be combined with switching:
-    /// one call, one thing, and the destructive one always says what it is
-    /// about to lose.
+    /// Removing names its account. An account is gone once this returns, and
+    /// the operator naming which one is the whole safeguard.
     #[test]
-    fn accounts_forgets_only_the_account_it_is_given() {
-        let cli = Cli::try_parse_from(["proxenos", "accounts", "--forget", "spare"]).unwrap();
+    fn accounts_removes_only_the_account_it_is_given() {
+        let cli = Cli::try_parse_from(["proxenos", "accounts", "remove", "spare"]).unwrap();
         let Command::Accounts(args) = cli.command else {
             panic!("accounts should parse");
         };
-        assert_eq!(args.forget.as_deref(), Some("spare"));
-        assert_eq!(args.select, None);
+        let Some(AccountsAction::Remove(args)) = args.action else {
+            panic!("remove should parse");
+        };
+        assert_eq!(args.name, "spare");
 
-        // A bare `--forget` has no default target.
-        assert!(Cli::try_parse_from(["proxenos", "accounts", "--forget"]).is_err());
-        // And it is not a switch.
-        assert!(
-            Cli::try_parse_from(["proxenos", "accounts", "--use", "a", "--forget", "b"]).is_err()
-        );
+        // A bare `remove` has no default target.
+        assert!(Cli::try_parse_from(["proxenos", "accounts", "remove"]).is_err());
     }
 
-    /// Listing is the default; switching has to be asked for. A bare
+    /// Listing is the default, and switching is a verb of its own: a bare
     /// `accounts` that switched on a stray argument would bill a turn to the
     /// wrong account.
     #[test]
@@ -493,16 +518,42 @@ mod tests {
         let Command::Accounts(args) = cli.command else {
             panic!("accounts should parse");
         };
-        assert_eq!(args.select, None);
+        assert!(args.action.is_none());
+        assert!(!args.json);
 
-        let cli = Cli::try_parse_from(["proxenos", "accounts", "--use", "work"]).unwrap();
+        let cli = Cli::try_parse_from(["proxenos", "accounts", "use", "work"]).unwrap();
         let Command::Accounts(args) = cli.command else {
             panic!("accounts should parse");
         };
-        assert_eq!(args.select.as_deref(), Some("work"));
+        let Some(AccountsAction::Use(args)) = args.action else {
+            panic!("use should parse");
+        };
+        assert_eq!(args.name, "work");
 
-        // A bare name is not a switch.
+        // A bare name is not a switch, and never was.
         assert!(Cli::try_parse_from(["proxenos", "accounts", "work"]).is_err());
+    }
+
+    /// The listing is reachable by name as well as by default, and `--json`
+    /// belongs to both spellings — a flag that worked on only one of them
+    /// would be a flag an operator has to guess about.
+    #[test]
+    fn the_listing_takes_json_under_either_spelling() {
+        let cli = Cli::try_parse_from(["proxenos", "accounts", "--json"]).unwrap();
+        let Command::Accounts(args) = cli.command else {
+            panic!("accounts should parse");
+        };
+        assert!(args.json);
+        assert!(args.action.is_none());
+
+        let cli = Cli::try_parse_from(["proxenos", "accounts", "list", "--json"]).unwrap();
+        let Command::Accounts(args) = cli.command else {
+            panic!("accounts should parse");
+        };
+        let Some(AccountsAction::List(args)) = args.action else {
+            panic!("list should parse");
+        };
+        assert!(args.json);
     }
 
     /// `env --json` and `settings` are one document under two names, so a

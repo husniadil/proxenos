@@ -110,7 +110,7 @@ fn quote(word: &str) -> String {
 /// without a terminal.
 #[derive(Debug)]
 pub struct Plan {
-    /// What the account is filed under, which is what `accounts --use` takes.
+    /// What the account is filed under, which is what `accounts use` takes.
     pub name: String,
     pub provider: Provider,
     /// The directory the client is pointed at, and the one that is declared.
@@ -125,24 +125,19 @@ pub struct Plan {
     pub preserve_discovered: bool,
 }
 
-/// Decide what a `login --profile` would do.
+/// Decide what an `accounts login` would do.
 ///
-/// Both refusals live here: a login with nothing to file the account under,
-/// and a name the configuration file already declares. Neither can be found
-/// out later — the second one especially, because appending a table TOML
-/// already has leaves a file the daemon cannot start from.
+/// The one refusal that has to live here is a name the configuration file
+/// already declares: it cannot be found out later, because appending a table
+/// TOML already has leaves a file the daemon cannot start from. The name
+/// itself is a positional on the verb, so there is nothing to refuse about it.
 pub fn plan(
-    name: Option<&str>,
+    name: &str,
     provider: Provider,
     path: Option<PathBuf>,
     config: &crate::config::Config,
     config_dir: &Path,
 ) -> anyhow::Result<Plan> {
-    let Some(name) = name else {
-        anyhow::bail!(
-            "name the profile: `login --profile --as NAME`. The name is what `accounts --use` takes."
-        );
-    };
     if config.profiles.contains_key(name) {
         anyhow::bail!(
             "`{name}` is already declared in `[profiles]`. Sign in to it with the command \
@@ -239,8 +234,8 @@ pub fn run(plan: &Plan, environment: &mut dyn Environment) -> anyhow::Result<()>
         // provider would sign in to the other one.
         if !environment.is_interactive() {
             let said = format!(
-                "run this:\n\n  {}\n\nthen declare it with:\n\n  proxenos login --profile \
-                 --as {} --provider {} --path {}",
+                "run this:\n\n  {}\n\nthen declare it with:\n\n  proxenos accounts login \
+                 {} --provider {} --path {}",
                 plan.command.line(),
                 plan.name,
                 plan.provider.as_str(),
@@ -285,7 +280,7 @@ pub fn run(plan: &Plan, environment: &mut dyn Environment) -> anyhow::Result<()>
 
     let mut document = environment.read_document()?;
     // Declaring anything stops the daemon looking for the stock profiles
-    // (§8.4), so a first `login --profile` would take away every account the
+    // (§8.4), so a first `accounts login` would take away every account the
     // operator already had. They are written down first, exactly as they were
     // being read, and only the ones that hold a grant: an entry for a program
     // that was never signed into is an account that cannot serve.
@@ -313,8 +308,7 @@ pub fn run(plan: &Plan, environment: &mut dyn Environment) -> anyhow::Result<()>
     environment.write_document(updated)?;
 
     let said = format!(
-        "declared `{}` in {}. A running daemon read `[profiles]` at startup and still \
-         holds the old set — stop it and let it come back to serve as this one.",
+        "declared `{}` in {}.",
         plan.name,
         environment.document_path()
     );
@@ -426,7 +420,7 @@ mod tests {
 
     fn plan_for(name: &str, document: &str) -> Plan {
         plan(
-            Some(name),
+            name,
             Provider::Codex,
             None,
             &config(document),
@@ -541,30 +535,13 @@ mod tests {
         );
     }
 
-    /// A login with nothing to file the account under is refused: the name is
-    /// what `accounts --use` takes afterwards.
-    #[test]
-    fn a_profile_without_a_name_is_refused() {
-        let refusal = plan(
-            None,
-            Provider::Codex,
-            None,
-            &config("port = 8787\n"),
-            Path::new("/config"),
-        )
-        .expect_err("no name")
-        .to_string();
-
-        assert!(refusal.contains("--profile --as NAME"), "{refusal}");
-    }
-
     /// A name the file already declares is refused before anything runs.
     /// Appending a table TOML already has leaves a file the daemon cannot
     /// start from, and the client would have been run for nothing first.
     #[test]
     fn a_name_the_file_already_declares_is_refused_before_anything_runs() {
         let refusal = plan(
-            Some("work"),
+            "work",
             Provider::Codex,
             None,
             &config("[profiles.work]\nprovider = \"codex\"\n"),
@@ -624,7 +601,7 @@ mod tests {
         );
         assert!(
             said.contains(
-                "proxenos login --profile --as work --provider codex --path /config/profiles/work"
+                "proxenos accounts login work --provider codex --path /config/profiles/work"
             ),
             "{said}"
         );

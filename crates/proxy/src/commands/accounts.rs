@@ -1,4 +1,11 @@
-//! The account verbs: `login` and `accounts`.
+//! The `accounts` family: list, login, add-key, use, rename, remove.
+//!
+//! One sub-verb per thing an operator does. The listing and the three changes
+//! that only the daemon can make go through the control socket, because the
+//! daemon is what holds the selection: a CLI that wrote the file directly
+//! would leave a running daemon serving the account it read at startup. The
+//! two that *add* an account do not — they write a credential file or run
+//! somebody else's client, and neither needs a daemon to be running.
 
 use super::account_store;
 use crate::cli;
@@ -7,32 +14,65 @@ use proxenos::control;
 use proxenos::render;
 use std::sync::Arc;
 
-/// Login runs in the CLI rather than through the socket: it needs a callback
-/// port, and the daemon need not be running to authenticate.
-///
-/// **The URL is printed, never opened.** Opening it hands the authorization to
-/// whichever account the default browser is already signed into, which is a
-/// choice this command has no basis for making — the grant it produces is the
-/// one every later request spends. Printing it leaves the choice where it
-/// belongs, and costs one paste.
-pub(crate) async fn login(args: cli::LoginArgs) -> Result<()> {
-    let store: Arc<dyn proxenos::auth::store::AccountStore> = Arc::new(account_store()?);
-
-    if args.profile {
-        return sign_in_profile(&args);
+pub(crate) async fn accounts(args: cli::AccountsArgs) -> Result<()> {
+    match args.action {
+        None => list(args.json).await,
+        Some(cli::AccountsAction::List(list_args)) => list(args.json || list_args.json).await,
+        Some(cli::AccountsAction::Login(login_args)) => sign_in_profile(&login_args).await,
+        Some(cli::AccountsAction::AddKey(key_args)) => {
+            store_key(&key_args.name, key_args.provider).await
+        }
+        Some(cli::AccountsAction::Use(named)) => select(&named.name).await,
+        Some(cli::AccountsAction::Rename(names)) => rename(&names.from, &names.to).await,
+        Some(cli::AccountsAction::Remove(named)) => remove(&named.name).await,
     }
-    if !args.key {
-        anyhow::bail!(
-            "`login` needs to be told which kind. `--profile --as NAME` signs in to a new \
-             profile of the owning program and declares it; `--key --as NAME` stores an API \
-             key. This daemon obtains no subscription grant of its own either way."
-        );
-    }
-
-    store_key(&store, args.label.as_deref(), args.provider).await
 }
 
-/// `login --profile` — run the owning program's own login, then declare what
+/// Stored accounts, and which one serves turns.
+async fn list(json: bool) -> Result<()> {
+    let result = control::call(&control::default_path(), "accounts", None).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+    println!("{}", render::accounts(&result));
+    Ok(())
+}
+
+async fn select(name: &str) -> Result<()> {
+    let result = control::call(
+        &control::default_path(),
+        "accounts.select",
+        Some(serde_json::json!({ "account": name })),
+    )
+    .await?;
+    println!("{}", render::selected_account(&result));
+    Ok(())
+}
+
+async fn rename(from: &str, to: &str) -> Result<()> {
+    let result = control::call(
+        &control::default_path(),
+        "accounts.rename",
+        Some(serde_json::json!({ "account": from, "name": to })),
+    )
+    .await?;
+    println!("{}", render::renamed_account(&result));
+    Ok(())
+}
+
+async fn remove(name: &str) -> Result<()> {
+    let result = control::call(
+        &control::default_path(),
+        "accounts.remove",
+        Some(serde_json::json!({ "account": name })),
+    )
+    .await?;
+    println!("{}", render::removed_account(&result));
+    Ok(())
+}
+
+/// `accounts login` — run the owning program's own login, then declare what
 /// it wrote (§8.4).
 ///
 /// Everything about the credential happens inside that program. This side
@@ -40,31 +80,34 @@ pub(crate) async fn login(args: cli::LoginArgs) -> Result<()> {
 /// profile to find out whether there is anything to declare — which is the
 /// same read every turn makes, so a profile that passes here is one the daemon
 /// can actually serve.
-fn sign_in_profile(args: &cli::LoginArgs) -> Result<()> {
+///
+/// **The URL the client prints is never opened here.** Opening it would hand
+/// the authorization to whichever account the default browser is already
+/// signed into, which is a choice this command has no basis for making.
+async fn sign_in_profile(args: &cli::AccountLoginArgs) -> Result<()> {
     let config = proxenos::config::Config::load()?;
     let plan = proxenos::auth::profile_login::plan(
-        args.label.as_deref(),
+        &args.name,
         args.provider,
         args.path.clone(),
         &config,
         &proxenos::config::config_dir(),
     )?;
     let mut environment = proxenos::auth::profile_login::Stdio::new()?;
-    proxenos::auth::profile_login::run(&plan, &mut environment)
+    proxenos::auth::profile_login::run(&plan, &mut environment)?;
+    reload_daemon().await;
+    Ok(())
 }
 
 /// Store a key, read from stdin.
 ///
 /// The reading half lives in `auth::key_login`, behind a `Guide` seam, so the
 /// tty and pipe halves are testable without a terminal.
-async fn store_key(
-    store: &Arc<dyn proxenos::auth::store::AccountStore>,
-    label: Option<&str>,
-    provider: proxenos::auth::store::Provider,
-) -> Result<()> {
+async fn store_key(name: &str, provider: proxenos::auth::store::Provider) -> Result<()> {
+    let store: Arc<dyn proxenos::auth::store::AccountStore> = Arc::new(account_store()?);
     let mut guide = proxenos::auth::key_login::Terminal::stdio(provider);
-    let name = proxenos::auth::key_login::run(store.as_ref(), &mut guide, label)?;
-    report_serving(store, &name).await;
+    let stored = proxenos::auth::key_login::run(store.as_ref(), &mut guide, name)?;
+    report_serving(&store, &stored).await;
     Ok(())
 }
 
@@ -72,8 +115,9 @@ async fn store_key(
 /// daemon only where the answer is "serves it".
 ///
 /// A login stores a credential; choosing what serves turns is the other
-/// decision, and `accounts --use` is the verb for it. So this reports which of
-/// the two happened rather than asserting the switch every login used to make.
+/// decision, and `accounts use NAME` is the verb for it. So this reports which
+/// of the two happened rather than asserting the switch every login used to
+/// make.
 async fn report_serving(store: &Arc<dyn proxenos::auth::store::AccountStore>, stored: &str) {
     let serving = store
         .accounts()
@@ -85,9 +129,9 @@ async fn report_serving(store: &Arc<dyn proxenos::auth::store::AccountStore>, st
             println!("It serves turns from now on.");
             hand_over_to(stored).await;
         }
-        Some(serving) => println!(
-            "{serving} still serves turns.\n  switch with: proxenos accounts --use {stored}"
-        ),
+        Some(serving) => {
+            println!("{serving} still serves turns.\n  switch with: proxenos accounts use {stored}")
+        }
         // Nothing selected at all is not a state a login leaves behind, and
         // saying nothing beats guessing which account a turn would reach.
         None => {}
@@ -128,49 +172,22 @@ async fn hand_over_to(name: &str) {
     }
 }
 
-/// Stored accounts, and which one serves turns.
+/// Hand a `[profiles]` edit to a daemon that is already serving.
 ///
-/// Through the socket, because the daemon is what holds the selection: a CLI
-/// that wrote the file directly would leave a running daemon serving the
-/// account it read at startup.
-pub(crate) async fn accounts(args: cli::AccountsArgs) -> Result<()> {
-    if let Some(names) = args.rename {
-        let [from, to] = names.as_slice() else {
-            anyhow::bail!("`--rename` takes the old name and the new one");
-        };
-        let result = control::call(
-            &control::default_path(),
-            "accounts.rename",
-            Some(serde_json::json!({ "account": from, "name": to })),
-        )
-        .await?;
-        println!("{}", render::renamed_account(&result));
-        return Ok(());
+/// Best effort, exactly as `hand_over_to` is: no socket is no daemon, which is
+/// an ordinary state for a login and not a failure. What it replaces is a
+/// sentence telling the operator to stop the daemon and let it come back —
+/// advice that was true only because nothing re-read the file.
+pub(crate) async fn reload_daemon() {
+    let path = control::default_path();
+    match control::call(&path, "config.reload", None).await {
+        Ok(_) => println!("The running daemon has re-read config.toml and holds it now."),
+        // A refusal is the operator's to see: it means the file this just
+        // wrote is one the daemon will not run, and staying quiet would leave
+        // them believing the account is there.
+        Err(error) if path.exists() => {
+            eprintln!("The running daemon did not take the change: {error}");
+        }
+        Err(_) => {}
     }
-
-    if let Some(name) = args.forget {
-        let result = control::call(
-            &control::default_path(),
-            "accounts.remove",
-            Some(serde_json::json!({ "account": name })),
-        )
-        .await?;
-        println!("{}", render::removed_account(&result));
-        return Ok(());
-    }
-
-    if let Some(name) = args.select {
-        let result = control::call(
-            &control::default_path(),
-            "accounts.select",
-            Some(serde_json::json!({ "account": name })),
-        )
-        .await?;
-        println!("{}", render::selected_account(&result));
-        return Ok(());
-    }
-
-    let result = control::call(&control::default_path(), "accounts", None).await?;
-    println!("{}", render::accounts(&result));
-    Ok(())
 }

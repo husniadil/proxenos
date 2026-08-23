@@ -260,7 +260,7 @@ disable_commit_attribution = true
 # provider = "codex"
 # path     = "/Users/me/Library/Application Support/Agent Profiles/codex/p/997619b5"
 #
-# A key stored with `proxenos login --key --as NAME` is the other kind of
+# A key stored with `proxenos accounts add-key NAME --provider codex|anthropic` is the other kind of
 # account and needs nothing here.
 "#;
 
@@ -1095,7 +1095,7 @@ pub fn validate_profiles(profiles: &BTreeMap<String, ProfileConfig>) -> Result<(
     for (name, profile) in profiles {
         if name.trim().is_empty() {
             return Err(ProxyError::invalid_request(
-                "a profile name cannot be empty: it is what `accounts --use` takes.".to_owned(),
+                "a profile name cannot be empty: it is what `accounts use` takes.".to_owned(),
             ));
         }
 
@@ -1118,7 +1118,7 @@ pub fn validate_profiles(profiles: &BTreeMap<String, ProfileConfig>) -> Result<(
         }
 
         // Two names for one directory would report one account twice, and
-        // `accounts --use` would offer a choice that changes nothing.
+        // `accounts use` would offer a choice that changes nothing.
         let key = (profile.provider.as_str(), profile.path.as_deref());
         if let Some(first) = seen.insert(key, name) {
             return Err(ProxyError::invalid_request(format!(

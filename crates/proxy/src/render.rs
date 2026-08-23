@@ -139,7 +139,7 @@ pub fn accounts_at(result: &Value, now: u64) -> String {
     if accounts.is_empty() {
         return "no accounts — sign in with `claude auth login` or `codex login` and they are \
                 found from there, declare a profile under `[profiles]`, or store a key with \
-                `proxenos login --key --as NAME`"
+                `proxenos accounts add-key NAME --provider codex|anthropic`"
             .to_owned();
     }
 
@@ -336,12 +336,12 @@ pub fn removed_account(result: &Value) -> String {
     {
         return format!(
             "removed {removed}; no account is serving turns — choose one with \
-             `proxenos accounts --use NAME`"
+             `proxenos accounts use NAME`"
         );
     }
     format!(
         "removed {removed}; no accounts left — declare a profile under `[profiles]`, \
-         or store a key with `proxenos login --key --as NAME`"
+         or store a key with `proxenos accounts add-key NAME --provider codex|anthropic`"
     )
 }
 
@@ -450,11 +450,11 @@ pub fn status_at(result: &Value, now: u64) -> String {
             .is_some_and(|accounts| !accounts.is_empty());
         if held {
             "auth       no account chosen — more than one is available; choose with \
-             `proxenos accounts --use NAME`"
+             `proxenos accounts use NAME`"
                 .to_owned()
         } else {
             "auth       not connected — sign in with `claude auth login` or `codex login` and \
-             it is found from there, or store a key with `proxenos login --key --as NAME`"
+             it is found from there, or store a key with `proxenos accounts add-key NAME --provider codex|anthropic`"
                 .to_owned()
         }
     });

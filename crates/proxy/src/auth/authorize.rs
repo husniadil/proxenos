@@ -235,7 +235,7 @@ impl Authorizer for AccountAuthorizer {
             .ok_or_else(|| {
                 ProxyError::authentication(
                     "no account is serving turns; declare a profile under `[profiles]` or store \
-                     a key with `login --key --as NAME`",
+                     a key with `accounts add-key NAME --provider codex|anthropic`",
                 )
             })?;
         let provider = provider_named(Some(serving.provider));

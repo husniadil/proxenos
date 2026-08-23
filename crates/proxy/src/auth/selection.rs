@@ -6,7 +6,7 @@
 //! account is serving. One answer, in one place.
 //!
 //! Beside the token tally rather than in the configuration document:
-//! `accounts --use` is a runtime verb, and that document is the operator's own
+//! `accounts use` is a runtime verb, and that document is the operator's own
 //! (`api.md` §4).
 
 use crate::error::ProxyError;
@@ -63,7 +63,7 @@ impl Selection {
         };
         let parsed: Document = serde_json::from_str(&raw).map_err(|error| {
             ProxyError::authentication(format!(
-                "{} is not readable: {error}. Choose an account with `accounts --use NAME`.",
+                "{} is not readable: {error}. Choose an account with `accounts use NAME`.",
                 self.path.display()
             ))
         })?;

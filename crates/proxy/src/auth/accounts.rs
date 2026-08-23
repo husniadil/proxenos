@@ -57,7 +57,7 @@ impl Accounts {
         if listed.is_empty() {
             return ProxyError::authentication(format!(
                 "no account named `{name}`; none are available. Declare a profile under \
-                 `[profiles]`, or store a key with `login --key --as NAME`."
+                 `[profiles]`, or store a key with `accounts add-key NAME --provider codex|anthropic`."
             ));
         }
         let available = listed
@@ -126,7 +126,7 @@ impl Accounts {
             }
             return Err(ProxyError::authentication(format!(
                 "the selected account `{name}` no longer exists. \
-                 Choose one with `accounts --use NAME`."
+                 Choose one with `accounts use NAME`."
             )));
         }
 
@@ -134,13 +134,13 @@ impl Accounts {
         match listed.as_slice() {
             [] => Err(ProxyError::authentication(
                 "no accounts are available. Declare a profile under `[profiles]`, or store a \
-                 key with `login --key --as NAME`."
+                 key with `accounts add-key NAME --provider codex|anthropic`."
                     .to_owned(),
             )),
             [only] => Ok(only.clone()),
             _ => Err(ProxyError::authentication(
                 "more than one account is available and none is selected. \
-                 Choose one with `accounts --use NAME`."
+                 Choose one with `accounts use NAME`."
                     .to_owned(),
             )),
         }

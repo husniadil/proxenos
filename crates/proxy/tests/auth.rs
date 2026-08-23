@@ -505,7 +505,7 @@ fn a_write_leaves_no_window_where_the_store_is_half_written() {
 
 /// A label that already names a different account is refused, not honoured.
 ///
-/// `login --as work` months after the first one, with the browser signed into
+/// `accounts add-key work` months after the first one, with the browser signed into
 /// somebody else: the label resolves to an entry holding another account's
 /// grant, and writing over it retires a working grant with nothing said —
 /// exactly what the `add`/`save` split exists to prevent. Refusing costs the
@@ -548,7 +548,7 @@ fn selecting_from_an_empty_store_says_so() {
 
     let error = store.select("work").unwrap_err().to_string();
 
-    assert!(error.contains("login"), "{error}");
+    assert!(error.contains("accounts add-key"), "{error}");
     assert!(
         !error.contains("stored: "),
         "an empty list is not an answer: {error}"
@@ -720,8 +720,8 @@ fn a_writer_waits_rather_than_landing_inside_a_replacement() {
 
 /// Renaming moves the name and nothing else.
 ///
-/// A login without `--as` names the account by the id the backend knows it by,
-/// which is a UUID nobody wants to type at `--use`. Changing it should not cost
+/// An account stored with no name of its own is named by the id the backend
+/// knows it by, which is a UUID nobody wants to type at `accounts use`. Changing it should not cost
 /// an authorization: the grant is fine, only what this store calls it is
 /// wrong.
 #[test]
@@ -1163,7 +1163,7 @@ fn a_key_re_store_that_changes_provider_is_refused() {
         .to_string();
     assert!(error.contains("api"), "{error}");
     assert!(error.contains(Provider::Codex.as_str()), "{error}");
-    assert!(error.contains("--forget"), "{error}");
+    assert!(error.contains("accounts remove"), "{error}");
 
     // The stored key is untouched, and so is its provider.
     let accounts = store.accounts().unwrap();

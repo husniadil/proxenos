@@ -7,7 +7,7 @@
 //! *is* ours lives on our side: which account is selected.
 //!
 //! The selection is a file rather than a key in the configuration document.
-//! `accounts --use` is a runtime verb, and the configuration file is the
+//! `accounts use` is a runtime verb, and the configuration file is the
 //! operator's own document whose comments explain themselves (§4). The token
 //! tally already sets this precedent.
 
@@ -179,7 +179,7 @@ impl BorrowedStore {
             Some(name) => self.named(&name).map_err(|_| {
                 ProxyError::authentication(format!(
                     "the selected profile `{name}` is no longer declared in `[profiles]`. \
-                     Choose one with `accounts --use NAME`."
+                     Choose one with `accounts use NAME`."
                 ))
             }),
             None => match self.visible().as_slice() {
@@ -191,7 +191,7 @@ impl BorrowedStore {
                 [only] => Ok(only.clone()),
                 _ => Err(ProxyError::authentication(
                     "more than one profile is declared and none is selected. \
-                     Choose one with `accounts --use NAME`."
+                     Choose one with `accounts use NAME`."
                         .to_owned(),
                 )),
             },

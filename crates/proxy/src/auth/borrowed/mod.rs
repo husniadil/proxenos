@@ -66,7 +66,7 @@ pub enum BorrowedError {
     /// put one that does not involve reading another program's file.
     #[error(
         "{0} authenticates with an API key (auth_mode `{1}`) rather than a ChatGPT subscription. \
-         Store a key with `proxenos login --key --as NAME` instead"
+         Store a key with `proxenos accounts add-key NAME --provider codex|anthropic` instead"
     )]
     NotASubscription(String, String),
     /// A grant missing the half that authenticates, or the half that outlives
@@ -375,7 +375,7 @@ pub fn source(provider: Provider, host: Host, config_dir: Option<&Path>, home: &
 /// where neither was has none — the same answer as before, arrived at without
 /// making the operator write down what the programs themselves already know.
 ///
-/// Their names are what `accounts --use` takes, so they are the plainest thing
+/// Their names are what `accounts use` takes, so they are the plainest thing
 /// each provider could be called. Declaring `[profiles]` replaces this set
 /// entirely: a written entry is the operator's own statement about identity,
 /// and a discovered one must never quietly sit beside it.

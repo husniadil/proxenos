@@ -1836,7 +1836,7 @@ pub async fn refresh_usage_within(
     let Some(authorizer) = authorizer(state) else {
         return Err(ProxyError::authentication(
             "there are no credentials to ask with; declare a profile under `[profiles]`, \
-             or store a key with `proxenos login --key --as NAME`",
+             or store a key with `proxenos accounts add-key NAME --provider codex|anthropic`",
         ));
     };
 

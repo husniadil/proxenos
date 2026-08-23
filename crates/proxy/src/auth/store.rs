@@ -101,7 +101,7 @@ impl KeyFlavour {
     /// one has no recovery path here. A bare bearer carries no structure to
     /// read without decoding it, and decoding a credential to classify it is a
     /// new way for a secret to reach a log, so the stem stands and the
-    /// ambiguity is said out loud instead: `login --key` names both
+    /// ambiguity is said out loud instead: `accounts add-key` names both
     /// credentials at a terminal (`key_login::run`), which is the one moment a
     /// person is present to hear it.
     fn classify(key: &str, provider: Provider) -> Option<Self> {
@@ -393,7 +393,7 @@ pub trait AccountStore: CredentialStore {
     /// This is what a login does. It selects the account **only where nothing
     /// is already serving turns** — a first login has nothing to displace,
     /// and every login after it stores a credential without moving the
-    /// selection. `accounts --use` is the verb that moves it.
+    /// selection. `accounts use` is the verb that moves it.
     ///
     /// `save` writes the grant of the account already selected — a refresh —
     /// and the two are deliberately different verbs: a login that overwrote
@@ -530,7 +530,7 @@ impl StoredFile {
         if self.accounts.is_empty() {
             return ProxyError::invalid_request(format!(
                 "no account named `{name}`; none are stored — declare a profile under \
-                 `[profiles]`, or store a key with `proxenos login --key --as NAME`"
+                 `[profiles]`, or store a key with `proxenos accounts add-key NAME --provider codex|anthropic`"
             ));
         }
         let stored = self
@@ -1060,7 +1060,7 @@ impl AccountStore for FileStore {
             {
                 return Err(ProxyError::invalid_request(format!(
                     "`{name}` already names a {} key; \
-                     remove it first with `accounts --forget {name}`, \
+                     remove it first with `accounts remove {name}`, \
                      or store the key under another name",
                     entry.provider.as_str()
                 )));

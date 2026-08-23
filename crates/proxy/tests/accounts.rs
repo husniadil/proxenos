@@ -242,7 +242,7 @@ fn the_binary_reads_a_credential_file_from_before_accounts() {
     );
 }
 
-/// §2 — `accounts` lists, `accounts --use` switches, and the switch is what
+/// §2 — `accounts` lists, `accounts use` switches, and the switch is what
 /// the next turn would authenticate with.
 #[test]
 fn the_binary_lists_and_switches_accounts() {
@@ -273,7 +273,7 @@ fn the_binary_lists_and_switches_accounts() {
     assert!(marked[0].contains("spare"), "{listed}");
     assert!(listed.contains("acct_one@example.test"), "{listed}");
 
-    let switched = daemon.run(&["accounts", "--use", "acct_one"]);
+    let switched = daemon.run(&["accounts", "use", "acct_one"]);
     assert!(switched.contains("acct_one"), "{switched}");
 
     // The store every request authenticates through, as the daemon now reads
@@ -292,7 +292,7 @@ fn the_binary_lists_and_switches_accounts() {
 
     // And a name nobody holds is refused rather than silently ignored.
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
-        .args(["accounts", "--use", "nobody"])
+        .args(["accounts", "use", "nobody"])
         .env("PROXENOS_HOME", daemon.dir.path().join("home"))
         .env("TMPDIR", daemon.dir.path())
         .output()
@@ -342,7 +342,7 @@ fn an_account_states_its_provider_and_the_reports_name_it() {
     // The switch rewrites the credential file, so this also holds the field
     // through a round-trip: a write that dropped it would strand the account
     // back on the default provider silently.
-    let _ = daemon.run(&["accounts", "--use", "claude"]);
+    let _ = daemon.run(&["accounts", "use", "claude"]);
     let status = daemon.run(&["status"]);
     assert!(
         status.contains("anthropic"),
@@ -377,7 +377,7 @@ fn the_binary_forgets_a_key_and_refuses_to_forget_a_profile() {
         ],
     }));
 
-    let forgotten = daemon.run(&["accounts", "--forget", "billing"]);
+    let forgotten = daemon.run(&["accounts", "remove", "billing"]);
     assert!(forgotten.contains("billing"), "{forgotten}");
 
     let listed = daemon.run(&["accounts"]);
@@ -385,7 +385,7 @@ fn the_binary_forgets_a_key_and_refuses_to_forget_a_profile() {
     assert!(listed.contains("work"), "{listed}");
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
-        .args(["accounts", "--forget", "work"])
+        .args(["accounts", "remove", "work"])
         .env("PROXENOS_HOME", daemon.dir.path().join("home"))
         .env("HOME", daemon.dir.path())
         .env("TMPDIR", daemon.dir.path())
@@ -413,7 +413,7 @@ fn the_binary_refuses_to_rename_a_borrowed_profile() {
     let daemon = Daemon::start(&grant("acct_legacy"));
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
-        .args(["accounts", "--rename", "acct_legacy", "work"])
+        .args(["accounts", "rename", "acct_legacy", "work"])
         .env("PROXENOS_HOME", daemon.dir.path().join("home"))
         .env("HOME", daemon.dir.path())
         .env("TMPDIR", daemon.dir.path())
@@ -435,7 +435,7 @@ fn the_binary_refuses_to_rename_a_borrowed_profile() {
 /// The secret arrives on stdin because non-negotiable #7 puts credentials out
 /// of process arguments: an argument is visible to every process on the
 /// machine and lands in shell history. The name is required, because a key
-/// carries no id to be named by and the name is what `--use` takes.
+/// carries no id to be named by and the name is what `accounts use` takes.
 #[test]
 fn the_binary_stores_a_key_from_stdin_and_serves_turns_as_it() {
     use std::io::Write;
@@ -444,7 +444,7 @@ fn the_binary_stores_a_key_from_stdin_and_serves_turns_as_it() {
     let home = daemon.dir.path().join("home");
 
     let mut login = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
-        .args(["login", "--key", "--as", "billing"])
+        .args(["accounts", "add-key", "billing", "--provider", "codex"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", daemon.dir.path())
         .stdin(std::process::Stdio::piped())
@@ -472,7 +472,7 @@ fn the_binary_stores_a_key_from_stdin_and_serves_turns_as_it() {
 
     // Both accounts are there, and the account that was already serving turns
     // is still the one serving them: a login stores a credential, and
-    // `accounts --use` is the verb that moves the selection.
+    // `accounts use` is the verb that moves the selection.
     let listed = daemon.run(&["accounts"]);
     assert!(listed.contains("acct_legacy"), "{listed}");
     assert!(
@@ -487,7 +487,7 @@ fn the_binary_stores_a_key_from_stdin_and_serves_turns_as_it() {
     );
 
     // Switching is switching accounts, nothing more.
-    daemon.run(&["accounts", "--use", "billing"]);
+    daemon.run(&["accounts", "use", "billing"]);
     assert!(
         daemon
             .run(&["accounts"])
@@ -522,7 +522,7 @@ fn a_cli_login_leaves_the_running_daemon_alone_and_the_switch_hands_over() {
     let home = daemon.dir.path().join("home");
 
     let mut login = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
-        .args(["login", "--key", "--as", "billing"])
+        .args(["accounts", "add-key", "billing", "--provider", "codex"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", daemon.dir.path())
         .stdin(std::process::Stdio::piped())
@@ -543,7 +543,7 @@ fn a_cli_login_leaves_the_running_daemon_alone_and_the_switch_hands_over() {
         "a login that chose nothing must not claim a hand-over: {said}"
     );
     assert!(
-        said.contains("accounts --use billing"),
+        said.contains("accounts use billing"),
         "it should say how to switch: {said}"
     );
     assert!(
@@ -551,7 +551,7 @@ fn a_cli_login_leaves_the_running_daemon_alone_and_the_switch_hands_over() {
         "the daemon must still serve the account it was serving"
     );
 
-    daemon.run(&["accounts", "--use", "billing"]);
+    daemon.run(&["accounts", "use", "billing"]);
     assert!(daemon.run(&["status"]).contains("billing"));
 }
 
@@ -583,8 +583,8 @@ fn a_live_probe_run_without_a_credential_refuses_rather_than_reporting_failures(
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        said.contains("login"),
-        "it should say what is missing: {said}"
+        said.contains("accounts add-key"),
+        "it should say what is missing, and the verb that supplies it: {said}"
     );
     assert!(
         !said.contains("Capability matrix"),
@@ -690,7 +690,7 @@ async fn a_pinned_tier_does_not_have_to_be_on_the_serving_accounts_catalog() {
     );
 }
 
-/// §4 — `accounts --use` moves between two accounts on different plans, in
+/// §4 — `accounts use` moves between two accounts on different plans, in
 /// both directions, with the configuration file untouched throughout.
 ///
 /// The measured complaint this exists for: one `[tiers]` table, two accounts
@@ -753,7 +753,7 @@ async fn accounts_use_moves_between_accounts_whose_catalogs_differ() {
 
     // `run` fails the test on a non-zero exit, so the switch being accepted at
     // all is the first half of this.
-    let moved = daemon.run(&["accounts", "--use", "personal"]);
+    let moved = daemon.run(&["accounts", "use", "personal"]);
     assert!(
         moved.contains("personal"),
         "the switch should name the account now serving: {moved}"
@@ -764,7 +764,7 @@ async fn accounts_use_moves_between_accounts_whose_catalogs_differ() {
         "the account switched to should be served its own mapping: {status}"
     );
 
-    daemon.run(&["accounts", "--use", "work"]);
+    daemon.run(&["accounts", "use", "work"]);
     let status = daemon.run(&["status"]);
     assert!(
         status.contains("model-for-acct_one") && !status.contains("model-for-acct_two"),

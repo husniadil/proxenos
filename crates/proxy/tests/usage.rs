@@ -644,7 +644,7 @@ fn the_meter_carries_the_providers_own_words() {
     assert!(line("overage").contains("0% used"), "{rendered}");
 }
 
-/// One `accounts --use` moves every unpinned turn onto that account's provider
+/// One `accounts use` moves every unpinned turn onto that account's provider
 /// and its subscription. The operator asked for it; the command reads smaller
 /// than what it does, and the provider is the half a name does not state.
 #[test]

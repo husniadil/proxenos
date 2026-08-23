@@ -23,7 +23,7 @@ use std::path::PathBuf;
 /// One profile as the configuration declares it, resolved against a host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
-    /// The name the account is filed under, which is what `accounts --use`
+    /// The name the account is filed under, which is what `accounts use`
     /// takes.
     pub name: String,
     pub provider: Provider,

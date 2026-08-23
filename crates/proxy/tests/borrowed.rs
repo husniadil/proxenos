@@ -750,7 +750,7 @@ fn two_profiles_and_no_selection_refuses() {
 
     let error = store.load().expect_err("ambiguous").to_string();
 
-    assert!(error.contains("accounts --use"), "was: {error}");
+    assert!(error.contains("accounts use"), "was: {error}");
 }
 
 /// Choosing one records it on our side, and the choice survives being read
@@ -811,7 +811,7 @@ fn a_selection_naming_a_deleted_profile_is_refused_by_name() {
         .to_string();
 
     assert!(error.contains("gone"), "was: {error}");
-    assert!(error.contains("accounts --use"), "was: {error}");
+    assert!(error.contains("accounts use"), "was: {error}");
 }
 
 /// Every write refuses, names the profile, and says who may change it. The
@@ -2202,14 +2202,14 @@ fn status_tells_a_full_store_to_choose_and_an_empty_one_to_sign_in() {
             ],
         },
     }));
-    assert!(chooseable.contains("accounts --use"), "{chooseable}");
+    assert!(chooseable.contains("accounts use"), "{chooseable}");
 
     let empty = render::status(&serde_json::json!({
         "auth": { "connected": false, "accounts": [] },
     }));
     assert!(empty.contains("claude auth login"), "{empty}");
-    assert!(empty.contains("login --key"), "{empty}");
-    assert!(!empty.contains("accounts --use"), "{empty}");
+    assert!(empty.contains("accounts add-key"), "{empty}");
+    assert!(!empty.contains("accounts use"), "{empty}");
 }
 
 // --- what the backend said about a credential -----------------------------
@@ -2329,7 +2329,7 @@ fn removing_says_what_is_left_rather_than_assuming_nothing_is() {
         "serving": serde_json::Value::Null,
         "remaining": 2,
     }));
-    assert!(none_chosen.contains("accounts --use"), "{none_chosen}");
+    assert!(none_chosen.contains("accounts use"), "{none_chosen}");
     assert!(!none_chosen.contains("no accounts left"), "{none_chosen}");
 
     let empty = render::removed_account(&serde_json::json!({
