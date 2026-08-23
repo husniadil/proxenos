@@ -251,6 +251,11 @@ fn status(state: &ControlState) -> Value {
                 // refused one. Distinct from `dead`, which is this side
                 // failing to read or spend the grant at all: this one is a
                 // credential that was read, sent, and turned away (§8.4).
+                //
+                // Null where there is none, and a reader has to treat that as
+                // absent: the row it came from omits the key entirely, and one
+                // that took `null` for a refusal reported every healthy
+                // account as refused.
                 "refused": state.refusals.get(&account.name),
                 // When the operator has to sign in to the owning program
                 // again, where that is known at all. Null on a Codex profile

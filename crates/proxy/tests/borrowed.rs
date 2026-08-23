@@ -2297,3 +2297,22 @@ fn a_refused_credential_is_said_on_the_row_and_in_the_report() {
     assert!(report.contains("401"), "{report}");
     assert!(report.contains("invalid access token"), "{report}");
 }
+
+/// A payload with no refusal in it carries `"refused": null`, and null is not
+/// a refusal. Seen on a live daemon: every healthy account reported the
+/// backend as having turned its credential away, with no reason given —
+/// because there was none to give.
+#[test]
+fn a_null_refusal_is_not_reported_as_one() {
+    let rendered = render::status(&serde_json::json!({
+        "auth": {
+            "connected": true,
+            "account": "work",
+            "provider": "codex",
+            "kind": "grant",
+            "refused": serde_json::Value::Null,
+        },
+    }));
+
+    assert!(!rendered.contains("refused"), "{rendered}");
+}

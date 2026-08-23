@@ -419,7 +419,10 @@ pub fn status_at(result: &Value, now: u64) -> String {
     // them. Its own line for the same reason as the renewal below: the
     // credential is there and readable, and what this says is that the other
     // end will not take it.
-    if let Some(refused) = auth.and_then(|auth| field(auth, "refused")) {
+    if let Some(refused) = auth
+        .and_then(|auth| field(auth, "refused"))
+        .filter(|refused| !refused.is_null())
+    {
         let detail = field(refused, "detail")
             .and_then(Value::as_str)
             .unwrap_or("no reason was given");

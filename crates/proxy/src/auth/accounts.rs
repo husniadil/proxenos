@@ -75,6 +75,12 @@ impl Accounts {
             .into_iter()
             .filter(|account| account.kind == "grant")
             .map(|account| account.name)
+            // Not the ones a declared profile has taken over. The note exists
+            // so a credential that stopped counting is not read as one that
+            // vanished — and an account of that name is still here, serving
+            // turns from the profile that owns it. Left in, it advised
+            // declaring a profile the operator had already declared.
+            .filter(|name| !self.is_borrowed(name))
             .collect())
     }
 
