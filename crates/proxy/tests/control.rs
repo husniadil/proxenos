@@ -5145,7 +5145,8 @@ async fn a_switch_says_whether_it_crossed_providers() {
     assert_eq!(same["previous_provider"], json!("codex"));
     assert_eq!(
         render::selected_account(&same),
-        "serving turns as spare; still on codex"
+        "serving turns as spare on codex\nstill on codex, so the same backend answers and \
+         another account's quota is spent"
     );
 
     let crossed = harness
@@ -5156,7 +5157,7 @@ async fn a_switch_says_whether_it_crossed_providers() {
     assert_eq!(crossed["previous_provider"], json!("codex"));
     assert_eq!(
         render::selected_account(&crossed),
-        "serving turns as relay; codex to anthropic, so a different backend on a \
+        "serving turns as relay on anthropic\ncodex to anthropic, so a different backend on a \
          different subscription answers every turn"
     );
 }

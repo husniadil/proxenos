@@ -72,3 +72,48 @@ fn now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs())
 }
+
+/// The widest cell wins: a table whose columns are sized to what is in them.
+///
+/// The last column is never padded, so no row carries trailing space, and no
+/// cell is ever shortened here — a column that has to fit inside a terminal
+/// shortens its own cells before handing them over, because only the caller
+/// knows which of them can lose characters and still mean something.
+fn table(header: &[&str], rows: &[Vec<String>]) -> String {
+    let widths: Vec<usize> = header
+        .iter()
+        .enumerate()
+        .map(|(column, title)| {
+            rows.iter()
+                .filter_map(|row| row.get(column))
+                .map(|cell| cell.chars().count())
+                .chain(std::iter::once(title.chars().count()))
+                .max()
+                .unwrap_or_default()
+        })
+        .collect();
+
+    let line = |cells: &[String]| {
+        let last = cells.len().saturating_sub(1);
+        cells
+            .iter()
+            .zip(widths.iter())
+            .enumerate()
+            .map(|(column, (cell, width))| {
+                if column == last {
+                    cell.clone()
+                } else {
+                    let pad = width.saturating_sub(cell.chars().count());
+                    format!("{cell}{}", " ".repeat(pad))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("  ")
+    };
+
+    let header: Vec<String> = header.iter().map(|cell| (*cell).to_owned()).collect();
+    std::iter::once(line(&header))
+        .chain(rows.iter().map(|row| line(row)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}

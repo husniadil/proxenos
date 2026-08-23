@@ -232,7 +232,9 @@ fn the_binary_reads_a_credential_file_from_before_accounts() {
         "the migrated account should be listed: {listed}"
     );
     assert!(
-        listed.starts_with('*'),
+        listed
+            .lines()
+            .any(|line| line.starts_with('*') && line.contains("acct_legacy")),
         "the only account serves turns: {listed}"
     );
     let status = daemon.run(&["status"]);

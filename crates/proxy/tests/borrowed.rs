@@ -1246,7 +1246,7 @@ fn a_profile_that_changed_account_is_marked() {
     let rendered = render::accounts(&serde_json::json!({
         "accounts": serde_json::to_value(&listed).expect("serializes"),
     }));
-    assert!(rendered.contains("different account"), "{rendered}");
+    assert!(rendered.contains("identity changed"), "{rendered}");
 }
 
 /// The same profile, still the same account, is not marked. A warning that
@@ -2282,8 +2282,10 @@ fn a_refused_credential_is_said_on_the_row_and_in_the_report() {
         "selected": true,
         "refused": { "status": 401, "detail": "invalid access token", "at": 1_800_000_000 },
     })));
-    assert!(row.contains("refused this credential"), "{row}");
-    assert!(row.contains("sign in"), "{row}");
+    // The row says it in one word — it is a listing, and the account it names
+    // may not be the one the operator is about to act on. The remedy is on
+    // `status`, which is the report they read when they are.
+    assert!(row.contains("refused"), "{row}");
 
     let report = render::status(&serde_json::json!({
         "auth": {

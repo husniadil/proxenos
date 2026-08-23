@@ -129,6 +129,22 @@ vanished. Keys in that file keep working exactly as they did.
 
 ### Changed
 
+- **`accounts` prints a header table.** The rows had no header, a column that
+  said `key` where an address belonged, the raw source path, and every state —
+  refused, identity changed, a login about to expire — as a parenthesised
+  sentence trailing off the end of the row. It is `NAME PROVIDER KIND ACCOUNT
+  SOURCE STATE` now: `KIND` says `profile` or `key` in the operator's words
+  (the payload's own `kind` still names the credential), `ACCOUNT` is the
+  address, else the id, else the subscription, and never the word `key`,
+  `SOURCE` abbreviates `$HOME` to `~`, names a keychain as `keychain`, marks a
+  profile nobody declared as `(found)`, and is the one cell that is ever cut.
+  `STATE` is one phrase — `refused`, `identity changed`, the renewal countdown,
+  else `ok`. The notes under the table are unchanged, except that the one
+  saying these were found is said only where the whole set is. The
+  confirmations the account verbs print follow one pattern too: what happened,
+  then the consequence or the next thing to type, on a second line rather than
+  after a semicolon.
+
 - **The account verbs are verbs now, not flags.** `proxenos login` is gone with
   no alias: it was two unrelated commands told apart by `--key` and
   `--profile`, and `accounts` used `--use`, `--forget` and `--rename` as

@@ -98,10 +98,16 @@ the vocabulary above.
 proxenos run        start the daemon (--detach: in the background)
 proxenos accounts   stored accounts, and which one serves turns (also
                     `accounts list`; --json prints the socket's own payload)
-                    one row per account: a `*` on the one serving turns, the
-                    name, the address or `key`, and the provider — named on
-                    every row, since with two providers stored an unnamed one
-                    is a guess
+                    a header table, one row per account: `NAME PROVIDER KIND
+                    ACCOUNT SOURCE STATE`, with a `*` on the one serving
+                    turns. KIND is `profile` or `key`; ACCOUNT is the address,
+                    else the id, else the subscription; SOURCE abbreviates
+                    `$HOME` to `~`, reads `keychain` for a keychain and
+                    `stored` for a key, and marks a profile nobody declared
+                    `(found)`; STATE is one phrase — `refused`, `identity
+                    changed`, the renewal countdown, else `ok`. The provider
+                    is on every row, since with two stored an unnamed one is
+                    a guess
   accounts login   NAME --provider codex|anthropic [--path DIR]
                     sign in to a new profile of the owning program and
                     declare it; --path says where, absent it goes under this
@@ -200,15 +206,18 @@ clears the way. A name that is already a declared profile is refused too: one
 name, one account.
 
 `accounts` lists what this daemon can serve — the declared profiles first, then
-the keys — marking the one serving turns, naming the store each borrowed row was
-read from, and marking a profile that has become a different account since it
-was chosen. A grant left in `credentials.json` by an older version is **not**
-listed as an account, because nothing reads one any more; it is named in a note
-under the listing instead, since a credential that quietly stopped counting
-reads as one that vanished. Each row also says what kind of thing it is and
-whether the operator wrote it down — `declared` is true only for a profile
-named in `[profiles]`, and it is what separates the account `accounts remove`
-can drop by deleting a line from the one where there is no line to delete.
+the keys — as a table under a header, marking the one serving turns, naming the
+store each borrowed row was read from, and saying in its last column whether
+the account needs anything doing to it: a credential the backend refused, a
+profile that has become a different account since it was chosen, a login about
+to expire, else `ok`. Only the source column is ever cut. A grant left in
+`credentials.json` by an older version is **not** listed as an account, because
+nothing reads one any more; it is named in a note under the listing instead,
+since a credential that quietly stopped counting reads as one that vanished.
+Each row also says what kind of thing it is and whether the operator wrote it
+down — `declared` is true only for a profile named in `[profiles]`, and it is
+what separates the account `accounts remove` can drop by deleting a line from
+the one where there is no line to delete.
 `--json` prints the socket's payload instead of the table, under either
 spelling of the listing.
 
