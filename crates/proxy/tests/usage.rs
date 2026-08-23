@@ -1096,3 +1096,155 @@ fn only_utc_timestamps_are_converted() {
     assert_eq!(epoch_from_rfc3339("2026-08-23"), None);
     assert_eq!(epoch_from_rfc3339(""), None);
 }
+
+// --- asking for a figure, per provider ------------------------------------
+
+/// The headers one request arrived with, in the order they arrived.
+type SeenHeaders = Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+/// A loopback endpoint that records what it was asked and answers `body`.
+struct QuotaEndpoint {
+    url: String,
+    seen: SeenHeaders,
+}
+
+impl QuotaEndpoint {
+    async fn start(body: &'static str) -> Self {
+        use axum::extract::State;
+        use axum::http::HeaderMap;
+
+        let seen: SeenHeaders = Arc::default();
+        let router = axum::Router::new()
+            .route(
+                "/usage",
+                axum::routing::get(
+                    move |State(seen): State<SeenHeaders>, headers: HeaderMap| async move {
+                        let mut recorded = seen.lock().expect("not poisoned");
+                        for (name, value) in &headers {
+                            recorded.push((
+                                name.as_str().to_owned(),
+                                value.to_str().unwrap_or_default().to_owned(),
+                            ));
+                        }
+                        body
+                    },
+                ),
+            )
+            .with_state(Arc::clone(&seen));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/usage", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        Self { url, seen }
+    }
+
+    fn header(&self, name: &str) -> Option<String> {
+        self.seen
+            .lock()
+            .expect("not poisoned")
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.clone())
+    }
+}
+
+fn authorization(
+    provider: proxenos::auth::store::Provider,
+) -> proxenos::auth::authorize::Authorization {
+    proxenos::auth::authorize::Authorization {
+        kind: proxenos::auth::authorize::Kind::Subscription,
+        provider,
+        account: None,
+        headers: vec![("authorization".to_owned(), "Bearer borrowed".to_owned())],
+    }
+}
+
+const ANTHROPIC_BODY: &str = r#"{
+    "five_hour": { "utilization": 18.0, "resets_at": "2026-08-23T09:00:00.383476+00:00" },
+    "seven_day": { "utilization": 20.0, "resets_at": "2026-08-29T04:00:00.383497+00:00" },
+    "limits": [ { "kind": "session", "severity": "normal" } ]
+}"#;
+
+/// The second provider's endpoint is read with the second provider's parser.
+/// Before this the one parser there was read that body into nothing, and an
+/// account with quota reported none.
+#[tokio::test]
+async fn a_figure_is_read_from_the_second_providers_own_shape() {
+    let endpoint = QuotaEndpoint::start(ANTHROPIC_BODY).await;
+
+    let snapshot = proxenos::usage::fetch(
+        &reqwest::Client::new(),
+        &endpoint.url,
+        &authorization(proxenos::auth::store::Provider::Anthropic),
+    )
+    .await
+    .expect("a figure");
+
+    assert_eq!(snapshot.windows.len(), 2);
+    assert_eq!(snapshot.windows[0].window_minutes, Some(300));
+}
+
+/// It is asked as the client whose credential this is. The endpoint answers a
+/// request carrying that client's own string, and this proxy's own would be a
+/// claim about a client it is not.
+#[tokio::test]
+async fn the_second_providers_endpoint_is_asked_as_the_owning_client() {
+    let endpoint = QuotaEndpoint::start(ANTHROPIC_BODY).await;
+
+    proxenos::usage::fetch(
+        &reqwest::Client::new(),
+        &endpoint.url,
+        &authorization(proxenos::auth::store::Provider::Anthropic),
+    )
+    .await
+    .expect("a figure");
+
+    let agent = endpoint
+        .header("user-agent")
+        .expect("a user agent was sent");
+    assert!(agent.starts_with("claude-cli"), "was: {agent}");
+    assert!(agent.contains("external, cli"), "was: {agent}");
+}
+
+/// The first provider keeps its own shape and its own identification. One
+/// parser reading both bodies is what this split exists to prevent.
+#[tokio::test]
+async fn the_first_provider_is_unchanged() {
+    let endpoint = QuotaEndpoint::start(
+        r#"{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":10,"window_seconds":18000,"resets_in_seconds":60}}}"#,
+    )
+    .await;
+
+    let snapshot = proxenos::usage::fetch(
+        &reqwest::Client::new(),
+        &endpoint.url,
+        &authorization(proxenos::auth::store::Provider::Codex),
+    )
+    .await
+    .expect("a figure");
+
+    assert_eq!(snapshot.plan.as_deref(), Some("pro"));
+    let agent = endpoint
+        .header("user-agent")
+        .expect("a user agent was sent");
+    assert!(!agent.starts_with("claude-cli"), "was: {agent}");
+}
+
+/// One provider's body through the other's parser yields nothing rather than
+/// an empty snapshot, and the refusal says the shape was not recognized.
+#[tokio::test]
+async fn a_body_in_the_other_providers_shape_is_refused() {
+    let endpoint = QuotaEndpoint::start(ANTHROPIC_BODY).await;
+
+    let refusal = proxenos::usage::fetch(
+        &reqwest::Client::new(),
+        &endpoint.url,
+        &authorization(proxenos::auth::store::Provider::Codex),
+    )
+    .await
+    .expect_err("the wrong parser reads nothing");
+
+    assert!(refusal.message.contains("shape"), "{}", refusal.message);
+}

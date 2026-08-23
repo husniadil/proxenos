@@ -649,6 +649,7 @@ impl crate::auth::authorize::Authorizer for ProbeAuthorizer {
     ) -> Result<crate::auth::authorize::Authorization, ProxyError> {
         Ok(crate::auth::authorize::Authorization {
             kind: crate::auth::authorize::Kind::Key,
+            provider: crate::auth::store::Provider::Anthropic,
             account: Some(PROBE_ACCOUNT.to_owned()),
             headers: vec![("x-api-key".to_owned(), "probe-placeholder".to_owned())],
         })

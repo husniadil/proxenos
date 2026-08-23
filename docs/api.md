@@ -1109,6 +1109,7 @@ catalog  = "https://..."
 
 [upstream.anthropic]
 endpoint = "https://..."
+usage    = "https://..."
 
 # Optional. The profile directories grants are borrowed from, keyed by the
 # name the account is filed under.
@@ -1148,8 +1149,11 @@ state looks like.
 belongs to the subscription backend, so a key account uses HTTP. Sending either
 credential to the other's endpoint is refused before anything leaves.
 
-`[upstream.anthropic]` is where a relayed turn goes (`proxy-behavior.md` §9).
-One entry, because the relay does one thing: it speaks the surface this proxy
+`[upstream.anthropic]` is where a relayed turn goes (`proxy-behavior.md` §9),
+and `usage` is where that provider states quota for a borrowed grant
+(`proxy-behavior.md` §8.4). Only a grant can ask there: a key has no
+subscription behind it, and the long-lived subscription token wearing the same
+stem is refused for want of a scope. Otherwise the relay does one thing: it speaks the surface this proxy
 already exposes, so there is no catalog to translate and no socket protocol to
 speak.
 

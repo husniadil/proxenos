@@ -13,7 +13,6 @@
 //! exactly.
 
 use crate::auth::authorize::Authorizer;
-use crate::auth::authorize::Kind;
 use crate::auth::store::AccountStore;
 use crate::auth::store::Provider;
 use crate::error::ProxyError;
@@ -214,7 +213,10 @@ impl Relay {
             .credentials
             .authorize(Some(account))
             .await?
-            .for_endpoint(Kind::Key)?;
+            // Whose account it is, not which kind of credential: a grant
+            // borrowed from a profile on this provider and a key stored here
+            // are both spent at the same endpoint (§8.4).
+            .for_provider(Provider::Anthropic)?;
 
         // The query string as the client sent it — `?beta=true` is observed
         // live. The endpoint decides the path; the client decides the query,

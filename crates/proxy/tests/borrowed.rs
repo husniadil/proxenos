@@ -1051,3 +1051,140 @@ fn a_failed_run_releases_the_lock() {
     poke::under_lock(client.as_ref(), &lock, None).expect("the lock was free");
     assert_eq!(client.runs.lock().expect("not poisoned").len(), 1);
 }
+
+// --- what a borrowed grant puts on the wire -------------------------------
+
+use proxenos::auth::authorize::AccountAuthorizer;
+use proxenos::auth::authorize::Authorizer;
+use proxenos::auth::authorize::Kind;
+use proxenos::auth::grants::Grants;
+use proxenos::auth::grants::SystemClock;
+
+fn authorizer(store: Arc<BorrowedStore>) -> AccountAuthorizer {
+    let grants = Arc::new(Grants::new(
+        Arc::clone(&store) as Arc<dyn CredentialStore>,
+        Arc::new(SystemClock),
+    ));
+    AccountAuthorizer::new(store as Arc<dyn AccountStore>, grants)
+}
+
+fn header<'a>(
+    authorization: &'a proxenos::auth::authorize::Authorization,
+    name: &str,
+) -> Option<&'a str> {
+    authorization
+        .headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+fn a_claude_blob() -> String {
+    keychain_blob(serde_json::json!({
+        "accessToken": "sk-ant-oat01-borrowed",
+        "refreshToken": "sk-ant-ort01-borrowed",
+        "expiresAt": 4_000_000_000_000u64,
+        "refreshTokenExpiresAt": 4_100_000_000_000u64,
+        "subscriptionType": "max",
+    }))
+}
+
+/// A borrowed grant on the second provider is spent at that provider's
+/// endpoint, and the relay asks whose account it is rather than which kind of
+/// credential it is. Before this, the relay pinned itself to a key and refused
+/// every grant on that provider.
+#[tokio::test]
+async fn a_borrowed_claude_grant_is_authorized_for_its_own_provider() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let personal = profile("personal", Provider::Anthropic, Some("/profiles/personal"));
+    let store = Arc::new(store(
+        dir.path(),
+        vec![personal.clone()],
+        &[(&personal, a_claude_blob())],
+    ));
+
+    let authorization = authorizer(store).authorize(None).await.expect("authorizes");
+
+    assert_eq!(authorization.provider, Provider::Anthropic);
+    assert_eq!(authorization.kind, Kind::Subscription);
+    authorization
+        .clone()
+        .for_provider(Provider::Anthropic)
+        .expect("it belongs to that provider's endpoint");
+    let refusal = authorization
+        .for_provider(Provider::Codex)
+        .expect_err("and to no other");
+    assert!(refusal.message.contains("anthropic"), "{}", refusal.message);
+}
+
+/// Each provider's subscription path wants different headers, and sending one
+/// provider's extras to the other is how a borrowed grant fails with a message
+/// about the wrong half.
+#[tokio::test]
+async fn each_provider_gets_only_the_headers_it_asks_for() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let personal = profile("personal", Provider::Anthropic, Some("/profiles/personal"));
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let store = Arc::new(store(
+        dir.path(),
+        vec![personal.clone(), work.clone()],
+        &[
+            (&personal, a_claude_blob()),
+            (
+                &work,
+                auth_json(serde_json::json!({
+                    "id_token": id_token("acct_123", "team"),
+                    "access_token": access_token(4_000_000_000),
+                    "refresh_token": "rt.1.borrowed",
+                    "account_id": "acct_123",
+                })),
+            ),
+        ],
+    ));
+    let authorizer = authorizer(store);
+
+    let claude = authorizer
+        .authorize(Some("personal"))
+        .await
+        .expect("authorizes");
+    assert_eq!(header(&claude, "anthropic-beta"), Some("oauth-2025-04-20"));
+    assert_eq!(header(&claude, "originator"), None);
+    assert_eq!(header(&claude, "chatgpt-account-id"), None);
+
+    let codex = authorizer
+        .authorize(Some("work"))
+        .await
+        .expect("authorizes");
+    assert_eq!(header(&codex, "chatgpt-account-id"), Some("acct_123"));
+    assert!(header(&codex, "originator").is_some());
+    assert_eq!(header(&codex, "anthropic-beta"), None);
+}
+
+/// A lapsed borrowed grant refuses the turn rather than being refreshed here.
+#[tokio::test]
+async fn a_lapsed_borrowed_grant_refuses_the_turn() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let personal = profile("personal", Provider::Anthropic, Some("/profiles/personal"));
+    let lapsed = keychain_blob(serde_json::json!({
+        "accessToken": "sk-ant-oat01-borrowed",
+        "refreshToken": "sk-ant-ort01-borrowed",
+        "expiresAt": 1_000_000u64,
+    }));
+    let store = Arc::new(store(
+        dir.path(),
+        vec![personal.clone()],
+        &[(&personal, lapsed)],
+    ));
+
+    let refusal = authorizer(store)
+        .authorize(None)
+        .await
+        .expect_err("a lapsed grant is refused");
+
+    assert!(refusal.message.contains("expired"), "{}", refusal.message);
+    assert!(
+        refusal.message.contains("owns the profile"),
+        "{}",
+        refusal.message
+    );
+}

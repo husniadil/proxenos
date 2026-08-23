@@ -150,6 +150,7 @@ impl Harness {
             // no test may reach the network.
             tokens: None,
             usage_endpoint: String::new(),
+            anthropic_usage_endpoint: String::new(),
             // Inside the temp directory, always. A test that could reach an
             // operator's real configuration would be a test that edits the
             // machine it runs on.
@@ -250,6 +251,7 @@ impl Harness {
             shutdown: Arc::clone(&self.shutdown),
             tokens: None,
             usage_endpoint: String::new(),
+            anthropic_usage_endpoint: String::new(),
             sessions: Arc::clone(&self.sessions),
             config_path: Some(self.config_file.clone()),
         };
@@ -302,6 +304,7 @@ impl Harness {
             shutdown: Arc::clone(&self.shutdown),
             tokens: Some(tokens),
             usage_endpoint: String::new(),
+            anthropic_usage_endpoint: String::new(),
             sessions: Arc::clone(&self.sessions),
             config_path: Some(self.config_file.clone()),
         };
@@ -362,6 +365,7 @@ impl Harness {
             shutdown: Arc::clone(&self.shutdown),
             tokens,
             usage_endpoint: String::new(),
+            anthropic_usage_endpoint: String::new(),
             sessions: Arc::clone(&self.sessions),
             config_path: Some(self.config_file.clone()),
         };
@@ -412,6 +416,7 @@ impl Harness {
             shutdown: Arc::clone(&self.shutdown),
             tokens: Some(tokens),
             usage_endpoint: endpoint.to_owned(),
+            anthropic_usage_endpoint: String::new(),
             sessions: Arc::clone(&self.sessions),
             config_path: Some(self.config_file.clone()),
         };
@@ -709,6 +714,7 @@ async fn an_unknown_window_is_reported_as_null() {
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
         usage_endpoint: String::new(),
+        anthropic_usage_endpoint: String::new(),
         sessions: Arc::new(proxenos::session::SessionStore::new()),
         config_path: None,
     };
@@ -862,6 +868,7 @@ async fn a_malformed_request_is_reported_without_closing_the_socket() {
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
         usage_endpoint: String::new(),
+        anthropic_usage_endpoint: String::new(),
         sessions: Arc::new(proxenos::session::SessionStore::new()),
         config_path: None,
     };
@@ -1423,6 +1430,7 @@ async fn status_says_when_the_catalog_was_unavailable() {
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
         usage_endpoint: String::new(),
+        anthropic_usage_endpoint: String::new(),
         sessions: Arc::new(proxenos::session::SessionStore::new()),
         config_path: None,
     };
@@ -1459,6 +1467,7 @@ async fn models_prints_unknown_rather_than_a_number() {
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
         usage_endpoint: String::new(),
+        anthropic_usage_endpoint: String::new(),
         sessions: Arc::new(proxenos::session::SessionStore::new()),
         config_path: None,
     };
@@ -1535,6 +1544,7 @@ async fn env_states_no_window_when_the_catalog_is_unavailable() {
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
         usage_endpoint: String::new(),
+        anthropic_usage_endpoint: String::new(),
         sessions: Arc::new(proxenos::session::SessionStore::new()),
         config_path: None,
     };
@@ -4009,6 +4019,7 @@ async fn env_for(
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
         usage_endpoint: String::new(),
+        anthropic_usage_endpoint: String::new(),
         sessions: Arc::new(proxenos::session::SessionStore::new()),
         config_path: None,
     };
@@ -4843,6 +4854,7 @@ fn probe_state(dir: &std::path::Path) -> ControlState {
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
         usage_endpoint: String::new(),
+        anthropic_usage_endpoint: String::new(),
         sessions: Arc::new(proxenos::session::SessionStore::new()),
         config_path: Some(dir.join("config.toml")),
     }

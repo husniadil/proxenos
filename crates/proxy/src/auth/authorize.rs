@@ -8,6 +8,7 @@
 use super::grants::Grants;
 use super::store::AccountStore;
 use super::store::Credential;
+use super::store::Provider;
 use crate::error::ProxyError;
 use std::sync::Arc;
 
@@ -35,6 +36,14 @@ impl Kind {
 #[derive(Clone, Debug)]
 pub struct Authorization {
     pub kind: Kind,
+    /// Whose endpoints this credential belongs to.
+    ///
+    /// Separate from `kind`, and both are needed: `kind` decides which of one
+    /// provider's two endpoints a credential reaches, and this decides whose
+    /// endpoints they are at all. A borrowed subscription grant on the second
+    /// provider is a `Subscription` that must never be sent to the first
+    /// provider's backend, and before this field there was no way to say so.
+    pub provider: Provider,
     /// The account this resolved, where a pinned tier named one. `None` is the
     /// account serving turns.
     ///
@@ -69,6 +78,27 @@ impl Authorization {
     fn named(mut self, account: &str) -> Self {
         self.account = Some(account.to_owned());
         self
+    }
+
+    /// Refuse a credential that belongs to the other provider's endpoints.
+    ///
+    /// The relay asks this rather than asking about `kind`: what makes a
+    /// credential belong there is whose account it is, and a grant and a key
+    /// on that provider are both spent at the same endpoint.
+    pub fn for_provider(self, expected: Provider) -> Result<Self, ProxyError> {
+        if self.provider == expected {
+            return Ok(self);
+        }
+        let whose = match &self.account {
+            Some(account) => format!("the account `{account}` this tier is pinned to"),
+            None => "the account serving turns".to_owned(),
+        };
+        Err(ProxyError::invalid_request(format!(
+            "{whose} is on {}, and this endpoint belongs to {}; \
+             select an account on the other provider, or point that endpoint somewhere it belongs",
+            self.provider.as_str(),
+            expected.as_str(),
+        )))
     }
 
     pub fn for_endpoint(self, expected: Kind) -> Result<Self, ProxyError> {
@@ -147,6 +177,18 @@ impl AccountAuthorizer {
         }
     }
 
+    /// Which provider a named account is on, for deciding what its credential
+    /// puts on the wire.
+    fn provider_of(&self, account: &str) -> Provider {
+        provider_named(
+            self.store
+                .accounts()
+                .ok()
+                .and_then(|accounts| accounts.into_iter().find(|stored| stored.name == account))
+                .map(|stored| stored.provider),
+        )
+    }
+
     /// The token source for one named account, built once.
     fn grants_for(&self, account: &str) -> Arc<Grants> {
         let mut pinned = match self.pinned.lock() {
@@ -174,20 +216,28 @@ impl Authorizer for AccountAuthorizer {
         // mapping and a store edited separately need in order to say which of
         // the two is wrong.
         if let Some(account) = account {
+            let provider = self.provider_of(account);
             return match self.store.credential_for(account)? {
-                Credential::Grant(_) => self
-                    .grants_for(account)
-                    .authorize(None)
-                    .await
+                Credential::Grant(_) => grant_authorization(&self.grants_for(account), provider)
                     .map(|authorization| authorization.named(account)),
-                Credential::Key(key) => Ok(key_authorization(&key).named(account)),
+                Credential::Key(key) => Ok(key_authorization(&key, provider).named(account)),
             };
         }
 
+        let serving = self
+            .store
+            .accounts()
+            .ok()
+            .and_then(|accounts| accounts.into_iter().find(|account| account.selected));
+        let provider = provider_named(serving.as_ref().map(|account| account.provider));
+
         match self.store.credential()? {
-            Some(Credential::Grant(_)) => self.grants.authorize(None).await,
-            Some(Credential::Key(key)) => Ok(key_authorization(&key)),
-            None => Err(ProxyError::authentication("not authenticated; run `login`")),
+            Some(Credential::Grant(_)) => grant_authorization(&self.grants, provider),
+            Some(Credential::Key(key)) => Ok(key_authorization(&key, provider)),
+            None => Err(ProxyError::authentication(
+                "no account is available; declare a profile under `[profiles]` or store a key \
+                 with `login --key --as NAME`",
+            )),
         }
     }
 }
@@ -196,9 +246,10 @@ impl Authorizer for AccountAuthorizer {
 ///
 /// One header. A key identifies nothing but itself: no account to name, and no
 /// client to identify to an endpoint that does not ask.
-fn key_authorization(key: &super::store::ApiKey) -> Authorization {
+fn key_authorization(key: &super::store::ApiKey, provider: Provider) -> Authorization {
     Authorization {
         kind: Kind::Key,
+        provider,
         account: None,
         headers: vec![(
             axum::http::header::AUTHORIZATION.to_string(),
@@ -207,31 +258,69 @@ fn key_authorization(key: &super::store::ApiKey) -> Authorization {
     }
 }
 
+/// What a subscription grant puts on the wire, which differs by provider.
+///
+/// The first provider wants an originator and the account id on every request;
+/// the second wants the beta header its OAuth grants are gated behind and
+/// nothing else. Sending either provider's extras to the other is how a
+/// borrowed grant would fail with a message about the wrong half.
+fn grant_authorization(grants: &Grants, provider: Provider) -> Result<Authorization, ProxyError> {
+    let mut headers = vec![(
+        axum::http::header::AUTHORIZATION.to_string(),
+        format!("Bearer {}", grants.access_token()?),
+    )];
+
+    match provider {
+        Provider::Codex => {
+            // §2.8 — required on every subscription path, and its absence is a
+            // bare 400 that names nothing.
+            headers.push((
+                "originator".to_owned(),
+                crate::upstream::http::ORIGINATOR.to_owned(),
+            ));
+            if let Some(account) = grants.account_id() {
+                headers.push(("chatgpt-account-id".to_owned(), account));
+            }
+        }
+        Provider::Anthropic => {
+            headers.push((
+                ANTHROPIC_OAUTH_BETA.0.to_owned(),
+                ANTHROPIC_OAUTH_BETA.1.to_owned(),
+            ));
+        }
+    }
+
+    Ok(Authorization {
+        kind: Kind::Subscription,
+        provider,
+        account: None,
+        headers,
+    })
+}
+
+/// The beta the second provider gates its OAuth grants behind. Measured: a
+/// request carrying the grant and this header answers 200 from any process.
+pub const ANTHROPIC_OAUTH_BETA: (&str, &str) = ("anthropic-beta", "oauth-2025-04-20");
+
+/// A provider name as the store reports it, back into the enum. An unknown
+/// name is the first provider, which is what every stored account was before
+/// there was a second.
+fn provider_named(name: Option<&str>) -> Provider {
+    match name {
+        Some(name) if name == Provider::Anthropic.as_str() => Provider::Anthropic,
+        _ => Provider::Codex,
+    }
+}
+
 #[async_trait::async_trait]
 impl Authorizer for Grants {
     /// A reader is already bound to one account's store, so the account a
     /// caller names has been resolved before it gets here.
+    ///
+    /// Answers for the first provider. Nothing here knows whose account it
+    /// reads — a store yields a credential, not an account — so a caller that
+    /// serves both providers goes through `AccountAuthorizer`, which does.
     async fn authorize(&self, _account: Option<&str>) -> Result<Authorization, ProxyError> {
-        let mut headers = vec![
-            (
-                axum::http::header::AUTHORIZATION.to_string(),
-                format!("Bearer {}", self.access_token()?),
-            ),
-            // §2.8 — required on every subscription path, and its absence is a
-            // bare 400 that names nothing.
-            (
-                "originator".to_owned(),
-                crate::upstream::http::ORIGINATOR.to_owned(),
-            ),
-        ];
-        if let Some(account) = self.account_id() {
-            headers.push(("chatgpt-account-id".to_owned(), account));
-        }
-
-        Ok(Authorization {
-            kind: Kind::Subscription,
-            account: None,
-            headers,
-        })
+        grant_authorization(self, Provider::Codex)
     }
 }

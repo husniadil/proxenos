@@ -982,10 +982,21 @@ pub async fn fetch(
         .clone()
         .for_endpoint(crate::auth::authorize::Kind::Subscription)?;
 
-    let request = authorization.apply(client.get(endpoint).header(
-        axum::http::header::USER_AGENT,
-        crate::upstream::http::USER_AGENT,
-    ));
+    // Each provider's endpoint wants to be addressed as the client it belongs
+    // to. The second provider's answers a request carrying the borrowed
+    // grant's own client string; the first provider's has always been asked as
+    // this proxy.
+    let agent = match authorization.provider {
+        crate::auth::store::Provider::Codex => crate::upstream::http::USER_AGENT.to_owned(),
+        crate::auth::store::Provider::Anthropic => claude_user_agent(),
+    };
+
+    let request = authorization.apply(
+        client
+            .get(endpoint)
+            .header(axum::http::header::USER_AGENT, agent)
+            .header(axum::http::header::ACCEPT, "application/json"),
+    );
 
     let response = request.send().await.map_err(|error| {
         crate::error::ProxyError::upstream(
@@ -1004,10 +1015,52 @@ pub async fn fetch(
         ));
     }
 
-    Snapshot::parse_rest(&body).ok_or_else(|| {
+    let parsed = match authorization.provider {
+        crate::auth::store::Provider::Codex => Snapshot::parse_rest(&body),
+        crate::auth::store::Provider::Anthropic => Snapshot::parse_anthropic(&body),
+    };
+
+    parsed.ok_or_else(|| {
         crate::error::ProxyError::upstream(
             axum::http::StatusCode::BAD_GATEWAY,
             "the quota endpoint answered with a shape this proxy does not recognize",
         )
     })
+}
+
+/// What the second provider's quota endpoint is asked as.
+///
+/// The version comes from the client that owns the grant, because that is
+/// whose credential this is. Where it cannot be run, a version-less string is
+/// sent rather than a guessed number: a wrong version is a claim, and an
+/// absent one is not.
+///
+/// Cached: the client's version changes on an upgrade, and spawning a process
+/// per quota request to learn it would be silly.
+fn claude_user_agent() -> String {
+    static AGENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    AGENT
+        .get_or_init(|| {
+            let version = std::process::Command::new("claude")
+                .arg("--version")
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| {
+                    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+                    text.split_whitespace()
+                        .find(|word| {
+                            word.split('.').count() == 3
+                                && word.split('.').all(|part| {
+                                    !part.is_empty() && part.chars().all(|c| c.is_ascii_digit())
+                                })
+                        })
+                        .map(str::to_owned)
+                });
+            match version {
+                Some(version) => format!("claude-cli/{version} (external, cli)"),
+                None => "claude-cli (external, cli)".to_owned(),
+            }
+        })
+        .clone()
 }

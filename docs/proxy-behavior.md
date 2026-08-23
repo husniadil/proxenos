@@ -1634,6 +1634,19 @@ own severity, read rather than inferred from the percentage: an account can sit
 high on a window the provider is still calling normal. Nothing in that body
 states that a turn would be refused, so nothing derived from it claims one would.
 
+**A credential names whose endpoints it belongs to, as well as which of that
+provider's two it reaches.** Both are needed: a borrowed subscription grant on
+the second provider is a subscription credential that must never be sent to the
+first provider's backend, and the relay asks about the provider rather than the
+kind — a grant and a key on that provider are spent at the same endpoint.
+
+Each provider's subscription path is addressed as its own client. The first
+wants an originator and the account id on every request; the second wants the
+beta header its OAuth grants are gated behind, and is asked for quota under the
+owning client's user-agent string rather than this proxy's. Sending either
+provider's extras to the other is how a borrowed grant fails with a message
+about the wrong half.
+
 **The keychain is read by spawning `security`.** The item's ACL trusts that
 binary; a process reading through Security.framework is a different application
 to the keychain and is prompted. One client run reads the item sixteen times,

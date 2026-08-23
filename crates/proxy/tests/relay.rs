@@ -822,6 +822,7 @@ async fn a_relayed_turn_joins_the_served_models_a_status_line_reads() {
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
         usage_endpoint: String::new(),
+        anthropic_usage_endpoint: String::new(),
         sessions: Arc::new(proxenos::session::SessionStore::new()),
         config_path: None,
     };

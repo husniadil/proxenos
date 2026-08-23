@@ -372,6 +372,7 @@ fn subscription_auth(token: &str) -> Authorization {
     Authorization {
         account: None,
         kind: Kind::Subscription,
+        provider: proxenos::auth::store::Provider::Codex,
         headers: vec![
             ("authorization".to_owned(), format!("Bearer {token}")),
             (
@@ -577,6 +578,7 @@ async fn a_catalog_is_fetched_from_the_endpoint_its_credential_belongs_to() {
             .refresh(&Authorization {
                 account: None,
                 kind: Kind::Key,
+                provider: proxenos::auth::store::Provider::Anthropic,
                 headers: vec![("authorization".to_owned(), "Bearer key-secret".to_owned())],
             })
             .await

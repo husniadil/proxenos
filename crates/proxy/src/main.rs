@@ -1119,6 +1119,7 @@ async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
         shutdown: Arc::clone(&shutdown),
         tokens: Some(Arc::clone(&tokens)),
         usage_endpoint: config.upstream.usage.clone(),
+        anthropic_usage_endpoint: config.upstream.anthropic.usage.clone(),
         sessions: Arc::clone(&sessions),
         config_path: Some(proxenos::config::config_path()),
     };
