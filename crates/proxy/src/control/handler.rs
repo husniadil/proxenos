@@ -87,10 +87,16 @@ pub async fn dispatch(
         // empty object where there is no policy. Absence is reserved for a
         // daemon that predates this, which is the ordinary state after an
         // upgrade that has not restarted anything.
-        "env" => Ok(json!({
-            "variables": environment(state),
-            "settings": state.config.client.settings(any_tier_translates(state)),
-        })),
+        "env" => {
+            // One listing for both halves. On a machine serving from a
+            // borrowed profile every listing is a keychain read, so a method
+            // that asks twice pays twice (§8.4).
+            let accounts = state.credentials.accounts().unwrap_or_default();
+            Ok(json!({
+                "variables": environment(state, &accounts),
+                "settings": state.config.client.settings(any_tier_translates(state, &accounts)),
+            }))
+        }
         "usage" => Ok(usage(state)),
         "accounts.forget" => forget_account(state, params).await,
         "accounts" => accounts(state),
@@ -145,16 +151,15 @@ pub async fn dispatch(
 ///
 /// An empty mapping answers `true`, keeping a daemon with nothing mapped on
 /// the policy it had before the relay existed.
-fn any_tier_translates(state: &ControlState) -> bool {
+fn any_tier_translates(state: &ControlState, accounts: &[crate::auth::store::Account]) -> bool {
     let policy = state.policy.get();
     let tiers = policy.tiers();
     if tiers.is_empty() {
         return true;
     }
-    let accounts = state.credentials.accounts().unwrap_or_default();
     tiers
         .iter()
-        .any(|tier| !crate::upstream::relay::relays(&accounts, tier.account.as_deref()))
+        .any(|tier| !crate::upstream::relay::relays(accounts, tier.account.as_deref()))
 }
 
 /// This binary's version, reported so a caller can see whether the daemon
@@ -267,7 +272,7 @@ fn status(state: &ControlState) -> Value {
         // so without this nothing would ever mention that a tier points at a
         // model the backend does not offer. Present and empty rather than
         // absent, so "nothing withheld" is distinguishable from "not reported".
-        "unlisted_tiers": catalog.unlisted(&mapped_models(state)),
+        "unlisted_tiers": catalog.unlisted(&mapped_models(state, &stored)),
         // Whether the catalog is the backend's or the fallback list. A caller
         // that cannot tell would report an unvalidated mapping as a validated
         // one.
@@ -275,14 +280,14 @@ fn status(state: &ControlState) -> Value {
         // §9.1 — the fetched catalog is not a relay-serving daemon's menu at
         // all; its list is the curated one, and the renderer says that
         // instead of reporting a validation that was never owed.
-        "catalog_curated": serving_account_relays(state),
+        "catalog_curated": serving_account_relays(&stored),
         // Whether the list describes the account now serving turns. A switch
         // asks for it again, but best effort: a failed fetch keeps the list
         // already in force rather than withdrawing models the account has, so
         // it can still be the previous account's menu — and presenting that as
         // this one's would deny models this account has and offer models it
         // does not.
-        "catalog_stale": catalog.is_stale_for(serving_account(state).as_deref()),
+        "catalog_stale": catalog.is_stale_for(serving_account(&stored).as_deref()),
         "catalog_account": catalog.fetched_for.clone(),
         // The build actually serving this socket, which is not necessarily the
         // build the caller was invoked from.
@@ -298,7 +303,10 @@ fn status(state: &ControlState) -> Value {
             // The list a launch would actually apply, not the raw key: a
             // reader chasing "Skill execution blocked" needs the rule in
             // force, and an all-relay mapping has no default deny in force.
-            "deny_skills": state.config.client.effective_deny_skills(any_tier_translates(state)),
+            "deny_skills": state
+                .config
+                .client
+                .effective_deny_skills(any_tier_translates(state, &stored)),
             "disable_connectors": state.config.client.disable_connectors,
             "disable_remote_control": state.config.client.disable_remote_control,
         },
@@ -307,10 +315,12 @@ fn status(state: &ControlState) -> Value {
 }
 
 fn models(state: &ControlState) -> Value {
+    let stored = state.credentials.accounts().unwrap_or_default();
+
     // §9.1 — an account on the second provider is not on the fetched
     // catalog's menu at all. Its list is the curated one, and the payload
     // says curated so no renderer presents it as a fetch that failed.
-    if serving_account_relays(state) {
+    if serving_account_relays(&stored) {
         let catalog = crate::catalog::Catalog::relay();
         let entries: Vec<Value> = catalog
             .selectable()
@@ -330,7 +340,7 @@ fn models(state: &ControlState) -> Value {
             "curated": true,
             // Whose list this is. The renderer names it, and naming it from
             // the payload keeps the answer with the account it came from.
-            "provider": selected_provider(state),
+            "provider": selected_provider(&stored),
             "stale": false,
         });
     }
@@ -353,7 +363,7 @@ fn models(state: &ControlState) -> Value {
     json!({
         "models": entries,
         "authoritative": catalog.authoritative,
-        "stale": catalog.is_stale_for(serving_account(state).as_deref()),
+        "stale": catalog.is_stale_for(serving_account(&stored).as_deref()),
     })
 }
 
@@ -362,18 +372,15 @@ fn tiers(state: &ControlState) -> Value {
 }
 
 /// Every model a tier points at, once each.
-fn mapped_models(state: &ControlState) -> Vec<String> {
+fn mapped_models(state: &ControlState, accounts: &[crate::auth::store::Account]) -> Vec<String> {
     // Relayed tiers excluded, for the reason validation excludes them: the
     // catalog is the first provider's menu (§9.1), so it has nothing to say
     // about whether an id on the other provider is offered or withheld.
-    crate::upstream::relay::validated_models(
-        &state.credentials.accounts().unwrap_or_default(),
-        state.policy.get().tiers(),
-    )
-    .into_iter()
-    .collect::<std::collections::BTreeSet<_>>()
-    .into_iter()
-    .collect()
+    crate::upstream::relay::validated_models(accounts, state.policy.get().tiers())
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn tier_map(state: &ControlState) -> Value {
@@ -624,13 +631,16 @@ fn served_as(state: &ControlState, name: &str) -> String {
 /// All four tier variables are always emitted. `WebFetch` runs on the haiku
 /// tier, so an unmapped haiku breaks it in a way that looks unrelated to tier
 /// mapping.
-pub fn environment(state: &ControlState) -> Vec<(String, String)> {
+pub fn environment(
+    state: &ControlState,
+    accounts: &[crate::auth::store::Account],
+) -> Vec<(String, String)> {
     environment_for(
         state.port,
         state.config.client.disable_connectors,
         state.policy.get().tiers(),
         &state.catalog.current(),
-        &state.credentials.accounts().unwrap_or_default(),
+        accounts,
     )
 }
 
@@ -1209,8 +1219,8 @@ fn set_effort(state: &ControlState, params: Option<&Value>) -> Result<Value, Pro
 /// The account id of the account serving turns, where there is one.
 /// Whether the account serving turns is on the second provider (§9.1) — the
 /// account an unpinned tier's turns are relayed as.
-fn serving_account_relays(state: &ControlState) -> bool {
-    crate::upstream::relay::relays(&state.credentials.accounts().unwrap_or_default(), None)
+fn serving_account_relays(accounts: &[crate::auth::store::Account]) -> bool {
+    crate::upstream::relay::relays(accounts, None)
 }
 
 /// The provider of the account serving turns, for the rows that name it.
@@ -1218,8 +1228,7 @@ fn serving_account_relays(state: &ControlState) -> bool {
 /// Falls back to the store's own default rather than to a role word: the
 /// operator sees these ids in every accounts listing, and a row that declines
 /// to name one is the row they have to guess about.
-fn serving_provider(state: &ControlState) -> &'static str {
-    let accounts = state.credentials.accounts().unwrap_or_default();
+fn serving_provider(accounts: &[crate::auth::store::Account]) -> &'static str {
     accounts
         .iter()
         .find(|account| account.selected)
@@ -1227,13 +1236,14 @@ fn serving_provider(state: &ControlState) -> &'static str {
         .unwrap_or_else(|| crate::auth::store::Provider::Codex.as_str())
 }
 
-fn serving_account(state: &ControlState) -> Option<String> {
-    state
-        .credentials
-        .load()
-        .ok()
-        .flatten()
-        .and_then(|credentials| credentials.account_id)
+/// Read off the listing rather than by loading the credential again: the row
+/// carries the id the grant carries, and on a borrowed profile a second read
+/// is a second keychain spawn (§8.4).
+fn serving_account(accounts: &[crate::auth::store::Account]) -> Option<String> {
+    accounts
+        .iter()
+        .find(|account| account.selected)
+        .and_then(|account| account.account_id.clone())
 }
 
 /// `accounts` — every stored grant, and which one serves turns.
@@ -1350,7 +1360,7 @@ async fn select_account(state: &ControlState, params: Option<&Value>) -> Result<
     // The provider on each side of the move, read before the switch for the
     // same reason: afterwards there is nothing left that remembers which
     // provider was answering.
-    let previous_provider = selected_provider(state);
+    let previous_provider = selected_provider(&state.credentials.accounts().unwrap_or_default());
 
     state.credentials.select(name)?;
 
@@ -1394,7 +1404,7 @@ async fn select_account(state: &ControlState, params: Option<&Value>) -> Result<
         // them changes the backend, the path a turn takes and the subscription
         // drawn down, and the two cannot be reported by the same sentence.
         // Absent where the store does not say, rather than guessed.
-        "provider": serving_provider(state),
+        "provider": serving_provider(&state.credentials.accounts().unwrap_or_default()),
         "previous_provider": previous_provider,
         // The catalog is one account's menu (`proxy-behavior.md` §7.0), so it
         // is asked for again as the account now serving. Said out loud because
@@ -1484,15 +1494,13 @@ fn put_mapping_in_force(state: &ControlState, account: &str) -> Result<(), Proxy
     let ceiling = config.effort_ceiling_for(Some(account))?;
 
     let catalog = state.catalog.current();
-    if !catalog.is_stale_for(serving_account(state).as_deref()) {
+    let stored = state.credentials.accounts().unwrap_or_default();
+    if !catalog.is_stale_for(serving_account(&stored).as_deref()) {
         // The third door onto the rule the daemon's start and `tiers.set` use,
         // through the same function: this list is the account being switched
         // to, and a pinned or relayed tier names another menu entirely.
         catalog
-            .validate(&crate::upstream::relay::validated_models(
-                &state.credentials.accounts().unwrap_or_default(),
-                &tiers,
-            ))
+            .validate(&crate::upstream::relay::validated_models(&stored, &tiers))
             .map_err(|refusal| refused_switch(&refusal, account))?;
     }
 
@@ -1540,12 +1548,9 @@ fn serving_name(state: &ControlState) -> Option<String> {
 /// what a turn would be dispatched to and so falls back to the default: a
 /// switch reports what the store actually says, and an absent answer is the
 /// first selection rather than a provider to name.
-fn selected_provider(state: &ControlState) -> Option<&'static str> {
-    state
-        .credentials
-        .accounts()
-        .ok()?
-        .into_iter()
+fn selected_provider(accounts: &[crate::auth::store::Account]) -> Option<&'static str> {
+    accounts
+        .iter()
         .find(|account| account.selected)
         .map(|account| account.provider)
 }
