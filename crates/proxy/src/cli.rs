@@ -32,6 +32,13 @@ pub enum Command {
     /// can hold. `env --json` prints the identical document and stays for the
     /// callers that already use it.
     Settings,
+    /// Re-read config.toml into the running daemon.
+    ///
+    /// A verb of its own rather than a flag on `run`, because it is asked of a
+    /// daemon that is already serving. It says what it applied and what still
+    /// needs a restart: a reload that reported only success would leave an
+    /// operator believing a key took effect that cannot.
+    Reload,
     /// Ask the running daemon to stop.
     ///
     /// Named for what it asks, not for what follows: whether anything starts
@@ -290,6 +297,12 @@ mod tests {
     #[test]
     fn cli_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn reload_parses_as_a_verb_of_its_own() {
+        let cli = Cli::try_parse_from(["proxenos", "reload"]).unwrap();
+        assert!(matches!(cli.command, Command::Reload));
     }
 
     #[test]

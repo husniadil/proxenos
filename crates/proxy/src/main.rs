@@ -29,6 +29,7 @@ async fn main() -> Result<()> {
         Command::Models => commands::inspect::print_models().await,
         Command::Env(args) => commands::launch::print_env(args).await,
         Command::Settings => commands::launch::print_settings().await,
+        Command::Reload => commands::daemon::reload().await,
         Command::Stop => commands::daemon::stop().await,
         Command::Exec(args) => commands::launch::exec(args).await,
         Command::Doctor(args) => commands::doctor::doctor(args).await,

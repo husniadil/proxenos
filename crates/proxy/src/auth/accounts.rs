@@ -239,6 +239,17 @@ impl AccountStore for Accounts {
         self.borrowed.is_discovered()
     }
 
+    /// The borrowed half takes them; the keys are this daemon's own and are
+    /// unaffected by what `[profiles]` says.
+    fn set_profiles(
+        &self,
+        profiles: Vec<crate::auth::borrowed::read::Profile>,
+        discovered: bool,
+    ) -> bool {
+        self.borrowed.set_profiles(profiles, discovered);
+        true
+    }
+
     /// The borrowed profiles first, then the stored keys.
     ///
     /// Order is the order they were declared and stored in. The selection is
@@ -373,26 +384,8 @@ impl Accounts {
         config: &crate::config::Config,
         config_dir: &std::path::Path,
     ) -> Result<Self, ProxyError> {
-        // Declared, or found. An operator who wrote `[profiles]` gets exactly
-        // what they wrote; one who wrote nothing gets the stock profile of
-        // each program, which is what those programs use themselves (§8.4).
-        // The two never mix: a written entry is a statement about identity,
-        // and a discovered one sitting beside it would be a second opinion
-        // nobody asked for.
-        let declared = !config.profiles.is_empty();
-        let profiles: Vec<_> = if declared {
-            config
-                .profiles
-                .iter()
-                .map(|(name, profile)| crate::auth::borrowed::read::Profile {
-                    name: name.clone(),
-                    provider: profile.provider,
-                    config_dir: profile.path.clone(),
-                })
-                .collect()
-        } else {
-            crate::auth::borrowed::discovered()
-        };
+        let (profiles, discovered) = profiles_of(config);
+        let declared = !discovered;
 
         // Resolved, not required. A configuration with no `[profiles]` is a key
         // account's, and it needs neither a checked host nor a home directory —
@@ -434,6 +427,38 @@ impl Accounts {
             config_dir.to_path_buf(),
         ))
     }
+}
+
+/// The profile set a configuration means, and whether it was found rather than
+/// declared.
+///
+/// Declared, or found. An operator who wrote `[profiles]` gets exactly what
+/// they wrote; one who wrote nothing gets the stock profile of each program,
+/// which is what those programs use themselves (§8.4). The two never mix: a
+/// written entry is a statement about identity, and a discovered one sitting
+/// beside it would be a second opinion nobody asked for.
+///
+/// Its own function because `config.reload` asks the same question of a file
+/// read after startup, and two copies of this rule would drift into a daemon
+/// that reloads a different set from the one it starts on.
+pub fn profiles_of(
+    config: &crate::config::Config,
+) -> (Vec<crate::auth::borrowed::read::Profile>, bool) {
+    if config.profiles.is_empty() {
+        return (crate::auth::borrowed::discovered(), true);
+    }
+    (
+        config
+            .profiles
+            .iter()
+            .map(|(name, profile)| crate::auth::borrowed::read::Profile {
+                name: name.clone(),
+                provider: profile.provider,
+                config_dir: profile.path.clone(),
+            })
+            .collect(),
+        false,
+    )
 }
 
 /// The home directory a stock profile is found under.

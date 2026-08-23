@@ -31,6 +31,18 @@ use std::sync::Arc;
 /// one that throttles leaves a gap longer than any sensible wait. The daemon
 /// mints an id at startup, so a different id is a different process no matter
 /// how the two overlapped.
+/// Re-read config.toml into the running daemon, and print both halves of the
+/// answer.
+///
+/// Both, always. A reload that printed only what it applied would leave an
+/// operator who edited `port` believing it took effect, and the whole point of
+/// the verb is that the daemon keeps running.
+pub(crate) async fn reload() -> Result<()> {
+    let result = control::call(&control::default_path(), "config.reload", None).await?;
+    println!("{}", proxenos::render::reloaded_config(&result));
+    Ok(())
+}
+
 pub(crate) async fn stop() -> Result<()> {
     let before = answering().await;
 

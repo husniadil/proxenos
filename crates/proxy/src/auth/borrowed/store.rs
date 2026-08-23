@@ -24,11 +24,16 @@ use crate::auth::store::Credentials;
 use crate::auth::store::Provider;
 use crate::error::ProxyError;
 use std::path::PathBuf;
+use std::sync::RwLock;
 
 /// The declared profiles, the host they are resolved against, and where the
 /// selection is kept.
 pub struct BorrowedStore {
-    profiles: Vec<Profile>,
+    /// The declared set, behind a lock so `config.reload` can swap it on a
+    /// running daemon (`api.md` §3) without every holder of this store having
+    /// to be rebuilt. Everything above holds it as `Arc<dyn AccountStore>`,
+    /// and a new store would mean a new `Arc` in two places at once.
+    declared: RwLock<Declared>,
     reader: Box<dyn GrantReader>,
     /// What a profile is resolved against, or why it cannot be.
     ///
@@ -39,6 +44,14 @@ pub struct BorrowedStore {
     /// configuration that is entirely valid.
     platform: Result<Platform, String>,
     selection: Selection,
+}
+
+/// The profile set, and where it came from. One value because the two move
+/// together: writing `[profiles]` replaces a discovered set with a declared
+/// one, and a swap that moved only the list would leave the store calling the
+/// operator's own entries found ones.
+struct Declared {
+    profiles: Vec<Profile>,
     /// Whether these profiles were found rather than written down.
     ///
     /// It changes one thing: a declared profile that holds no grant is still
@@ -64,25 +77,60 @@ impl BorrowedStore {
         selection: Selection,
     ) -> Self {
         Self {
-            profiles,
+            declared: RwLock::new(Declared {
+                profiles,
+                discovered: false,
+            }),
             reader,
             platform,
             selection,
-            discovered: false,
         }
     }
 
     /// The same store over profiles nobody declared (§8.4).
     #[must_use]
-    pub fn discovered(mut self) -> Self {
-        self.discovered = true;
+    pub fn discovered(self) -> Self {
+        match self.declared.write() {
+            Ok(mut declared) => declared.discovered = true,
+            Err(poisoned) => poisoned.into_inner().discovered = true,
+        }
         self
     }
 
     /// Whether this store is serving profiles it found rather than ones it was
     /// given, which is what the listing says out loud.
     pub fn is_discovered(&self) -> bool {
-        self.discovered
+        self.declared_now().discovered
+    }
+
+    /// Replace the declared set, on a running daemon (`api.md` §3).
+    ///
+    /// Both halves at once, and nothing else: the grants stay where they are,
+    /// and which account serves turns is recorded elsewhere and is not this
+    /// call's to move. A selection naming a profile the new set does not have
+    /// is left alone rather than cleared — the operator may be mid-edit, and
+    /// clearing it would silently hand the turns to another subscription.
+    pub fn set_profiles(&self, profiles: Vec<Profile>, discovered: bool) {
+        let mut declared = match self.declared.write() {
+            Ok(declared) => declared,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        declared.profiles = profiles;
+        declared.discovered = discovered;
+    }
+
+    /// The set as it stands. Cloned out of the lock rather than borrowed
+    /// through it: a reader that held the guard while reading a grant would
+    /// hold it across a keychain spawn.
+    fn declared_now(&self) -> Declared {
+        let declared = match self.declared.read() {
+            Ok(declared) => declared,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        Declared {
+            profiles: declared.profiles.clone(),
+            discovered: declared.discovered,
+        }
     }
 
     /// The profiles an operator can actually act on.
@@ -90,16 +138,18 @@ impl BorrowedStore {
     /// The declared ones, whatever state they are in. Or, where they were
     /// discovered, the ones that hold a grant — which costs a read apiece, and
     /// is the read the answer is made of anyway.
-    fn visible(&self) -> Vec<&Profile> {
-        self.profiles
-            .iter()
-            .filter(|profile| !self.discovered || self.grant_for(profile).is_ok())
+    fn visible(&self) -> Vec<Profile> {
+        let declared = self.declared_now();
+        declared
+            .profiles
+            .into_iter()
+            .filter(|profile| !declared.discovered || self.grant_for(profile).is_ok())
             .collect()
     }
 
     /// The profiles this store answers for, in the order they were declared —
     /// or, where nothing was declared, the ones that were found signed in.
-    pub fn profiles(&self) -> Vec<&Profile> {
+    pub fn profiles(&self) -> Vec<Profile> {
         self.visible()
     }
 
@@ -111,9 +161,10 @@ impl BorrowedStore {
     pub fn profile_and_grant(
         &self,
         name: &str,
-    ) -> Result<(&Profile, crate::auth::borrowed::read::Grant), ProxyError> {
+    ) -> Result<(Profile, crate::auth::borrowed::read::Grant), ProxyError> {
         let profile = self.named(name)?;
-        Ok((profile, self.grant_for(profile)?))
+        let grant = self.grant_for(&profile)?;
+        Ok((profile, grant))
     }
 
     /// The profile serving turns.
@@ -123,7 +174,7 @@ impl BorrowedStore {
     /// one with nothing chosen is refused rather than resolved to whichever
     /// comes first — the choice decides whose subscription pays, and guessing
     /// at it spends the wrong one invisibly.
-    fn selected(&self) -> Result<&Profile, ProxyError> {
+    fn selected(&self) -> Result<Profile, ProxyError> {
         match self.selection.read()? {
             Some(name) => self.named(&name).map_err(|_| {
                 ProxyError::authentication(format!(
@@ -137,7 +188,7 @@ impl BorrowedStore {
                      another program keeps a grant in."
                         .to_owned(),
                 )),
-                [only] => Ok(only),
+                [only] => Ok(only.clone()),
                 _ => Err(ProxyError::authentication(
                     "more than one profile is declared and none is selected. \
                      Choose one with `accounts --use NAME`."
@@ -147,7 +198,7 @@ impl BorrowedStore {
         }
     }
 
-    fn named(&self, name: &str) -> Result<&Profile, ProxyError> {
+    fn named(&self, name: &str) -> Result<Profile, ProxyError> {
         self.visible()
             .into_iter()
             .find(|profile| profile.name == name)
@@ -182,20 +233,24 @@ impl BorrowedStore {
 impl CredentialStore for BorrowedStore {
     fn load(&self) -> Result<Option<Credentials>, ProxyError> {
         let profile = self.selected()?;
-        Ok(Some(self.grant_for(profile)?.credentials))
+        Ok(Some(self.grant_for(&profile)?.credentials))
     }
 
     /// The write a refresh would make. Refused: exchanging a borrowed refresh
     /// token rotates the value the owning program still holds, and the
     /// operator would be logged out of it (§8.4).
     fn save(&self, _credentials: &Credentials) -> Result<(), ProxyError> {
-        let name = self.selected().map_or("a borrowed profile", |it| &it.name);
-        Err(self.read_only("refresh", name))
+        let name = self
+            .selected()
+            .map_or_else(|_| "a borrowed profile".to_owned(), |it| it.name);
+        Err(self.read_only("refresh", &name))
     }
 
     fn clear(&self) -> Result<(), ProxyError> {
-        let name = self.selected().map_or("a borrowed profile", |it| &it.name);
-        Err(self.read_only("sign out of", name))
+        let name = self
+            .selected()
+            .map_or_else(|_| "a borrowed profile".to_owned(), |it| it.name);
+        Err(self.read_only("sign out of", &name))
     }
 }
 
@@ -206,14 +261,14 @@ impl AccountStore for BorrowedStore {
     /// the operator declared, and dropping it would read as one they never
     /// wrote down; what is unknown about it is reported absent instead.
     fn accounts(&self) -> Result<Vec<Account>, ProxyError> {
-        let selected = self.selected().map(|profile| profile.name.clone()).ok();
+        let selected = self.selected().map(|profile| profile.name).ok();
         let recorded = self.selection.recorded_account_id()?;
 
         Ok(self
             .visible()
             .into_iter()
             .map(|profile| {
-                let grant = self.grant_for(profile).ok();
+                let grant = self.grant_for(&profile).ok();
                 Account {
                     // Where an operator can go and look. Named even when the
                     // grant could not be read: that is the case where knowing
@@ -264,7 +319,7 @@ impl AccountStore for BorrowedStore {
     fn select(&self, name: &str) -> Result<(), ProxyError> {
         let profile = self.named(name)?;
         let account_id = self
-            .grant_for(profile)
+            .grant_for(&profile)
             .ok()
             .and_then(|grant| grant.credentials.account_id);
         self.selection.write(&profile.name, account_id.as_deref())
@@ -276,13 +331,13 @@ impl AccountStore for BorrowedStore {
 
     fn credential(&self) -> Result<Option<Credential>, ProxyError> {
         Ok(Some(Credential::Grant(
-            self.grant_for(self.selected()?)?.credentials,
+            self.grant_for(&self.selected()?)?.credentials,
         )))
     }
 
     fn credential_for(&self, name: &str) -> Result<Credential, ProxyError> {
         Ok(Credential::Grant(
-            self.grant_for(self.named(name)?)?.credentials,
+            self.grant_for(&self.named(name)?)?.credentials,
         ))
     }
 

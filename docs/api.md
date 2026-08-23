@@ -111,6 +111,7 @@ proxenos models     available models
 proxenos env        environment for Claude Code, as shell exports
 proxenos settings   the same configuration, as one settings document
 proxenos exec       run a command with that configuration applied
+proxenos reload     re-read config.toml into the running daemon
 proxenos stop       ask the running daemon to stop
 proxenos doctor     probe backend capabilities (--live answers from the real one)
 proxenos usage      what quota is left (--refresh asks, per account)
@@ -820,6 +821,7 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 | `tiers.set` | tier mapping, validated against the catalog and in effect until the daemon stops; `{"account": name}` writes that account's section instead of the shared table. A tier's value takes the same two forms the file does — a model id, or `{"account": …, "model": …}` pinning the tier to another account. The pinned form needs `cross_account_tiers = true` and is refused by name without it, and its model is excluded from catalog validation: the catalog is the serving account's menu and cannot speak for the pinned one | yes |
 | `effort.set` | the effort ceiling, or `null` to remove it; in effect until the daemon stops; `{"account": name}` as for `tiers.set` | yes |
 | `cross_account_tiers.set` | `{"enabled": bool}` — consent for pinned tiers. **Always persisted**, unlike the setters above: consent is the operator changing what the daemon is, and a grant that evaporated at restart would leave the file refusing a mapping the operator permitted. Granting applies to the next call, not the next restart; revoking is refused by name while any tier still pins an account, because the write would produce a file the daemon refuses to start from | yes |
+| `config.reload` | re-reads config.toml into the running daemon and answers `{"reloaded": [...], "needs_restart": [...]}`. It applies `[profiles]`, the tier mapping and the effort ceiling — the mapping through the same validated path a switch takes — and names what it did not: `instructions`, `client`, `transport`, `upstream`, `port`. Nothing is fetched. A file that does not parse is refused with the parse error and the daemon keeps what it was running on | no — added after v0.12 |
 | `doctor` | probe results | no — `doctor` runs in the CLI, which is where `--live` can be given credentials without a daemon already holding them |
 
 **Where the socket lives.** `$PROXENOS_HOME/proxenos.sock` when that variable
@@ -877,9 +879,20 @@ answer says which it was rather than leaving it to be discovered.
 **The account tables are re-read from disk when they are needed.** They are the
 one part of the configuration this daemon writes — `tiers.set` and `effort.set`
 persist into them, and a rename moves them — so resolving them from the snapshot
-taken at startup means a daemon that cannot see its own writes. Everything else
-is still read once at startup, because nothing else here writes it. A file that
+taken at startup means a daemon that cannot see its own writes. A file that
 no longer parses keeps the snapshot: the daemon is already running on it.
+
+**Everything else is read at startup and on `config.reload`, and only some of
+it can move.** `[profiles]`, the tier mapping and the effort ceiling are what a
+running daemon can be handed: the profile set is swapped into the store every
+turn authenticates through, and the mapping goes through the same validated
+path a switch takes, so a file that would refuse a switch refuses a reload too.
+The rest — `instructions`, `client`, `transport`, `upstream`, `port` — is read
+once and handed to something that keeps it, and the answer names those rather
+than leaving an operator to discover from a key that did nothing. A reload
+fetches nothing: it is an edit taking effect, not a reason to spend a request.
+A conversation in flight keeps what it started with, exactly as a `tiers.set`
+mid-turn leaves it.
 
 **A persisted change is written where the value is read from.** An account
 section shadows the shared table for the tiers it names and for the ceiling it
@@ -1336,8 +1349,10 @@ it.
 All three must be constant for a conversation. Text that changes between turns
 changes `instructions`, and that costs every delta and every cache hit.
 
-The file is read once, at startup: **v0.1 does not watch it**, and a change
-takes effect on the next `run`. `--port` is the only override outside the file.
+The file is read at startup and again on `config.reload` — **nothing watches
+it**, so a change takes effect when a reload asks for it or on the next `run`.
+What a reload can move and what it cannot is §3's list. `--port` is the only
+override outside the file.
 The estimator backend is likewise not a configuration key in v0.1 — the
 tokenizer is a compile-time feature (`--features tokenizer`), because which
 estimator wins is a measurement rather than an operator's choice
@@ -1434,11 +1449,12 @@ about a version number.
 **The bound method set is the whole of §3's table, named here so the freeze is
 a contract rather than folklore.** From v0.7.0 — the release that ships the
 graphical front-end, and with it the second caller the exception above is a
-statement about — these names are fixed: `status`, `shutdown`,
+statement about — these eighteen names are fixed: `status`, `shutdown`,
 `accounts`, `accounts.select`, `accounts.rename`,
 `accounts.remove`, `models`, `tiers`, `tiers.set`, `effort.set`,
 `cross_account_tiers.set`, `usage`, `usage.refresh`, `env`, `doctor`,
-`record.start`, `record.stop`. `doctor` is bound although it is not implemented:
+`record.start`, `record.stop`, `config.reload`. `doctor` is bound although it
+is not implemented:
 a reserved name that appears later must mean what its name said all along. The
 same list is a constant in the daemon, so removing or renaming one is a visible
 change to the code and not only to this document.

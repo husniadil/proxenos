@@ -8,7 +8,10 @@
 //! A front-end changes that. Setting a mapping over the socket has to move the
 //! copy that *routes turns*, or the daemon would report one mapping and serve
 //! another — a divergence that produces working turns against the wrong model,
-//! which is the failure this project refuses everywhere else.
+//! which is the failure this project refuses everywhere else. `tiers.set`,
+//! `effort.set`, `accounts.select` and `config.reload` all arrive here, and
+//! they are the whole set: everything else in the configuration is read once
+//! and needs a restart.
 //!
 //! **The file stays the source of truth at startup.** A runtime change is
 //! written back to it where the caller asks for that, and where it is not, the

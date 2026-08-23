@@ -284,6 +284,38 @@ pub fn renamed_account(result: &Value) -> String {
     }
 }
 
+/// What a reload applied, and what it could not.
+///
+/// Two lines rather than one, and the second is never omitted: the keys a
+/// running daemon cannot move are the ones an operator is most likely to have
+/// edited and least likely to be told about, and a line that appeared only
+/// sometimes would be read as "nothing was left out this time".
+pub fn reloaded_config(result: &Value) -> String {
+    let names = |key: &str| {
+        field(result, key)
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
+    };
+    let reloaded = names("reloaded");
+    let applied = if reloaded.is_empty() {
+        "reloaded config.toml; nothing in it was a setting this daemon can change".to_owned()
+    } else {
+        format!("reloaded config.toml: {reloaded}")
+    };
+    let restart = names("needs_restart");
+    if restart.is_empty() {
+        return applied;
+    }
+    format!("{applied}\nstill needs a restart: {restart}")
+}
+
 /// What removing an account says it did, and who is left serving turns.
 ///
 /// The second half matters: removing the account that was serving hands over

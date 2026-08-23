@@ -46,10 +46,13 @@ pub struct ControlState {
     /// exactly one callback port and every front-end shares it.
     /// The configuration this daemon started from.
     ///
-    /// Read once at startup, and that is the model: nothing here routes a turn
-    /// by itself, and a change meant to outlive the process belongs in the file
-    /// where the comments explaining it live. What this socket can move on a
-    /// running daemon it moves through `policy`, not by re-reading this.
+    /// What this daemon started from, kept as the answer of last resort:
+    /// nothing here routes a turn by itself, and a change meant to outlive the
+    /// process belongs in the file where the comments explaining it live. What
+    /// this socket can move on a running daemon it moves through `policy` and
+    /// through the store, not by replacing this — `config.reload` re-reads the
+    /// file and applies the parts that can move, and this stays the
+    /// configuration a file that no longer parses falls back to.
     ///
     /// Held whole rather than as the two slices that were needed first. An
     /// account's tier mapping has to be resolved against the shared tables at
@@ -139,6 +142,7 @@ pub async fn dispatch(
             state.capture.stop();
             Ok(json!({ "recording": false }))
         }
+        "config.reload" => reload_config(state),
         "tiers.set" => set_tiers(state, params),
         "effort.set" => set_effort(state, params),
         "cross_account_tiers.set" => set_cross_account(state, params),
@@ -1414,7 +1418,7 @@ async fn select_account(state: &ControlState, params: Option<&Value>) -> Result<
     // the new account's menu that decides (§7.0).
     let catalog_refreshed = refresh_catalog(state).await;
 
-    if let Err(refusal) = put_mapping_in_force(state, name) {
+    if let Err(refusal) = put_mapping_in_force(state, &configuration(state), Some(name)) {
         // Back where it was, catalog included. A daemon left serving an account
         // whose every turn is dispatched to a model the backend will not answer
         // for fails one turn later, upstream, saying nothing about tier mapping.
@@ -1532,12 +1536,15 @@ fn set_cross_account(state: &ControlState, params: Option<&Value>) -> Result<Val
 /// mapping over a menu belonging to somebody else. Where that happens the
 /// switch goes ahead and `catalog_stale` says the list is not this account's,
 /// which is the honest report and the documented one.
-fn put_mapping_in_force(state: &ControlState, account: &str) -> Result<(), ProxyError> {
-    let config = configuration(state);
+fn put_mapping_in_force(
+    state: &ControlState,
+    config: &crate::config::Config,
+    account: Option<&str>,
+) -> Result<(), ProxyError> {
     let tiers = config
-        .tiers_for(Some(account))
+        .tiers_for(account)
         .resolve(config.cross_account_policy())?;
-    let ceiling = config.effort_ceiling_for(Some(account))?;
+    let ceiling = config.effort_ceiling_for(account)?;
 
     let catalog = state.catalog.current();
     let stored = state.credentials.accounts().unwrap_or_default();
@@ -1547,7 +1554,12 @@ fn put_mapping_in_force(state: &ControlState, account: &str) -> Result<(), Proxy
         // to, and a pinned or relayed tier names another menu entirely.
         catalog
             .validate(&crate::upstream::relay::validated_models(&stored, &tiers))
-            .map_err(|refusal| refused_switch(&refusal, account))?;
+            .map_err(|refusal| match account {
+                // The advice is an account section, so it is only advice where
+                // there is an account to write one for.
+                Some(account) => refused_switch(&refusal, account),
+                None => refusal,
+            })?;
     }
 
     state.policy.set_tiers(tiers);
@@ -1698,6 +1710,89 @@ async fn remove_account(state: &ControlState, params: Option<&Value>) -> Result<
         // for those two is opposite: sign in, or choose.
         "remaining": remaining.len(),
         "catalog_refreshed": handed_over && refresh_catalog(state).await,
+    }))
+}
+
+/// What a reload cannot move, and what a restart is for.
+///
+/// Named rather than described as "the rest": an operator who is told only
+/// what was applied has to work out by elimination whether the thing they
+/// edited was in it, and the parts that need a restart are the ones whose
+/// value is read once and handed to something that keeps it — the instructions
+/// a session was opened with, the client program a profile is refreshed
+/// through, the transport and upstream settings a conduit dialed with, and the
+/// port the listener is already bound to.
+const NEEDS_RESTART: [&str; 5] = ["instructions", "client", "transport", "upstream", "port"];
+
+/// `config.reload` — re-read config.toml into the running daemon.
+///
+/// **What can move, moves; what cannot is named.** `[profiles]` is swapped
+/// into the store every turn authenticates through, and the tier mapping and
+/// effort ceiling are resolved for the account serving turns and validated
+/// against the catalog already held — the same path `accounts.select` uses, so
+/// a file that would refuse a switch refuses a reload too. Nothing is fetched:
+/// a reload is an operator's edit taking effect, not a reason to spend a
+/// request.
+///
+/// **A file that does not parse changes nothing.** The daemon is already
+/// running on a configuration that did parse, and replacing it with half of a
+/// broken one is worse than keeping it — the same rule §3 already states for
+/// the account tables.
+///
+/// **A turn in flight keeps what it started with**, exactly as `tiers.set`
+/// leaves it: readers take a snapshot of the policy, and the store is read per
+/// request.
+fn reload_config(state: &ControlState) -> Result<Value, ProxyError> {
+    let Some(path) = state.config_path.as_ref() else {
+        return Err(ProxyError::invalid_request(
+            "this daemon has no configuration file to re-read",
+        ));
+    };
+
+    let config = match std::fs::read_to_string(path) {
+        Ok(document) => toml::from_str::<crate::config::Config>(&document).map_err(|error| {
+            ProxyError::invalid_request(format!(
+                "{} is not valid: {error}\n\nNothing was reloaded; this daemon is still \
+                 running on the configuration it had.",
+                path.display()
+            ))
+        })?,
+        // A missing file is every key's default, which is what starting
+        // without one means. Refusing here would make deleting the file a
+        // state the daemon could not be told about.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::config::Config::default()
+        }
+        Err(error) => {
+            return Err(ProxyError::invalid_request(format!(
+                "could not read {}: {error}. Nothing was reloaded.",
+                path.display()
+            )));
+        }
+    };
+    config.validate()?;
+
+    let mut reloaded = Vec::new();
+
+    let (profiles, discovered) = crate::auth::accounts::profiles_of(&config);
+    if state.credentials.set_profiles(profiles, discovered) {
+        reloaded.push("profiles");
+    }
+
+    // The mapping is resolved for whoever serves turns now — which the swap
+    // above may have changed — and through the same validated path a switch
+    // takes. With nobody serving there is no account section to resolve
+    // against, and the shared tables are the whole answer.
+    put_mapping_in_force(state, &config, serving_name(state).as_deref())?;
+    reloaded.push("tiers");
+    reloaded.push("effort");
+
+    Ok(json!({
+        "reloaded": reloaded,
+        // Said every time, not only when one of them changed. A caller that
+        // has to know which keys a reload cannot reach should not have to
+        // discover it from a key it happened to edit.
+        "needs_restart": NEEDS_RESTART,
     }))
 }
 

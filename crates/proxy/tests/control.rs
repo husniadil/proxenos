@@ -5535,3 +5535,207 @@ async fn asking_does_not_refresh_the_grant_of_an_account_that_was_not_selected()
         "a-serving"
     );
 }
+
+// --- config.reload --------------------------------------------------------
+//
+// `[profiles]`, the tier mapping and the effort ceiling were read once at
+// startup, so an operator who declared a profile had an account that did not
+// appear until the daemon stopped. These drive the handler directly rather
+// than through the harness above, because the store that has profiles to swap
+// is the one built from a configuration file.
+
+/// A daemon over the declared profiles of `config`, writing to `dir`.
+///
+/// Its own builder rather than a variant of the harness: the harness serves a
+/// key store, which has no `[profiles]` to re-read, and a reload with nothing
+/// to swap would assert nothing.
+fn reloadable(dir: &std::path::Path, config: proxenos::config::Config) -> ControlState {
+    let store: Arc<dyn AccountStore> =
+        Arc::new(proxenos::auth::accounts::Accounts::from_config(&config, dir).expect("builds"));
+    let policy = Arc::new(proxenos::policy::Policy::new(
+        proxenos::policy::Snapshot::new(
+            tiers(),
+            None,
+            proxenos::config::CrossAccountTiers::Refused,
+        ),
+    ));
+    ControlState {
+        port: 8787,
+        policy,
+        catalog: Arc::new(CatalogSource::fixed(
+            Catalog::parse(
+                r#"{"data":[{"id":"gpt-5.6-terra","context_window":272000},
+                            {"id":"gpt-5.4-mini","context_window":200000}]}"#,
+                95.0,
+            )
+            .unwrap(),
+        )),
+        credentials: store,
+        capture: Arc::new(proxenos::recorder::Switches::default()),
+        usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
+        config: Arc::new(config),
+        shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
+        tokens: None,
+        usage_endpoint: String::new(),
+        anthropic_usage_endpoint: String::new(),
+        sessions: Arc::new(proxenos::session::SessionStore::new()),
+        config_path: Some(dir.join("config.toml")),
+    }
+}
+
+/// A configuration declaring one profile per name, and a mapping this
+/// harness's catalog can serve.
+fn config_declaring(profiles: &[(&str, &str)]) -> String {
+    let mut document = String::from(
+        "[tiers]\nopus = \"gpt-5.6-terra\"\nsonnet = \"gpt-5.6-terra\"\n\
+         haiku = \"gpt-5.6-terra\"\nfable = \"gpt-5.6-terra\"\n",
+    );
+    for (name, path) in profiles {
+        document.push_str(&format!(
+            "\n[profiles.{name}]\nprovider = \"codex\"\npath = \"{path}\"\n"
+        ));
+    }
+    document
+}
+
+/// A profile declared while the daemon is running is served without a
+/// restart. `[profiles]` was read once at startup, so a login that wrote an
+/// entry left the operator with an account that did not appear until something
+/// stopped the daemon.
+#[tokio::test]
+async fn reloading_declares_a_profile_without_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut started_with = proxenos::config::Config::default();
+    started_with.profiles.insert(
+        "work".to_owned(),
+        proxenos::config::ProfileConfig {
+            provider: Provider::Codex,
+            path: Some(std::path::PathBuf::from("/profiles/work")),
+        },
+    );
+    let state = reloadable(dir.path(), started_with);
+
+    let before = proxenos::control::handler::dispatch(&state, "accounts", None)
+        .await
+        .unwrap();
+    assert_eq!(before["accounts"].as_array().unwrap().len(), 1, "{before}");
+
+    std::fs::write(
+        dir.path().join("config.toml"),
+        config_declaring(&[("work", "/profiles/work"), ("spare", "/profiles/spare")]),
+    )
+    .unwrap();
+
+    let answer = proxenos::control::handler::dispatch(&state, "config.reload", None)
+        .await
+        .unwrap();
+    assert!(
+        answer["reloaded"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("profiles")),
+        "{answer}"
+    );
+
+    let after = proxenos::control::handler::dispatch(&state, "accounts", None)
+        .await
+        .unwrap();
+    let names: Vec<&str> = after["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|account| account["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["spare", "work"], "{after}");
+}
+
+/// The mapping moves with the file, through the same validated path a switch
+/// takes — so what routes turns changes, not only what this socket reports.
+#[tokio::test]
+async fn reloading_puts_the_files_mapping_in_force() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = reloadable(dir.path(), proxenos::config::Config::default());
+
+    std::fs::write(
+        dir.path().join("config.toml"),
+        "[tiers]\nopus = \"gpt-5.6-terra\"\nsonnet = \"gpt-5.6-terra\"\n\
+         haiku = \"gpt-5.4-mini\"\nfable = \"gpt-5.4-mini\"\n",
+    )
+    .unwrap();
+
+    proxenos::control::handler::dispatch(&state, "config.reload", None)
+        .await
+        .unwrap();
+
+    let snapshot = state.policy.get();
+    let haiku = snapshot
+        .tiers()
+        .iter()
+        .find(|tier| tier.tier == "haiku")
+        .unwrap();
+    assert_eq!(haiku.model, "gpt-5.4-mini");
+    // And the routing table the ingress reads, not only the tiers `status`
+    // prints: a snapshot where those two disagree serves a model nobody chose.
+    assert!(
+        snapshot
+            .models()
+            .iter()
+            .any(|mapping| mapping.requested == "haiku" && mapping.upstream == "gpt-5.4-mini"),
+        "the routing table did not move with the tiers"
+    );
+}
+
+/// A file that no longer parses is refused with the parse error, and the
+/// daemon keeps what it was running on — the same rule §3 already states for
+/// the account tables.
+#[tokio::test]
+async fn reloading_a_file_that_does_not_parse_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = reloadable(dir.path(), proxenos::config::Config::default());
+    let before = state.policy.get();
+
+    std::fs::write(dir.path().join("config.toml"), "[tiers\nopus = ").unwrap();
+
+    let error = proxenos::control::handler::dispatch(&state, "config.reload", None)
+        .await
+        .expect_err("a file that does not parse is refused");
+
+    assert!(error.message.contains("is not valid"), "{}", error.message);
+    assert!(error.message.contains("still running"), "{}", error.message);
+    assert_eq!(*state.policy.get(), *before);
+}
+
+/// What a reload cannot reach is named every time, not left to be discovered
+/// by an operator whose edit silently did nothing.
+#[tokio::test]
+async fn reloading_names_what_still_needs_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = reloadable(dir.path(), proxenos::config::Config::default());
+    std::fs::write(dir.path().join("config.toml"), config_declaring(&[])).unwrap();
+
+    let answer = proxenos::control::handler::dispatch(&state, "config.reload", None)
+        .await
+        .unwrap();
+
+    let restart = answer["needs_restart"].as_array().unwrap();
+    for key in ["instructions", "client", "transport", "upstream", "port"] {
+        assert!(restart.contains(&json!(key)), "{answer}");
+    }
+}
+
+/// The rendering prints both halves. An operator told only what was applied
+/// has to work out by elimination whether the key they edited was in it.
+#[test]
+fn the_reload_rendering_names_both_halves() {
+    let rendered = proxenos::render::reloaded_config(&json!({
+        "reloaded": ["profiles", "tiers", "effort"],
+        "needs_restart": ["port"],
+    }));
+
+    assert!(rendered.contains("profiles, tiers, effort"), "{rendered}");
+    assert!(
+        rendered.contains("still needs a restart: port"),
+        "{rendered}"
+    );
+}

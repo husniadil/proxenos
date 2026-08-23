@@ -352,6 +352,23 @@ pub trait AccountStore: CredentialStore {
         false
     }
 
+    /// Replace the profile set this store answers for, on a running daemon
+    /// (`api.md` §3, `config.reload`).
+    ///
+    /// `false` where the question does not arise — a store that holds only its
+    /// own keys has no `[profiles]` to re-read, and answering `true` there
+    /// would have `config.reload` report that it reloaded something it did
+    /// not. `discovered` travels with the list because the two are one
+    /// statement: writing `[profiles]` replaces a found set with a declared
+    /// one.
+    fn set_profiles(
+        &self,
+        _profiles: Vec<crate::auth::borrowed::read::Profile>,
+        _discovered: bool,
+    ) -> bool {
+        false
+    }
+
     /// Credentials this store holds but no longer reads.
     ///
     /// Empty for a store where the question does not arise. It exists because
