@@ -135,7 +135,14 @@ in a command line. Where stdin is a terminal it says on **stderr** what it is
 waiting for and reads from a **hidden prompt**, the same way `--setup-token`
 does and over the same seam; where stdin is a pipe it says nothing at all, so
 `printf '%s' "$KEY" | proxenos login --key ...` writes to stdout only the line
-naming what it stored. `--as NAME` is required with it, because a key carries no id
+naming what it stored. One thing more is said, on stderr and only at a
+terminal: an `anthropic` key beginning `sk-ant-oat` gets a note that the stem
+belongs to two credentials — the year-long token `claude setup-token` mints and
+the harness's own hours-long OAuth access token — that nothing stored can tell
+them apart, and that the second will simply stop authenticating
+(`proxy-behavior.md` §8.2). The key is stored either way; the note names the
+stem and no part of the secret, and a piped login stays byte for byte what it
+was. `--as NAME` is required with it, because a key carries no id
 to be named by. `--provider` states which provider's endpoints the key is spent
 against — `codex` by default, `anthropic` for a key that serves turns through
 the relay (`proxy-behavior.md` §9). Storing a key under a name that already
@@ -1001,6 +1008,9 @@ any key whose shape matched neither, and absence is reported rather than
 resolved into whichever is likelier — a `usage` row for such an account says
 this daemon does not know which meter it is on, and claims nothing about
 whether a figure will arrive.
+`subscription_token` is the shape's answer and not the credential's: the
+`sk-ant-oat` stem is worn both by a setup token and by the harness's own OAuth
+access token, and no field here separates them (`proxy-behavior.md` §8.2).
 `auth.connected` means there is a credential to spend, of either kind — a key
 has no grant behind it, and reading only the grant reported a daemon that could
 serve every turn as not connected. `auth.accounts` lists every stored

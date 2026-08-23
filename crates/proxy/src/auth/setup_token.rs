@@ -90,6 +90,14 @@ pub trait Guide {
     fn provider(&self) -> Option<Provider> {
         None
     }
+
+    /// Said after an anthropic key whose stem two credentials share was
+    /// stored. Silence by default: the guided flow has already named where a
+    /// token comes from, and a guide with no person behind it has nobody to
+    /// tell.
+    fn shared_stem_caution(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Collect a setup token and store it as a named Anthropic account.

@@ -88,6 +88,22 @@ impl KeyFlavour {
     /// as the unknown it is. The distinction is anthropic's — the other
     /// provider issues one kind of key and nothing here would be answering a
     /// question about it.
+    ///
+    /// **`SETUP_TOKEN_PREFIX` is shared by two credentials, and this cannot
+    /// separate them.** `claude setup-token` mints one that lasts about a
+    /// year; the OAuth *access* token in the harness's own keychain entry
+    /// (`Claude Code-credentials`) carries the same `sk-ant-oat` stem and
+    /// lasts hours. Both are filed here as `SubscriptionToken`, both are
+    /// relayed as bearers, and both report the subscription row — correct for
+    /// one and correct for the second only until it expires, after which the
+    /// account stops authenticating and nothing stored knows why. There is no
+    /// refresh for a key by design (`docs/roadmap.md` §L), so the short-lived
+    /// one has no recovery path here. A bare bearer carries no structure to
+    /// read without decoding it, and decoding a credential to classify it is a
+    /// new way for a secret to reach a log, so the stem stands and the
+    /// ambiguity is said out loud instead: `login --key` names both
+    /// credentials at a terminal (`key_login::run`), which is the one moment a
+    /// person is present to hear it.
     fn classify(key: &str, provider: Provider) -> Option<Self> {
         if provider != Provider::Anthropic {
             return None;

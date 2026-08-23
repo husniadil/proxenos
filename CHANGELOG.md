@@ -4,6 +4,27 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+### Changed
+
+- **The stem that says "setup token" is worn by two credentials.** `claude
+  setup-token` mints one valid about a year; the harness's own OAuth access
+  token, in its `Claude Code-credentials` keychain entry, begins with the same
+  `sk-ant-oat` and is valid for hours. Classification files both as a
+  subscription token and nothing downstream separates them, so a key that dies
+  this afternoon is stored, rendered and relayed as one that lasts a year, and
+  when it expires no field says why — there is no refresh for a key by design.
+  The classification is unchanged, because a bare bearer has no structure to
+  read without decoding it and decoding a credential to classify it is a new
+  way for a secret to reach a log. What changed is that the ambiguity is now
+  written where a reader of `classify()` and a reader of the spec will see it,
+  and `login --key` for an `anthropic` key with that stem names both
+  credentials on **stderr** where stdin is a terminal — the one moment a person
+  is present to be told. It names the stem and no part of the key; a piped
+  login is byte for byte what it was, on both streams, and the guided
+  `--setup-token` flow says nothing extra.
+
 ## [0.11.0]
 
 An account held as a spare can now state its own headroom without first being

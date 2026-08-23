@@ -13,6 +13,7 @@
 use std::io::{self, IsTerminal, Write};
 
 use crate::auth::setup_token::Guide;
+use crate::auth::setup_token::SETUP_TOKEN_PREFIX;
 use crate::auth::store::{AccountStore, Provider};
 
 /// Store a key under `label`, reading it through `guide`.
@@ -44,8 +45,17 @@ pub fn run(
         anyhow::bail!("no key on stdin; pipe it in, or paste it at the prompt");
     }
 
-    store.add_key(name, key, guide_provider(guide))?;
+    let provider = guide_provider(guide);
+    store.add_key(name, key, provider)?;
     guide.stored(name)?;
+    // One stem, two credentials. `classify` files anything beginning
+    // `sk-ant-oat` as a subscription token, and a Claude Code OAuth access
+    // token carries that exact stem while lasting hours rather than a year.
+    // Nothing downstream can tell them apart, so the one moment a person is
+    // present is the moment to say so.
+    if provider == Provider::Anthropic && key.starts_with(SETUP_TOKEN_PREFIX) {
+        guide.shared_stem_caution()?;
+    }
     Ok(name.to_owned())
 }
 
@@ -126,6 +136,22 @@ impl Guide for Terminal {
 
     fn provider(&self) -> Option<Provider> {
         Some(self.provider)
+    }
+
+    fn shared_stem_caution(&mut self) -> io::Result<()> {
+        if !self.interactive {
+            return Ok(());
+        }
+        writeln!(
+            self.err,
+            "Note: `{SETUP_TOKEN_PREFIX}` is the stem of two different credentials, and\n\
+             nothing stored here can tell them apart. `claude setup-token` mints one\n\
+             that lasts about a year; the access token in Claude Code's own keychain\n\
+             entry carries the same stem and expires in hours. This account is filed\n\
+             as a subscription token either way, and if it was the second one it will\n\
+             simply stop authenticating with nothing here able to say why."
+        )?;
+        self.err.flush()
     }
 }
 
@@ -237,6 +263,53 @@ mod tests {
         assert!(error.to_string().contains("--as NAME"), "{error}");
         assert_eq!(out.text(), "");
         assert_eq!(err.text(), "");
+    }
+
+    /// The stem `sk-ant-oat` belongs to two credentials with lifetimes three
+    /// orders of magnitude apart, and the store files both as one. A terminal
+    /// is the only place a person is present to be told.
+    #[test]
+    fn an_anthropic_oat_key_names_the_two_credentials_sharing_its_stem() {
+        let (_home, store) = temp_store();
+        let (mut guide, out, err) = terminal(Provider::Anthropic, true, "sk-ant-oat01-typed");
+
+        run(store.as_ref(), &mut guide, Some("personal-claude")).expect("a stored key");
+
+        let said = err.text();
+        assert!(said.contains("two different credentials"), "{said}");
+        assert!(said.contains("claude setup-token"), "{said}");
+        assert!(said.contains("expires in hours"), "{said}");
+        // Said, never quoted: the caution names the stem and nothing after it.
+        assert!(!said.contains("01-typed"), "{said}");
+        assert_eq!(out.text(), "Stored a anthropic key as personal-claude.\n");
+    }
+
+    /// The machine path stays byte for byte what it was, stem or no stem.
+    #[test]
+    fn a_piped_oat_key_says_nothing_extra_on_either_stream() {
+        let (_home, store) = temp_store();
+        let (mut guide, out, err) = terminal(Provider::Anthropic, false, "sk-ant-oat01-piped\n");
+
+        run(store.as_ref(), &mut guide, Some("personal-claude")).expect("a stored key");
+
+        assert_eq!(out.text(), "Stored a anthropic key as personal-claude.\n");
+        assert_eq!(err.text(), "");
+    }
+
+    /// The distinction is anthropic's. The other provider issues one kind of
+    /// key, and a string that happens to start the same way says nothing.
+    #[test]
+    fn a_codex_key_is_never_cautioned_about_an_anthropic_stem() {
+        let (_home, store) = temp_store();
+        let (mut guide, _out, err) = terminal(Provider::Codex, true, "sk-ant-oat01-typed");
+
+        run(store.as_ref(), &mut guide, Some("robot")).expect("a stored key");
+
+        assert!(
+            !err.text().contains("two different credentials"),
+            "{}",
+            err.text()
+        );
     }
 
     /// An empty read is the state the old error described after the fact.

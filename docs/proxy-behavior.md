@@ -1285,6 +1285,34 @@ this daemon has not recorded which meter it is on. A prefix is evidence and not
 proof, so an unrecognized shape is filed as neither rather than as the likelier
 one, and nothing re-reads a stored secret to classify it after the fact.
 
+**The stem that says "setup token" is worn by two credentials, and nothing here
+separates them.** `claude setup-token` mints one valid about a year. The
+harness's own OAuth *access* token — the one in its `Claude Code-credentials`
+keychain entry — begins with the same `sk-ant-oat` stem and is valid for hours,
+and it is the credential an operator is likeliest to have on hand. Classified,
+stored, rendered and relayed, the two are indistinguishable: both file as a
+subscription token, both are presented as a bearer, both report a figure
+pending. For the second, all of that is true only until its `expiresAt`, after
+which every turn it carries is refused and no field in the store says why —
+the proxy holds no refresh for a key at all (`roadmap.md` §L), which is the
+same property that made the year-long token adequate in the first place. (The
+two also differ in scope: the keychain token carries `user:profile` and a setup
+token does not, which is why `/api/oauth/usage` answers one and refuses the
+other — already rendered, named here only as another place they are not
+interchangeable.)
+
+**The stem stands anyway, and the ambiguity is spoken instead.** A bare bearer
+carries no structure to read without decoding it, and decoding a credential to
+classify it is a new way for a secret to reach a log — a worse trade than the
+one being fixed. So classification is unchanged, and `login --key` for an
+anthropic key beginning `sk-ant-oat` **names both credentials on stderr where
+stdin is a terminal**: the one moment a person is present to be told what a
+short-lived paste will do. It says the stem, never any part of the key. Where
+stdin is a pipe it says nothing, on either stream, because a scripted login's
+output is read by something (§ the `--key` contract in `api.md`). The guided
+`--setup-token` flow says nothing extra either: it has already named where the
+token comes from.
+
 A fourth follows from the catalog rather than the pairing. The key endpoint's
 model list is real and authoritative — it answers with every model the key can
 reach — and it carries no window and no supported efforts for any of them. So
