@@ -4500,6 +4500,104 @@ async fn a_second_provider_account_is_told_a_turn_supplies_its_figure() {
     );
 }
 
+/// A key's row is the one that must not read as reassurance.
+///
+/// Every other absence on this list is a figure pending: make a turn, or wait
+/// for a provider to answer. A key's is permanent, and it is permanent because
+/// there is no ceiling — the row with no percentage is the row whose spend is
+/// unbounded. Saying only that it holds no subscription quota renders the
+/// account that bills for every token as the one with nothing to watch.
+#[tokio::test]
+async fn a_key_says_its_spend_is_unbounded_rather_than_that_it_has_no_quota() {
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add_key("billing", "key-secret", Provider::Codex)
+        .unwrap();
+
+    let usage = harness.call("usage").await.unwrap();
+    let detail = usage["accounts"][0]["detail"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+
+    assert!(
+        detail.contains("metered per token"),
+        "the row must say what a key is billed on: {detail}"
+    );
+    assert!(
+        detail.contains("bounds its spend") || detail.contains("unbounded"),
+        "the absence of a ceiling is the point, not the absence of a figure: {detail}"
+    );
+    assert!(
+        detail.contains("no turn has been served as it yet"),
+        "with nothing served, the quantity is stated as none rather than omitted: {detail}"
+    );
+    // Nothing upstream did not supply. No cost, no estimate, no price list.
+    for invented in ["$", "approximately", "estimated", "roughly"] {
+        assert!(
+            !detail.contains(invented),
+            "a key's row states no cost: {detail}"
+        );
+    }
+}
+
+/// And once turns have been served as it, the row states a quantity — tokens
+/// upstream counted, never a cost. It is a floor under the account's real
+/// spend, and says so rather than reading as the whole of it.
+#[tokio::test]
+async fn a_key_states_the_tokens_served_as_it() {
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add_key("billing", "key-secret", Provider::Codex)
+        .unwrap();
+    harness.usage.record_spend(Some("billing"), 1_200, 340);
+
+    let usage = harness.call("usage").await.unwrap();
+    let detail = usage["accounts"][0]["detail"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+
+    assert!(
+        detail.contains("1540 tokens served as it"),
+        "the quantity is upstream's counts, summed: {detail}"
+    );
+    assert!(
+        detail.contains("elsewhere are not counted"),
+        "a floor under the real spend has to say it is one: {detail}"
+    );
+    assert!(!detail.contains('$'), "still no cost: {detail}");
+}
+
+/// Where a key is the only account, the per-account block is not printed at
+/// all (§8.3) — so the daemon-wide line is the only thing its operator reads,
+/// and answering it with "none has been made yet" promises a figure that will
+/// never arrive.
+#[tokio::test]
+async fn a_lone_key_is_not_told_a_turn_will_supply_its_figure() {
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add_key("billing", "key-secret", Provider::Codex)
+        .unwrap();
+    harness.store.select("billing").unwrap();
+
+    let usage = harness.call("usage").await.unwrap();
+    let detail = usage["detail"].as_str().unwrap_or_default().to_owned();
+
+    assert_eq!(usage["known"], json!(false), "{usage}");
+    assert!(
+        detail.contains("metered per token"),
+        "the daemon-wide line answers for the account being asked about: {detail}"
+    );
+    assert!(
+        !detail.contains("none has been made yet"),
+        "no turn will ever supply this account a quota figure: {detail}"
+    );
+}
+
 /// A figure asked for over the socket says it was asked for. Both are
 /// legitimate and differently stale, so neither is reported as the other.
 #[tokio::test]
@@ -4545,6 +4643,40 @@ async fn the_rendered_usage_names_every_account() {
     assert!(rendered.contains("spare"), "{rendered}");
     assert!(rendered.contains("77% used"), "{rendered}");
     assert!(rendered.contains("rode a turn"), "{rendered}");
+}
+
+/// What a person actually reads, verbatim, for the account that bills per
+/// token — beside a subscription showing a percentage, which is the comparison
+/// that made the old line read as safety.
+#[tokio::test]
+async fn the_rendered_usage_line_for_a_key_does_not_read_as_reassurance() {
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add(&grant("acct_main", "a-main"), Some("main"))
+        .unwrap();
+    harness
+        .store
+        .add_key("billing", "key-secret", Provider::Codex)
+        .unwrap();
+    harness.store.select("main").unwrap();
+    harness
+        .usage
+        .record_for(None, &quota(93.0), proxenos::usage::Source::Turn);
+    harness.usage.record_spend(Some("billing"), 1_200, 340);
+
+    let rendered = render::usage(&harness.call("usage").await.unwrap());
+    let line = rendered
+        .lines()
+        .find(|line| line.contains("billing"))
+        .unwrap_or_default();
+
+    assert_eq!(
+        line,
+        "  billing                  no figure — a key has no quota ceiling; it is metered per token, so nothing here bounds its spend (1540 tokens served as it since this daemon started, and turns made elsewhere are not counted)"
+    );
+    // And the subscription beside it still shows the percentage it always did.
+    assert!(rendered.contains("93% used"), "{rendered}");
 }
 
 /// **Build 4, at the socket.** A select changes which account the answer is

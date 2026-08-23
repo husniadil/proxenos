@@ -402,6 +402,30 @@ pub struct Measured {
     pub at: u64,
 }
 
+/// What this daemon has served as one account, in tokens upstream counted.
+///
+/// Not a quota and not a cost. A key carries no entitlement to report a
+/// percentage against and nothing here knows a price list (§6.1), but the
+/// counts on a completed response are upstream's own — so the one thing that
+/// can honestly be said about a metered account is how much of it has been
+/// spent through this daemon, as a quantity.
+///
+/// **Since this daemon started, and only through it.** Nothing persists across
+/// a restart and nothing here sees a turn made elsewhere, so this is a floor
+/// under the account's real spend, never the whole of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Spent {
+    pub input: u64,
+    pub output: u64,
+}
+
+impl Spent {
+    #[must_use]
+    pub fn total(self) -> u64 {
+        self.input.saturating_add(self.output)
+    }
+}
+
 /// Which account this daemon serves unpinned turns as, asked at the moment a
 /// figure is recorded.
 ///
@@ -443,6 +467,8 @@ pub struct UsageStore {
     /// Both are needed to answer "is this session mine" for a status line, and
     /// only a turn can report the second kind.
     served: Mutex<std::collections::BTreeSet<String>>,
+    /// Tokens served per account, as upstream counted them.
+    spent: Mutex<std::collections::BTreeMap<String, Spent>>,
 }
 
 impl std::fmt::Debug for UsageStore {
@@ -519,6 +545,11 @@ impl UsageStore {
         if let Ok(mut by_account) = self.by_account.lock() {
             by_account.remove(account);
         }
+        // And what was served as it. The tally answers "how much has this
+        // account spent through this daemon", and there is no such account.
+        if let Ok(mut spent) = self.spent.lock() {
+            spent.remove(account);
+        }
     }
 
     /// Forget the figure no account could be named for.
@@ -571,6 +602,38 @@ impl UsageStore {
                     .map(|(name, measured)| (name.clone(), measured.clone()))
                     .collect()
             })
+            .unwrap_or_default()
+    }
+
+    /// Add one completed turn's counts to the account that served it.
+    ///
+    /// The counts are upstream's, taken from the completed response and never
+    /// recomputed (§6.1). `None` is the serving account, resolved here rather
+    /// than by whoever asks later, for the same reason a figure is (§8.3).
+    /// A turn no account can be named for is not counted at all: attributing
+    /// it to whoever happens to be serving would put one account's spend under
+    /// another's name.
+    pub fn record_spend(&self, account: Option<&str>, input: u64, output: u64) {
+        let Some(name) = account
+            .map(str::to_owned)
+            .or_else(|| self.serving.as_ref().and_then(|serving| serving()))
+        else {
+            return;
+        };
+        if let Ok(mut spent) = self.spent.lock() {
+            let entry = spent.entry(name).or_default();
+            entry.input = entry.input.saturating_add(input);
+            entry.output = entry.output.saturating_add(output);
+        }
+    }
+
+    /// What this daemon has served as one account since it started.
+    #[must_use]
+    pub fn spent_for(&self, account: &str) -> Spent {
+        self.spent
+            .lock()
+            .ok()
+            .and_then(|spent| spent.get(account).copied())
             .unwrap_or_default()
     }
 
