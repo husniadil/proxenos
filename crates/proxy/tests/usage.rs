@@ -1001,13 +1001,20 @@ fn anthropic_usage() -> String {
             "resets_at": "2026-08-29T04:00:00.383497+00:00",
         },
         "seven_day_opus": null,
+        // As captured: one group holds several kinds, and the scoped entry
+        // describes one model rather than the window — its figure differs
+        // from the window's for that reason.
         "limits": [
             { "kind": "session", "group": "session", "percent": 18,
               "severity": "normal", "resets_at": "2026-08-23T09:00:00.383476+00:00",
               "scope": null, "is_active": false },
-            { "kind": "weekly", "group": "weekly", "percent": 20,
+            { "kind": "weekly_all", "group": "weekly", "percent": 20,
               "severity": "warning", "resets_at": "2026-08-29T04:00:00.383497+00:00",
-              "scope": null, "is_active": false },
+              "scope": null, "is_active": true },
+            { "kind": "weekly_scoped", "group": "weekly", "percent": 0,
+              "severity": "critical", "resets_at": "2026-08-29T04:00:00.383497+00:00",
+              "scope": { "model": { "id": null, "display_name": "Fable" } },
+              "is_active": false },
         ],
         "spend": { "percent": 98, "severity": "critical" },
     })
@@ -1041,12 +1048,23 @@ fn a_timestamp_reset_is_converted_to_an_epoch() {
 
 /// The provider's own word on each window is read, not inferred from the
 /// percentage: an account can sit high on a window still called normal.
+///
+/// Matched by `group` and by the absence of a `scope`. One group carries
+/// several kinds, and the scoped one describes a single model rather than the
+/// window — taking it would report that model's severity as the account's.
 #[test]
 fn each_window_carries_the_providers_own_severity() {
     let snapshot = Snapshot::parse_anthropic(&anthropic_usage()).expect("parses");
 
     assert_eq!(snapshot.windows[0].status.as_deref(), Some("normal"));
     assert_eq!(snapshot.windows[1].status.as_deref(), Some("warning"));
+    assert!(
+        snapshot
+            .windows
+            .iter()
+            .all(|window| window.status.as_deref() != Some("critical")),
+        "the scoped entry is one model's, not the window's"
+    );
 }
 
 /// Nothing in that body says a turn would be refused, so nothing here claims

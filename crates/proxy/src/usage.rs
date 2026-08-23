@@ -243,11 +243,23 @@ impl Snapshot {
     pub fn parse_anthropic(payload: &str) -> Option<Self> {
         let body: Value = serde_json::from_str(payload).ok()?;
 
-        let severity_of = |kind: &str| -> Option<String> {
+        // By `group`, and only the entry with no `scope`.
+        //
+        // `kind` is not the field to match on: one group carries several of
+        // them — `weekly_all` beside `weekly_scoped` — and matching a name
+        // guessed from the group's own reads nothing at all, silently. The
+        // scoped entry describes one model rather than the window, and its
+        // figure says so: measured on one account, `weekly_all` reported 23%
+        // against a `seven_day` utilisation of 23.0 while `weekly_scoped`
+        // reported 0.
+        let severity_of = |group: &str| -> Option<String> {
             body.get("limits")?
                 .as_array()?
                 .iter()
-                .find(|limit| limit.get("kind").and_then(Value::as_str) == Some(kind))?
+                .find(|limit| {
+                    limit.get("group").and_then(Value::as_str) == Some(group)
+                        && limit.get("scope").is_none_or(Value::is_null)
+                })?
                 .get("severity")?
                 .as_str()
                 .map(str::to_owned)
@@ -258,7 +270,7 @@ impl Snapshot {
             ("seven_day", SEVEN_DAYS, "weekly"),
         ]
         .into_iter()
-        .filter_map(|(name, minutes, kind)| {
+        .filter_map(|(name, minutes, group)| {
             let window = body.get(name)?;
             Some(Window {
                 used_percent: window.get("utilization")?.as_f64()?,
@@ -268,7 +280,7 @@ impl Snapshot {
                     .and_then(Value::as_str)
                     .and_then(epoch_from_rfc3339),
                 label: None,
-                status: severity_of(kind),
+                status: severity_of(group),
                 // No threshold is published here, and inventing one would put a
                 // figure in the provider's mouth.
                 surpassed_threshold: None,
