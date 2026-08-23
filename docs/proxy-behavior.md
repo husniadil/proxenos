@@ -1296,6 +1296,14 @@ could cross them. The endpoint would otherwise answer
 with something about an invalid token, which sends whoever reads it looking for
 the wrong problem.
 
+**Whose account is asked before which kind it holds.** Every endpoint these
+transports are pointed at is the first provider's, and borrowing made an
+account on the second provider selectable (§8.4) — so a Claude grant or key
+passes the kind check, is spent at a backend that has never heard of it, and
+comes back refused in words naming neither the account nor the endpoint. The
+relay path asks the same question of its own credential (§9), from the other
+side.
+
 Three things follow from that pairing rather than being decided separately. A
 key request is **never compressed**: zstd on a request body is measured against
 the subscription backend (§4.4) and nowhere else, and an endpoint that does not

@@ -184,3 +184,34 @@ async fn a_key_endpoint_is_never_sent_a_compressed_body() {
         "the body did not arrive intact"
     );
 }
+
+/// Whose account, not only which kind. A credential on the second provider is
+/// refused against the first provider's endpoint before anything is sent —
+/// borrowing made that account reachable (§8.4), and the kind check alone
+/// waves it straight through to a backend that answers about an invalid token.
+#[tokio::test]
+async fn a_second_provider_credential_is_refused_against_the_first_providers_endpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(FileStore::new(dir.path().join("credentials.json")));
+    store
+        .add_key("anthropic", KEY, Provider::Anthropic)
+        .unwrap();
+    let server = replay::ReplayServer::start(replay::Behavior::Events(vec![])).await;
+
+    // The same kind the endpoint takes, so only the provider can refuse it.
+    let transport = HttpTransport::new(server.url.clone())
+        .for_endpoint(Kind::Key)
+        .with_credentials(authorizer(&store));
+
+    let Err(error) = transport.stream(&request(), None, None).await else {
+        panic!("an account on the other provider should be refused");
+    };
+    let message = error.to_string();
+    assert!(message.contains("anthropic"), "{message}");
+    assert!(message.contains("codex"), "{message}");
+
+    assert!(
+        server.headers().is_empty(),
+        "the refusal must happen before anything is sent"
+    );
+}

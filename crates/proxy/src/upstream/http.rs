@@ -125,6 +125,14 @@ impl Transport for HttpTransport {
                 for (name, value) in credentials
                     .authorize(account)
                     .await?
+                    // Whose endpoint before which kind. Every endpoint this
+                    // transport is ever pointed at is the first provider's —
+                    // the second provider's turns are relayed, and the relay
+                    // asks the same question of its own (§9). Without this a
+                    // borrowed Claude grant passes the kind check, is spent
+                    // here, and comes back refused in words that name neither
+                    // the account nor the endpoint (§8.4).
+                    .for_provider(crate::auth::store::Provider::Codex)?
                     .for_endpoint(self.kind)?
                     .headers
                 {

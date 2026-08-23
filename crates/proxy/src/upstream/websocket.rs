@@ -214,13 +214,14 @@ impl WebSocketTransport {
             builder = builder.header("session_id", session_id);
         }
 
-        // The socket belongs to the subscription backend, so a credential of
-        // any other kind is refused here rather than upgraded and rejected
-        // with something that names neither half.
+        // The socket belongs to the first provider's subscription backend, so a
+        // credential of any other provider or kind is refused here rather than
+        // upgraded and rejected with something that names neither half.
         if let Some(credentials) = &self.credentials {
             let authorization = credentials
                 .authorize(account)
                 .await?
+                .for_provider(crate::auth::store::Provider::Codex)?
                 .for_endpoint(crate::auth::authorize::Kind::Subscription)?;
             for (name, value) in authorization.headers {
                 // `originator` is already on the builder above: this dialect
