@@ -1686,17 +1686,17 @@ async fn forget_account(state: &ControlState, params: Option<&Value>) -> Result<
         state.sessions.clear();
     }
 
+    let remaining = state.credentials.accounts()?;
     Ok(json!({
         "forgotten": cleared,
         // Who serves turns now. Forgetting the account that was serving hands
         // over to another, and a caller that has to ask a second question to
         // learn which is a caller that will report the wrong one.
-        "serving": state
-            .credentials
-            .accounts()?
-            .into_iter()
-            .find(|account| account.selected)
-            .map(|account| account.name),
+        "serving": remaining.iter().find(|account| account.selected).map(|account| account.name.clone()),
+        // How many are left, because `serving` alone cannot tell an empty
+        // store from a full one nobody has chosen between — and the advice
+        // for those two is opposite: sign in, or choose.
+        "remaining": remaining.len(),
         "catalog_refreshed": handed_over && refresh_catalog(state).await,
     }))
 }

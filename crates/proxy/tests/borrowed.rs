@@ -2316,3 +2316,33 @@ fn a_null_refusal_is_not_reported_as_one() {
 
     assert!(!rendered.contains("refused"), "{rendered}");
 }
+
+/// Forgetting one account out of several says which account serves now, and
+/// where none does, says to choose rather than to sign in.
+///
+/// Seen live: a leftover forgotten out of a store that still held two accounts
+/// answered "no accounts left", which is advice to add a third.
+#[test]
+fn forgetting_says_what_is_left_rather_than_assuming_nothing_is() {
+    let none_chosen = render::forgotten_account(&serde_json::json!({
+        "forgotten": "codex",
+        "serving": serde_json::Value::Null,
+        "remaining": 2,
+    }));
+    assert!(none_chosen.contains("accounts --use"), "{none_chosen}");
+    assert!(!none_chosen.contains("no accounts left"), "{none_chosen}");
+
+    let empty = render::forgotten_account(&serde_json::json!({
+        "forgotten": "codex",
+        "serving": serde_json::Value::Null,
+        "remaining": 0,
+    }));
+    assert!(empty.contains("no accounts left"), "{empty}");
+
+    let serving = render::forgotten_account(&serde_json::json!({
+        "forgotten": "codex",
+        "serving": "work-codex",
+        "remaining": 2,
+    }));
+    assert!(serving.contains("serving turns as work-codex"), "{serving}");
+}

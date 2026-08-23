@@ -292,13 +292,25 @@ pub fn forgotten_account(result: &Value) -> String {
     let forgotten = field(result, "forgotten")
         .and_then(Value::as_str)
         .unwrap_or("nothing");
-    match field(result, "serving").and_then(Value::as_str) {
-        Some(serving) => format!("forgot {forgotten}; serving turns as {serving}"),
-        None => format!(
-            "forgot {forgotten}; no accounts left — declare a profile under `[profiles]`, \
-             or store a key with `proxenos login --key --as NAME`"
-        ),
+    if let Some(serving) = field(result, "serving").and_then(Value::as_str) {
+        return format!("forgot {forgotten}; serving turns as {serving}");
     }
+    // Nothing is serving, and the two reasons for that want opposite advice.
+    // Seen live: forgetting a leftover out of a store that still held two
+    // accounts answered "no accounts left".
+    if field(result, "remaining")
+        .and_then(Value::as_u64)
+        .is_some_and(|remaining| remaining > 0)
+    {
+        return format!(
+            "forgot {forgotten}; no account is serving turns — choose one with \
+             `proxenos accounts --use NAME`"
+        );
+    }
+    format!(
+        "forgot {forgotten}; no accounts left — declare a profile under `[profiles]`, \
+         or store a key with `proxenos login --key --as NAME`"
+    )
 }
 
 /// What a switch says it did. The name, because the caller may have typed a
