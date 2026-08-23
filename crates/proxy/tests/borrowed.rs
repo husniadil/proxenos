@@ -1328,3 +1328,24 @@ fn the_launch_line_is_absent_when_nothing_serves() {
         None
     );
 }
+
+/// `status` names the store behind the serving account, and marks an identity
+/// that has moved. A front-end reads that answer, and a name alone does not
+/// say which directory is being spent.
+#[test]
+fn the_status_answer_carries_the_source_and_the_identity_mark() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let store = store(dir.path(), vec![work.clone()], &[(&work, a_codex_grant())]);
+    store.select("work").expect("selects");
+
+    let serialized =
+        serde_json::to_value(&store.accounts().expect("lists")[0]).expect("serializes");
+
+    assert_eq!(
+        serialized["source"],
+        serde_json::json!("/profiles/work/auth.json")
+    );
+    // Absent rather than false: an unchanged account says nothing about it.
+    assert_eq!(serialized.get("identity_changed"), None);
+}

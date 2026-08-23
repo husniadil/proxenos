@@ -216,6 +216,14 @@ fn status(state: &ControlState) -> Value {
                 // calls it. The first is what selects it; the second is what
                 // appears on a request.
                 "account": account.name.clone(),
+                // Where that account was read from, for one this daemon does
+                // not hold. A name is the operator's label; this is the thing
+                // they can go and look at (§8.4).
+                "source": account.source.clone(),
+                // Said here as well as on the row, because `status` is what a
+                // front-end reads and the consequence is turns billed to an
+                // account nobody pointed at them.
+                "identity_changed": account.identity_changed,
                 // What it authenticates with, because that decides which
                 // endpoint it is spent against and what it can be asked for.
                 "kind": account.kind,
