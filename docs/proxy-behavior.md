@@ -644,24 +644,47 @@ account's spend under another's name.
 invisible to it. Everywhere it is reported it says so, because a figure that
 reads as the whole of an account's spend is wrong in the reassuring direction.
 
-**The tally persists; the quota snapshot does not.** The two halves of what a
-restart loses are not equally recoverable, and they are settled differently.
+**Both halves persist, and each is restored by its own rule.** What a restart
+would otherwise lose is a token tally and a quota snapshot, and they are true
+across a restart for different reasons.
 
-- The **quota snapshot** of §8.3 stays in memory only. Upstream still holds it,
-  so an ask recovers it exactly, and a percentage read back from disk describes
-  a window that may have reset since — headroom that may no longer exist, which
-  is the reassuring direction again. The empty row after a restart is the
-  honest one, and `usage --refresh` is how it is filled.
-- The **token tally** is written to disk and read back at startup. Nothing
-  upstream can restate it: it is what *this daemon* served, counted from
-  completed responses. A restart that reset it to zero would state a floor of
-  zero, which is not a figure that was measured.
+- The **token tally** is what *this daemon* served, counted from completed
+  responses, and nothing upstream can restate it. A restart that reset it to
+  zero would state a floor of zero, which is not a figure that was measured. It
+  is read back whole.
+- The **quota snapshot** of §8.3 is restored **per window, against the reset
+  time the provider itself gave**. That reset is what makes a stored figure
+  true or false: a percentage says nothing about whether the window it was
+  measured in still exists, and the reset says exactly that. A window whose
+  reset has passed is dropped, because it describes a window that is back to
+  zero and showing it reads as headroom that is not there. A window the
+  provider stated no reset for is dropped too — after an arbitrary gap nothing
+  about it can be shown to still hold, and §8.3's rule not to call such a
+  window stale is a rule about a figure taken this session, not about one read
+  off a disk. An account left with no window is not restored at all: an empty
+  snapshot reads as "quota known, nothing used", which is the same error by a
+  shorter route.
 
-The tally lives in `spend.json` beside the configuration, under
-`config_dir()`. It is daemon state rather than configuration, and deliberately
-not the credential store: it holds an account name and two token counts, and no
-place for any part of a secret to be written. Removing an account drops its
-row, the same way it drops its figure.
+**A figure that cannot be dated is not restored.** The moment a figure was
+taken is half of what the meter prints (§8.3), so it is written beside the
+figure and read back with it — a restored row says `2h ago`, not that it is
+current. A record carrying no such moment is dropped rather than restored as
+though it were taken now.
+
+The tally lives in `spend.json` and the snapshots in `quota.json`, both beside
+the configuration under `config_dir()`. They are daemon state rather than
+configuration, and deliberately not the credential store: one holds an account
+name and two token counts, the other an account name and the percentages the
+provider stated, and neither has a place for any part of a secret to be
+written. Removing an account drops its row from both.
+
+The snapshot file is replaced rather than written into, by the same rule and
+the same sibling-and-rename as the tally below. What it does **not** share is
+the merge: a tally accumulates, so the higher of two counts is the truer one,
+while a snapshot replaces, so the **later** record of an account is the one
+that describes it. Where two daemons share a `PROXENOS_HOME`, each keeps
+whichever measurement was taken last. `usage --refresh` replaces a record the
+same way any turn does.
 
 **A write replaces the file; it never writes into it.** `std::fs::write`
 truncates the target and then fills it, and a daemon killed between those two
@@ -1504,7 +1527,9 @@ one whose has not, so marking the snapshot would be wrong in both directions at
 once — hiding a seven-day figure that is still true, or passing a five-hour one
 that is not. It is stated per window, against the reset epoch the provider
 already gave, and a window the provider stated no reset for is never called
-stale. The error this exists to prevent is the overstating one: spend shown
+stale — while the daemon that took it is running. Across a restart the same
+reset epoch decides what comes back at all, by the stricter rule of §6.1: a
+window with no reset stated cannot be shown to still hold and is not restored. The error this exists to prevent is the overstating one: spend shown
 against an empty window sends an operator to switch accounts they did not need
 to switch.
 

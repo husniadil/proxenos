@@ -13,7 +13,11 @@ use serde_json::Value;
 use std::sync::Mutex;
 
 /// One quota window as the backend reports it.
-#[derive(Debug, Clone, PartialEq, Default)]
+///
+/// Serialized because a snapshot outlives the process that took it (§6.1), and
+/// nothing in it is any part of a credential.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Window {
     pub used_percent: f64,
     /// How long the window is. The backend has changed which windows it
@@ -127,7 +131,8 @@ pub fn has_reset(resets_at: Option<u64>, now: u64) -> bool {
 }
 
 /// The account's quota, as of one turn.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Snapshot {
     pub plan: Option<String>,
     pub limit_reached: bool,
@@ -502,7 +507,8 @@ fn parse_rest_window(value: &Value) -> Option<Window> {
 /// A figure that rode a turn and a figure that was asked for are both
 /// legitimate and differently stale, and a meter that showed one as the other
 /// would be stating an age it does not have.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Source {
     /// Volunteered at the head of a stream, by a turn that was being made
     /// anyway.
@@ -521,11 +527,16 @@ impl Source {
 }
 
 /// One account's quota, with its age.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Measured {
     pub snapshot: Snapshot,
     pub source: Source,
     /// Epoch seconds, as of when the figure was taken.
+    ///
+    /// `0` where a stored record did not state one, which is not a moment and
+    /// is why such a record is not restored: a figure that cannot be dated
+    /// renders with no age, and a figure with no age reads as current.
+    #[serde(default)]
     pub at: u64,
 }
 
@@ -570,6 +581,40 @@ fn read_tally(path: &std::path::Path) -> Option<std::collections::BTreeMap<Strin
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
+/// What a snapshot file holds: one measured figure per account, and nothing
+/// that is any part of a credential (CLAUDE.md #7).
+fn read_quota(path: &std::path::Path) -> Option<std::collections::BTreeMap<String, Measured>> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// What survives a restart, of one account's figure.
+///
+/// **The reset time is what makes a stored figure true or false**, and it is
+/// the only thing that can decide: a percentage says nothing about whether the
+/// window it was measured in still exists. So a window whose reset has passed
+/// is dropped — it describes a window that is back to zero, and showing it
+/// reads as spend the account has not made — and a window the provider stated
+/// no reset for is dropped too, because nothing about it can be shown to still
+/// be true after an arbitrary gap.
+///
+/// An account left with no window at all is not restored: an empty snapshot
+/// reads as "quota known, nothing used", which is the reassuring direction to
+/// be wrong in. Nor is a record that cannot be dated, since the age is half of
+/// what the meter prints.
+fn restore(mut measured: Measured, now: u64) -> Option<Measured> {
+    if measured.at == 0 {
+        return None;
+    }
+    measured
+        .snapshot
+        .windows
+        .retain(|window| window.resets_at.is_some() && !window.is_stale_at(now));
+    if measured.snapshot.windows.is_empty() {
+        return None;
+    }
+    Some(measured)
+}
+
 /// Take whichever count is higher per account. A tally only ever grows, so the
 /// higher of two counts is the one closer to what was actually served.
 fn merge_into(
@@ -605,7 +650,7 @@ fn write_and_flush(path: &std::path::Path, body: &str) -> std::io::Result<()> {
     file.sync_all()
 }
 
-fn replace_tally(path: &std::path::Path, body: &str) {
+fn replace_file(path: &std::path::Path, body: &str) {
     let mut pending = path.to_path_buf().into_os_string();
     pending.push(format!(".{}.pending", std::process::id()));
     let pending = std::path::PathBuf::from(pending);
@@ -661,6 +706,8 @@ pub struct UsageStore {
     /// `None` in a test harness and in `doctor`, which have no daemon state
     /// directory to write into and nothing to carry across a restart.
     tally: Option<std::path::PathBuf>,
+    /// Where the quota snapshots are written, if they are written anywhere.
+    quota: Option<std::path::PathBuf>,
     /// Fired in the window a write can be lost in, so a test can make it
     /// happen. Nothing outside a test sets it.
     #[allow(clippy::type_complexity)]
@@ -710,12 +757,6 @@ impl UsageStore {
 
     /// Bind the token tally to a file, and read back what is already in it.
     ///
-    /// The quota snapshots are deliberately not bound to anything: upstream
-    /// still holds those and an ask recovers them exactly, where a percentage
-    /// restored from disk would describe a window that may have reset since
-    /// (§6.1). What is restored here is the one figure nothing upstream can
-    /// restate.
-    ///
     /// A file that cannot be read is treated as an empty tally. Nothing here
     /// is worth refusing to serve a turn over, and a tally that starts at zero
     /// says so everywhere it is reported.
@@ -727,6 +768,34 @@ impl UsageStore {
             *spent = loaded;
         }
         self.tally = Some(path);
+        self
+    }
+
+    /// Bind the quota snapshots to a file, and read back what is still true in
+    /// it (§6.1).
+    ///
+    /// **What is restored is decided by the reset time, never by the age of
+    /// the file.** A window whose reset has passed describes a window that is
+    /// back to zero and is dropped; one that cannot be dated at all is dropped
+    /// for the same reason, since nothing about it can be shown to still hold.
+    /// What survives is restored with the moment it was taken, so the meter
+    /// prints an age rather than an empty row.
+    ///
+    /// A file that cannot be read is treated as no snapshot. Nothing here is
+    /// worth refusing to serve a turn over, and an empty meter says so.
+    #[must_use]
+    pub fn remembering_at(mut self, path: std::path::PathBuf) -> Self {
+        if let Some(loaded) = read_quota(&path) {
+            let now = now();
+            let restored: std::collections::BTreeMap<String, Measured> = loaded
+                .into_iter()
+                .filter_map(|(name, measured)| restore(measured, now).map(|kept| (name, kept)))
+                .collect();
+            if let Ok(mut by_account) = self.by_account.lock() {
+                *by_account = restored;
+            }
+        }
+        self.quota = Some(path);
         self
     }
 
@@ -755,6 +824,7 @@ impl UsageStore {
                 if let Ok(mut by_account) = self.by_account.lock() {
                     by_account.insert(name, measured);
                 }
+                self.write_quota(None);
             }
             None => {
                 if let Ok(mut unattributed) = self.unattributed.lock() {
@@ -778,6 +848,7 @@ impl UsageStore {
             spent.remove(account);
         }
         self.write_tally(Some(account));
+        self.write_quota(Some(account));
     }
 
     /// Forget the figure no account could be named for.
@@ -932,9 +1003,54 @@ impl UsageStore {
                 continue;
             }
 
-            replace_tally(path, &body);
+            replace_file(path, &body);
             return;
         }
+    }
+
+    /// Write the figures this daemon holds, keeping whichever record of an
+    /// account is the later one.
+    ///
+    /// **Later, not higher.** A tally accumulates and a snapshot replaces, so
+    /// the merge that keeps a tally honest would keep a quota figure that has
+    /// since been superseded. Where two daemons share a `PROXENOS_HOME`,
+    /// neither sees the other's turns, and the newer measurement is the one
+    /// that describes the account now.
+    ///
+    /// `dropped` is the one case that is not a merge — a forgotten account is
+    /// gone, and must not come back off the disk.
+    ///
+    /// Every failure here is silent, for the reason `write_tally` is: serving
+    /// turns does not depend on this file.
+    fn write_quota(&self, dropped: Option<&str>) {
+        let Some(path) = self.quota.as_ref() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        let mut merged = read_quota(path).unwrap_or_default();
+        let Ok(held) = self.by_account.lock() else {
+            return;
+        };
+        for (name, measured) in held.iter() {
+            let superseded = merged
+                .get(name)
+                .is_none_or(|existing| existing.at <= measured.at);
+            if superseded {
+                merged.insert(name.clone(), measured.clone());
+            }
+        }
+        drop(held);
+        if let Some(dropped) = dropped {
+            merged.remove(dropped);
+        }
+
+        let Ok(body) = serde_json::to_string_pretty(&merged) else {
+            return;
+        };
+        replace_file(path, &body);
     }
 
     fn fire_tally_write(&self) {

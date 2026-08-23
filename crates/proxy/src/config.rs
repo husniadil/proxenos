@@ -41,6 +41,15 @@ pub fn tally_path() -> std::path::PathBuf {
     config_dir().join("spend.json")
 }
 
+/// Where the per-account quota snapshots live (§6.1).
+///
+/// A sibling of the tally rather than the same file: the two are written on
+/// different events and restored under different rules, and nothing in either
+/// is any part of a secret.
+pub fn quota_path() -> std::path::PathBuf {
+    config_dir().join("quota.json")
+}
+
 /// The project was `codex-cc-proxy` before v0.5.0, and a store written under
 /// that name does not stop existing because this binary got a new one.
 ///

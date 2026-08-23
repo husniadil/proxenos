@@ -261,7 +261,8 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
     // a window that may have reset since.
     let usage = Arc::new(
         proxenos::usage::UsageStore::for_accounts(Arc::clone(&credentials))
-            .tallying_at(proxenos::config::tally_path()),
+            .tallying_at(proxenos::config::tally_path())
+            .remembering_at(proxenos::config::quota_path()),
     );
 
     // Bound to the same store, for the same reason: a turn made as "whoever is

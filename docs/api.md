@@ -403,8 +403,10 @@ moment it is most likely to be run.
 above it. It costs nothing to ask: the backend opens every stream with a snapshot, before it says
 anything about the response, so the figure rides along with a turn already being
 made and is never polled. Before any turn has been made it says so rather than
-answering with zeroes. `--json` emits the snapshot as it stands, for a status
-line.
+answering with zeroes. A figure survives a restart where its window has not
+reset since (`proxy-behavior.md` §6.1), and comes back with the moment it was
+taken, so the row reads `2h ago` rather than standing empty. `--json` emits the
+snapshot as it stands, for a status line.
 
 `--refresh` **asks** before reporting: it calls `usage.refresh` (§3), which
 sweeps every stored account that can hold a figure, each on its own credential

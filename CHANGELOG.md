@@ -127,6 +127,18 @@ vanished. Keys in that file keep working exactly as they did.
   which is the one failure borrowing introduces: the directory keeps its name
   while the identity behind it moves.
 
+- **The quota snapshot survives a restart, where its reset says it still can.**
+  Only the token tally was written down; every percentage went with the
+  process, so a restarted daemon printed empty rows until the next turn was
+  made as each account. Snapshots now live in `quota.json` beside `spend.json`,
+  each window carrying the reset the provider gave and the moment the figure
+  was taken. On read-back a window whose reset has passed is dropped — it
+  describes a window that is back to zero, which is the reassuring direction to
+  be wrong in — and so is a window with no reset stated and a record with no
+  moment, since neither can be shown to still hold. What survives comes back
+  with its age, so `usage` says `2h ago` rather than nothing at all.
+  `usage --refresh` replaces it as before.
+
 ### Changed
 
 - **`usage` prints a header table, one row per window.** Every account row used

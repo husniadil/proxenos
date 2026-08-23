@@ -888,23 +888,171 @@ fn a_tally_survives_a_restart() {
     assert_eq!(restarted.spent_for("main").total(), 122);
 }
 
-/// **The half upstream can restate is not persisted.** A snapshot read from
-/// disk describes a window that may have reset since, and a percentage with a
-/// stale age reads as headroom that may not exist. Asking recovers it exactly,
-/// so the empty row is the honest one.
-#[test]
-fn a_quota_figure_does_not_survive_a_restart() {
-    let dir = tempfile::tempdir().expect("temporary directory");
-    let path = dir.path().join("spend.json");
+/// A store bound to both files, serving `name`.
+fn store_remembering(name: &'static str, dir: &std::path::Path) -> proxenos::usage::UsageStore {
+    store_tallying(name, &dir.join("spend.json")).remembering_at(dir.join("quota.json"))
+}
 
-    let first = store_tallying("main", &path);
+/// **A figure whose window has not turned over is still true after a
+/// restart.** The reset time is what makes that decidable, so it is written
+/// beside the figure and read back with it — and the row then says how old it
+/// is rather than standing empty until the next turn.
+#[test]
+fn a_quota_snapshot_survives_a_restart() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+
+    let first = store_remembering("main", dir.path());
     first.record_for(None, &snapshot(11.0), Source::Turn);
-    assert!(first.latest_for("main").is_some());
+    first.record_for(Some("spare"), &snapshot(77.0), Source::Fetch);
+    let taken = first.latest_for("main").expect("a figure was recorded").at;
     drop(first);
 
-    let restarted = store_tallying("main", &path);
-    assert_eq!(restarted.latest_for("main"), None);
-    assert_eq!(restarted.accounts(), Vec::new());
+    let restarted = store_remembering("main", dir.path());
+    let main = restarted
+        .latest_for("main")
+        .expect("the figure is restored");
+    assert_eq!(main.snapshot, snapshot(11.0));
+    // The moment it was taken comes back with it. A figure restored as though
+    // it were taken now would be a claim about its age that is not true.
+    assert_eq!(main.at, taken);
+    assert_eq!(main.source, Source::Turn);
+
+    // Every account's, not only the serving one, and each keeps how it was
+    // come by.
+    let spare = restarted
+        .latest_for("spare")
+        .expect("the figure is restored");
+    assert_eq!(spare.source, Source::Fetch);
+    assert_eq!(spare.snapshot, snapshot(77.0));
+}
+
+/// **A window whose reset has passed is not restored.** The figure describes a
+/// window that is back to zero, and showing it reads as spend the account has
+/// not made — headroom in the reassuring direction.
+///
+/// An account left with no window at all is not restored either: an empty
+/// snapshot reads as "quota known, nothing used", which is the same error by a
+/// shorter route.
+#[test]
+fn a_window_past_its_reset_is_not_restored() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+
+    let store = store_remembering("main", dir.path());
+    store.record_for(None, &snapshot(11.0), Source::Turn);
+    drop(store);
+
+    // Rewrite the reset into the past, which is what the passage of time does
+    // to the same file.
+    let path = dir.path().join("quota.json");
+    let mut held: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
+    held["main"]["snapshot"]["windows"][0]["resets_at"] = json!(1_000);
+    std::fs::write(&path, held.to_string()).expect("write");
+
+    assert_eq!(
+        store_remembering("main", dir.path()).latest_for("main"),
+        None
+    );
+}
+
+/// A figure this daemon cannot date is not restored. `at` is what says how
+/// stale the row is, and a figure rendered with no age reads as current.
+#[test]
+fn a_figure_with_no_moment_taken_is_not_restored() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let held = json!({
+        "main": {
+            "snapshot": {
+                "plan": "plus",
+                "limit_reached": false,
+                "windows": [{ "used_percent": 11.0, "window_minutes": 300,
+                              "resets_at": 1_789_487_264u64 }],
+            },
+            "source": "turn",
+        },
+    });
+    std::fs::write(dir.path().join("quota.json"), held.to_string()).expect("write");
+
+    assert_eq!(
+        store_remembering("main", dir.path()).latest_for("main"),
+        None
+    );
+}
+
+/// A short file — what a daemon killed mid-write would leave, if the write
+/// were not a replacement — reads as no snapshot rather than as a figure of
+/// zero.
+#[test]
+fn a_truncated_snapshot_file_reads_as_no_snapshot() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("quota.json");
+    std::fs::write(&path, r#"{"main":{"snapshot":{"win"#).expect("write");
+
+    let store = store_remembering("main", dir.path());
+    assert_eq!(store.latest_for("main"), None);
+    assert_eq!(store.accounts(), Vec::new());
+
+    // And it writes over the unreadable file rather than being stuck behind it.
+    store.record_for(None, &snapshot(11.0), Source::Turn);
+    assert!(
+        store_remembering("main", dir.path())
+            .latest_for("main")
+            .is_some()
+    );
+}
+
+/// Removing an account drops its figure from the file too. A figure that came
+/// back off the disk for an account this daemon can no longer spend would name
+/// headroom nobody can reach.
+#[test]
+fn a_removed_accounts_figure_does_not_come_back_off_the_disk() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+
+    let store = store_remembering("main", dir.path());
+    store.record_for(None, &snapshot(11.0), Source::Turn);
+    store.record_for(Some("spare"), &snapshot(77.0), Source::Turn);
+    store.forget("spare");
+    drop(store);
+
+    let restarted = store_remembering("main", dir.path());
+    assert_eq!(restarted.latest_for("spare"), None);
+    assert!(restarted.latest_for("main").is_some());
+}
+
+/// Nothing in the snapshot file is a credential (CLAUDE.md #7): an account
+/// name, a plan, and the percentages the provider stated.
+#[test]
+fn a_snapshot_file_holds_nothing_but_names_and_figures() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+
+    let store = store_remembering("main", dir.path());
+    store.record_for(None, &snapshot(11.0), Source::Turn);
+    let at = store.latest_for("main").expect("a figure").at;
+
+    let raw = std::fs::read_to_string(dir.path().join("quota.json")).expect("read");
+    let parsed: serde_json::Value = serde_json::from_str(&raw).expect("parse");
+    assert_eq!(
+        parsed,
+        json!({
+            "main": {
+                "snapshot": {
+                    "plan": "plus",
+                    "limit_reached": false,
+                    "windows": [{
+                        "used_percent": 11.0,
+                        "window_minutes": 300,
+                        "resets_at": 1_789_487_264u64,
+                        "label": null,
+                        "status": null,
+                        "surpassed_threshold": null,
+                        "representative": false,
+                    }],
+                },
+                "source": "turn",
+                "at": at,
+            },
+        })
+    );
 }
 
 /// A file this daemon cannot read is treated as an empty tally rather than as
