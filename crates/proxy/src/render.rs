@@ -176,10 +176,17 @@ pub fn accounts(result: &Value) -> String {
             // A key is one secret: no address, no id, and nothing else to say
             // about it. A grant missing both has an id somewhere and this
             // daemon simply does not have it, which is a different sentence.
+            //
+            // The plan comes third because a borrowed Claude grant carries no
+            // address and no id at all — its store holds neither — but it does
+            // say which subscription it is. Printing `id unknown` there stated
+            // the one thing the row could not say while sitting next to
+            // something it could.
             let key = field(account, "kind").and_then(Value::as_str) == Some("key");
             let who = field(account, "email")
                 .and_then(Value::as_str)
                 .or_else(|| field(account, "account_id").and_then(Value::as_str))
+                .or_else(|| field(account, "plan").and_then(Value::as_str))
                 .unwrap_or(if key { "key" } else { "id unknown" });
             // On every row. With two providers in the store an unnamed one is
             // a guess, and the row that leaves it out is the one an operator

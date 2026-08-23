@@ -1349,3 +1349,49 @@ fn the_status_answer_carries_the_source_and_the_identity_mark() {
     // Absent rather than false: an unchanged account says nothing about it.
     assert_eq!(serialized.get("identity_changed"), None);
 }
+
+/// A borrowed Claude grant carries no address and no account id — its store
+/// holds neither — but it does say which subscription it is. The row says that
+/// rather than saying the one thing it cannot.
+#[test]
+fn a_row_with_no_identity_falls_back_to_the_plan() {
+    let rendered = render::accounts(&listing(serde_json::json!({
+        "name": "personal-claude",
+        "kind": "grant",
+        "provider": "anthropic",
+        "plan": "max",
+        "selected": true,
+    })));
+
+    assert!(rendered.contains("max"), "{rendered}");
+    assert!(!rendered.contains("id unknown"), "{rendered}");
+}
+
+/// A grant that has an id keeps showing it: the plan is the fallback, not a
+/// replacement for the identity that gets billed.
+#[test]
+fn an_identity_still_outranks_the_plan() {
+    let rendered = render::accounts(&listing(serde_json::json!({
+        "name": "work",
+        "kind": "grant",
+        "provider": "codex",
+        "email": "someone@example.test",
+        "plan": "team",
+        "selected": true,
+    })));
+
+    assert!(rendered.contains("someone@example.test"), "{rendered}");
+}
+
+/// A key is one secret and says so, whatever else the row carries.
+#[test]
+fn a_key_still_reads_as_a_key() {
+    let rendered = render::accounts(&listing(serde_json::json!({
+        "name": "openai-api",
+        "kind": "key",
+        "provider": "codex",
+        "selected": false,
+    })));
+
+    assert!(rendered.contains("key"), "{rendered}");
+}
