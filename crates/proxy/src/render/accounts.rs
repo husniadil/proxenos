@@ -299,6 +299,13 @@ pub fn selected_account(result: &Value) -> String {
     // not exist, so the line states only what is true: who now serves, on
     // which provider.
     let previous = field(result, "previous_provider").and_then(Value::as_str);
+    // Nothing moved, so nothing is reported as having moved.
+    if field(result, "unchanged").and_then(Value::as_bool) == Some(true) {
+        return match provider {
+            Some(provider) => format!("already serving turns as {name} on {provider}"),
+            None => format!("already serving turns as {name}"),
+        };
+    }
     match (provider, previous) {
         (Some(provider), Some(previous)) if provider != previous => format!(
             "serving turns as {name} on {provider}\n{previous} to {provider}, so a different \

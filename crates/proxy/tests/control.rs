@@ -2778,13 +2778,58 @@ async fn selecting_an_account_ends_conversations_bound_to_the_previous_one() {
     assert_eq!(harness.sessions.len(), 1);
 
     harness
-        .call_with("accounts.select", json!({ "account": "acct_one" }))
+        .call_with("accounts.select", json!({ "account": "acct_two" }))
         .await
         .unwrap();
 
     assert!(
         harness.sessions.is_empty(),
         "a conversation bound to the previous account survived the switch"
+    );
+}
+
+/// Selecting the account that is already serving moves nothing, and so ends
+/// nothing. Seen live: a second `accounts use` on the same account reported a
+/// switch that had not happened, and a switch clears every conversation and
+/// every figure bound to the previous account — which here is the same one.
+#[tokio::test]
+async fn selecting_the_serving_account_changes_nothing_and_says_so() {
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add(&grant("acct_one", "a-one"), None)
+        .unwrap();
+    harness
+        .store
+        .add(&grant("acct_two", "a-two"), None)
+        .unwrap();
+    harness
+        .call_with("accounts.select", json!({ "account": "acct_one" }))
+        .await
+        .unwrap();
+
+    let input = vec![proxenos_core::responses::InputItem::Message {
+        role: proxenos_core::responses::ItemRole::User,
+        content: Vec::new(),
+    }];
+    let _session = harness.sessions.resolve(&input);
+    assert_eq!(harness.sessions.len(), 1);
+
+    let answer = harness
+        .call_with("accounts.select", json!({ "account": "acct_one" }))
+        .await
+        .unwrap();
+
+    assert_eq!(answer["selected"], json!("acct_one"));
+    assert_eq!(answer["unchanged"], json!(true));
+    assert_eq!(
+        harness.sessions.len(),
+        1,
+        "a conversation was ended by a switch that moved nothing"
+    );
+    assert_eq!(
+        proxenos::render::selected_account(&answer),
+        "already serving turns as acct_one on codex"
     );
 }
 
@@ -3361,11 +3406,11 @@ async fn selecting_an_account_puts_its_own_mapping_in_force() {
         .await;
     harness
         .store
-        .add(&grant("acct_one", "a-one"), None)
+        .add(&grant("acct_two", "a-two"), None)
         .unwrap();
     harness
         .store
-        .add(&grant("acct_two", "a-two"), None)
+        .add(&grant("acct_one", "a-one"), None)
         .unwrap();
 
     harness
@@ -4319,13 +4364,15 @@ async fn a_switch_is_not_refused_over_a_pinned_tiers_model() {
     );
 
     let harness = Harness::start().await.with_configuration(config).await;
-    harness
-        .store
-        .add(&grant("acct_one", "a-one"), None)
-        .unwrap();
+    // The second account first, so it is the one a lone store selects and the
+    // call below is a switch rather than a re-selection that moves nothing.
     harness
         .store
         .add(&grant("acct_two", "a-two"), None)
+        .unwrap();
+    harness
+        .store
+        .add(&grant("acct_one", "a-one"), None)
         .unwrap();
 
     harness

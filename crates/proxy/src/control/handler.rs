@@ -1499,6 +1499,20 @@ async fn select_account(state: &ControlState, params: Option<&Value>) -> Result<
     // provider was answering.
     let previous_provider = selected_provider(&state.credentials.accounts().unwrap_or_default());
 
+    // The account already serving is not a switch. Everything below is what a
+    // switch costs — the catalog fetched again, every conversation ended, every
+    // figure dropped — and all of it would be paid to arrive where the daemon
+    // already is. Said as such, so a second `accounts use` does not report a
+    // move that never happened.
+    if previous.as_deref() == Some(name) {
+        return Ok(json!({
+            "selected": name,
+            "provider": previous_provider,
+            "previous_provider": previous_provider,
+            "unchanged": true,
+        }));
+    }
+
     state.credentials.select(name)?;
 
     // The catalog first, because the mapping is validated against it and it is

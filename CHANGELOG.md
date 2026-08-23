@@ -291,6 +291,10 @@ vanished. Keys in that file keep working exactly as they did.
 
 ### Fixed
 
+- **`accounts use` on the account already serving reported a switch and paid
+  for one.** It ended every conversation and dropped every quota figure to
+  arrive where the daemon already was, then said `still on <provider>`. It now
+  changes nothing and says `already serving turns as <name>`.
 - **`exec --model haiku` on a relaying account sent the second provider a
   first-provider id.** The launch environment handed every tier's id to the
   client, shared table included, so a relayed tier arrived upstream as
