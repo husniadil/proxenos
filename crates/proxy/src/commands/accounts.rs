@@ -2,9 +2,7 @@
 
 use super::account_store;
 use crate::cli;
-use anyhow::Context;
 use anyhow::Result;
-use anyhow::bail;
 use proxenos::control;
 use proxenos::render;
 use std::sync::Arc;
@@ -43,160 +41,16 @@ pub(crate) async fn login(args: cli::LoginArgs) -> Result<()> {
 /// same read every turn makes, so a profile that passes here is one the daemon
 /// can actually serve.
 fn sign_in_profile(args: &cli::LoginArgs) -> Result<()> {
-    use std::io::IsTerminal;
-
-    let Some(name) = args.label.as_deref() else {
-        bail!(
-            "name the profile: `login --profile --as NAME`. The name is what `accounts --use` takes."
-        );
-    };
-
     let config = proxenos::config::Config::load()?;
-    if config.profiles.contains_key(name) {
-        bail!(
-            "`{name}` is already declared in `[profiles]`. Sign in to it with the command \
-             that profile's own client takes, or choose another name."
-        );
-    }
-
-    let directory = args.path.clone().unwrap_or_else(|| {
-        proxenos::auth::profile_login::directory(&proxenos::config::config_dir(), name)
-    });
-    std::fs::create_dir_all(&directory)
-        .with_context(|| format!("could not create {}", directory.display()))?;
-
-    let command = proxenos::auth::profile_login::Command::new(
+    let plan = proxenos::auth::profile_login::plan(
+        args.label.as_deref(),
         args.provider,
-        directory.clone(),
-        config.claude_program.as_deref(),
-    );
-
-    let profile = proxenos::auth::borrowed::read::Profile {
-        name: name.to_owned(),
-        provider: args.provider,
-        config_dir: Some(directory.clone()),
-    };
-    let host = proxenos::auth::borrowed::host()?;
-    let home = std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .context("`HOME` is not set, and a profile is resolved relative to it")?;
-    let signed_in = || {
-        proxenos::auth::borrowed::read::grant(
-            &proxenos::auth::borrowed::read::HostReader,
-            &profile,
-            host,
-            &home,
-        )
-    };
-
-    // A directory that already holds a grant is signed in, whoever signed it
-    // in. Running the client over it would ask the operator to authenticate
-    // something that already is — and this is also the path that adopts a
-    // profile another tool made, and the path a second run takes after the
-    // operator ran the printed line themselves.
-    if signed_in().is_ok() {
-        println!("{} is already signed in", directory.display());
-    } else {
-        // A login wants a browser and a keyboard. Started from something with
-        // neither it hangs with nothing said, so where there is no terminal
-        // the line is printed and the operator runs it themselves — the same
-        // thing this would have done, in a place where it can work. The way
-        // back is the whole command, because a re-run that dropped the
-        // provider would sign in to the other one.
-        if !std::io::stdin().is_terminal() {
-            println!(
-                "run this:\n\n  {}\n\nthen declare it with:\n\n  proxenos login --profile \
-                 --as {name} --provider {} --path {}",
-                command.line(),
-                args.provider.as_str(),
-                directory.display()
-            );
-            return Ok(());
-        }
-
-        println!("signing in to {} — {}", directory.display(), command.line());
-        let status = std::process::Command::new(&command.program)
-            .args(&command.arguments)
-            .env(command.variable, &command.directory)
-            .status();
-        match status {
-            Ok(status) if status.success() => {}
-            // Its exit status is not the answer, and neither is a program that
-            // could not be started: what settles it is whether the profile now
-            // holds a grant. Both are said, then the profile is read.
-            Ok(status) => println!("`{}` exited {status}", command.program),
-            Err(error) => println!(
-                "could not run `{}`: {error}. Run it yourself:\n\n  {}",
-                command.program,
-                command.line()
-            ),
-        }
-
-        if let Err(error) = signed_in() {
-            bail!(
-                "{} holds no grant, so nothing was declared: {}",
-                directory.display(),
-                error.message
-            );
-        }
-    }
-
-    let path = proxenos::config::config_path();
-    let document = match std::fs::read_to_string(&path) {
-        Ok(document) => document,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            proxenos::config::EXAMPLE.to_owned()
-        }
-        Err(error) => {
-            return Err(error).with_context(|| format!("could not read {}", path.display()));
-        }
-    };
-    // Declaring anything stops the daemon looking for the stock profiles
-    // (§8.4), so a first `login --profile` would take away every account the
-    // operator already had. They are written down first, exactly as they were
-    // being read, and only the ones that hold a grant: an entry for a program
-    // that was never signed into is an account that cannot serve.
-    let mut document = document;
-    if config.profiles.is_empty() {
-        for found in proxenos::auth::borrowed::discovered() {
-            if found.name == name
-                || proxenos::auth::borrowed::read::grant(
-                    &proxenos::auth::borrowed::read::HostReader,
-                    &found,
-                    host,
-                    &home,
-                )
-                .is_err()
-            {
-                continue;
-            }
-            document =
-                proxenos::config::edit::add_profile(&document, &found.name, found.provider, None)?;
-            println!(
-                "declaring `{}`, which was being read without being declared",
-                found.name
-            );
-        }
-    }
-
-    let updated = proxenos::config::edit::add_profile(
-        &document,
-        name,
-        args.provider,
-        Some(directory.as_path()),
+        args.path.clone(),
+        &config,
+        &proxenos::config::config_dir(),
     )?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, updated)
-        .with_context(|| format!("could not write {}", path.display()))?;
-
-    println!(
-        "declared `{name}` in {}. A running daemon read `[profiles]` at startup and still \
-         holds the old set — stop it and let it come back to serve as this one.",
-        path.display()
-    );
-    Ok(())
+    let mut environment = proxenos::auth::profile_login::Stdio::new()?;
+    proxenos::auth::profile_login::run(&plan, &mut environment)
 }
 
 /// Store a key, read from stdin.
