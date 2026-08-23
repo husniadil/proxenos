@@ -938,3 +938,35 @@ fn commit_attribution_left_on_writes_no_attribution_object() {
         "switched off must leave no attribution key behind"
     );
 }
+
+/// The shipped example is the operator's own document — a persisted write
+/// starts from it — so a key it never mentions is a key nobody finds. This is
+/// how `[profiles]` went missing from it: the accounts moved into the
+/// configuration file and the file that explains itself said nothing about
+/// them.
+///
+/// The list comes from the parser rather than from a list kept here, so a key
+/// added later joins this assertion without anyone remembering to add it.
+#[test]
+fn the_example_mentions_every_key_the_parser_accepts() {
+    let refusal = toml::from_str::<proxenos::config::Config>("nonsense_key = 1")
+        .expect_err("an unknown key is refused")
+        .to_string();
+    let (_, listed) = refusal
+        .split_once("expected one of ")
+        .expect("the refusal names the fields it expected");
+
+    let keys: Vec<&str> = listed
+        .split(", ")
+        .map(|field| field.trim().trim_matches('`'))
+        .filter(|field| !field.is_empty())
+        .collect();
+    assert!(keys.len() > 5, "the field list was not parsed: {listed}");
+
+    for key in keys {
+        assert!(
+            proxenos::config::EXAMPLE.contains(key),
+            "the shipped example never mentions `{key}`"
+        );
+    }
+}

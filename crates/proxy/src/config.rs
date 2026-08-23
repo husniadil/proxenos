@@ -84,8 +84,9 @@ pub fn renamed_home_refusal() -> Option<String> {
 }
 
 /// An example that can be copied verbatim into place.
-pub const EXAMPLE: &str = r#"# Every key here has a default. A file that states nothing works; write only
-# what you want to change.
+pub const EXAMPLE: &str = r#"# Every key here has a default, so write only what you want to change. The one
+# thing this daemon cannot default is which accounts it serves: declare them
+# under [profiles] at the bottom, or store a key.
 
 port = 8787
 
@@ -231,6 +232,36 @@ disable_commit_attribution = true
 # endpoint  = "https://chatgpt.com/backend-api/codex/responses"
 # websocket = "wss://chatgpt.com/backend-api/codex/responses"
 # catalog   = "https://chatgpt.com/backend-api/codex/models"
+
+# Where the accounts come from. This daemon holds no subscription of its own: a
+# grant is read from the profile of the program that already owns it, so an
+# entry here says which program and which directory, and nothing else. No
+# credential is written into this file and none is read out of it.
+#
+# Leaving `path` out means that program's STOCK profile — the one it uses with
+# no variable set. That is a different profile from one naming the stock
+# directory explicitly: on macOS the client picks its keychain item by whether
+# `CLAUDE_CONFIG_DIR` was set at all, not by what it was set to. Writing the
+# path out is not a way of saying "the default".
+#
+# One account per tool needs no paths at all:
+#
+# [profiles.codex]
+# provider = "codex"
+#
+# [profiles.claude]
+# provider = "anthropic"
+#
+# A second profile of the same program names its directory, absolute and
+# unexpanded — a relative path or a leading `~` is refused rather than
+# resolved, since a daemon's working directory is not yours:
+#
+# [profiles.work]
+# provider = "codex"
+# path     = "/Users/me/Library/Application Support/Agent Profiles/codex/p/997619b5"
+#
+# A key stored with `proxenos login --key --as NAME` is the other kind of
+# account and needs nothing here.
 "#;
 
 /// Unknown keys are refused rather than ignored.
