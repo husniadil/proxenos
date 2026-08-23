@@ -1641,12 +1641,18 @@ async fn forget_account(state: &ControlState, params: Option<&Value>) -> Result<
     }))
 }
 
-/// `usage.refresh` — ask the backend for a quota figure now.
+/// `usage.refresh` — ask the backend for a quota figure now, per account.
 ///
 /// The free path stays the primary one: the backend volunteers a snapshot at
 /// the head of every stream, and `usage` reports that. This is for the case
-/// that path cannot cover — a front-end with a figure to show on a daemon that
-/// has served no turn yet.
+/// that path cannot cover — an account that is held but not serving, whose
+/// headroom is exactly the question asked *before* switching to it, and which
+/// the free path can only answer by making it the serving account first.
+///
+/// Every account is asked for on its own credential and its figure recorded
+/// under its own name (§8.3). Asking is not serving: a named authorization
+/// reads one account by name and neither reads nor writes the selection, so
+/// nothing about which account serves turns moves here.
 async fn refresh_usage(state: &ControlState) -> Result<Value, ProxyError> {
     let Some(authorizer) = authorizer(state) else {
         return Err(ProxyError::authentication(
@@ -1654,18 +1660,107 @@ async fn refresh_usage(state: &ControlState) -> Result<Value, ProxyError> {
         ));
     };
 
-    let snapshot = crate::usage::fetch(
-        &reqwest::Client::new(),
-        &state.usage_endpoint,
-        &authorizer.authorize(None).await?,
-    )
-    .await?;
+    let accounts = state.credentials.accounts()?;
+    // One client for the sweep. Each account still gets its own request with
+    // its own credential; what is shared is a connection pool, not a
+    // credential.
+    let client = reqwest::Client::new();
+    let now = crate::auth::tokens::Clock::now_unix(&crate::auth::tokens::SystemClock);
 
-    // Recorded where the stream path records its own, so everything that reads
-    // a quota reads one value — under the serving account, which is the one it
-    // was asked for as, and saying it was asked for rather than volunteered.
-    state
-        .usage
-        .record_for(None, &snapshot, crate::usage::Source::Fetch);
-    Ok(snapshot.to_json())
+    let mut rows = Vec::with_capacity(accounts.len());
+    for account in &accounts {
+        // Asked for one at a time. A refusal, an expiry, or a dead endpoint
+        // belongs to the account it happened to, and a sweep that abandoned
+        // itself on the first one would leave every later row blank — which
+        // reads as "no quota left to show" rather than "not asked".
+        let mut row = match ask_for(state, &authorizer, &client, account, now).await {
+            Ok(snapshot) => {
+                // Recorded where the stream path records its own, under the
+                // account it was asked for as, and saying it was asked for
+                // rather than volunteered.
+                state
+                    .usage
+                    .record_for(Some(&account.name), &snapshot, crate::usage::Source::Fetch);
+                snapshot.to_json()
+            }
+            Err(detail) => json!({ "known": false, "detail": detail }),
+        };
+        if let Some(object) = row.as_object_mut() {
+            object.insert("account".to_owned(), json!(account.name));
+            object.insert("provider".to_owned(), json!(account.provider));
+            object.insert("serving".to_owned(), json!(account.selected));
+        }
+        rows.push(row);
+    }
+
+    // The serving account's own outcome at the top level, which is the shape
+    // this method has always answered with and the shape `usage` answers with.
+    // A caller reading only that is untouched by the sweep beneath it.
+    let mut answer = rows
+        .iter()
+        .find(|row| row.get("serving") == Some(&json!(true)))
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "known": false,
+                "detail": serving_unavailable(state),
+            })
+        });
+    if let Some(object) = answer.as_object_mut() {
+        object.insert("accounts".to_owned(), json!(rows));
+    }
+    Ok(answer)
+}
+
+/// One account's figure, asked for on its own credential.
+///
+/// `Err` is the sentence that row carries instead — never another account's,
+/// and never a figure invented for a row that could not be asked.
+async fn ask_for(
+    state: &ControlState,
+    authorizer: &crate::auth::authorize::AccountAuthorizer,
+    client: &reqwest::Client,
+    account: &crate::auth::store::Account,
+    now: u64,
+) -> Result<crate::usage::Snapshot, String> {
+    // Only where a figure is possible. A key holds no subscription
+    // entitlement, and this provider's other kind states quota on turns
+    // because its usage endpoint refuses a subscription token for want of a
+    // scope (§9.4). Neither row gains anything from a request that exists to
+    // be refused, so both keep the sentence they already had.
+    if account.provider != crate::auth::store::Provider::Codex.as_str() || account.kind != "grant" {
+        return Err(unavailable(state, account));
+    }
+
+    // Asking may not refresh a grant this operator did not select. A refresh
+    // rotates a token family, and a second holder of the same grant — a CLI
+    // signed in as the account — is left holding a token the rotation retired,
+    // by a sweep it never asked for. The serving account is the exception: its
+    // grant is refreshed by every turn already, so asking as it changes
+    // nothing that was not already happening.
+    if !account.selected
+        && state
+            .credentials
+            .credential_for(&account.name)
+            .map_err(|error| error.message)?
+            .grant()
+            .is_some_and(|grant| {
+                grant.needs_refresh(now, crate::auth::tokens::REFRESH_MARGIN_SECONDS)
+            })
+    {
+        return Err(format!(
+            "the grant stored for `{}` has expired, and asking for a figure will not refresh a \
+             grant this daemon was not told to spend; select it or log in as it again",
+            account.name
+        ));
+    }
+
+    let authorization = authorizer
+        .authorize(Some(&account.name))
+        .await
+        .map_err(|error| error.message)?;
+
+    crate::usage::fetch(client, &state.usage_endpoint, &authorization)
+        .await
+        .map_err(|error| error.message)
 }

@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 
 /// How far ahead of expiry to refresh.
-const REFRESH_MARGIN_SECONDS: u64 = 300;
+pub(crate) const REFRESH_MARGIN_SECONDS: u64 = 300;
 
 /// A clock, so expiry can be tested without waiting for it.
 pub trait Clock: Send + Sync {

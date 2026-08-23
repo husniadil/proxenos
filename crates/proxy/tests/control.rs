@@ -390,6 +390,53 @@ impl Harness {
         }
     }
 
+    /// The same harness, whose daemon can ask a quota endpoint — a loopback
+    /// stand-in, never the network.
+    ///
+    /// Held apart from `respawn_with` because the endpoint is the whole point:
+    /// every other spawn here sets it empty precisely so no test can reach out.
+    async fn with_quota_endpoint(self, endpoint: &str) -> Self {
+        let tokens = Arc::new(proxenos::auth::tokens::TokenSource::new(
+            Arc::clone(&self.store) as Arc<dyn CredentialStore>,
+            String::new(),
+            "client-abc",
+            Arc::new(proxenos::auth::tokens::SystemClock),
+        ));
+        let path = self._dir.path().join("control-quota.sock");
+        let state = ControlState {
+            port: 8787,
+            policy: Arc::clone(&self.policy),
+            catalog: Arc::new(CatalogSource::fixed(
+                Catalog::parse(
+                    r#"{"data":[{"id":"gpt-5.6-terra","context_window":272000}]}"#,
+                    95.0,
+                )
+                .unwrap(),
+            )),
+            credentials: Arc::clone(&self.store) as Arc<dyn AccountStore>,
+            capture: Arc::clone(&self.switches),
+            usage: Arc::clone(&self.usage),
+            login: Arc::new(proxenos::auth::daemon_login::LoginFlow::default()),
+            config: Arc::clone(&self.config),
+            shutdown: Arc::clone(&self.shutdown),
+            tokens: Some(tokens),
+            usage_endpoint: endpoint.to_owned(),
+            sessions: Arc::clone(&self.sessions),
+            config_path: Some(self.config_file.clone()),
+        };
+        let socket = path.clone();
+        tokio::spawn(async move {
+            let _ = control::serve(&socket, state).await;
+        });
+        for _ in 0..100 {
+            if path.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        Self { path, ..self }
+    }
+
     async fn call(&self, method: &str) -> Result<Value, proxenos::error::ProxyError> {
         control::call(&self.path, method, None).await
     }
@@ -5375,5 +5422,288 @@ async fn an_unclassified_anthropic_key_claims_neither_meter() {
         "this daemon has not recorded which kind of anthropic key this account holds, \
          so it cannot say whether a quota figure will ever arrive for it \
          (no turn has been served as it yet)"
+    );
+}
+
+/// A loopback quota endpoint that answers per account, so one account's answer
+/// can be asserted not to be another's. Nothing here reaches the network.
+struct QuotaEndpoint {
+    url: String,
+}
+
+impl QuotaEndpoint {
+    /// `answers` maps the `chatgpt-account-id` header to a body; an account
+    /// with no entry is answered with a server error, which is how a per-row
+    /// failure is produced without a network to fail against.
+    async fn start(answers: Vec<(&'static str, &'static str)>) -> Self {
+        use axum::routing::get;
+        let answers: std::collections::HashMap<&str, &str> = answers.into_iter().collect();
+        let app = axum::Router::new().route(
+            "/quota",
+            get(move |headers: axum::http::HeaderMap| {
+                let answers = answers.clone();
+                async move {
+                    let account = headers
+                        .get("chatgpt-account-id")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_owned();
+                    match answers.get(account.as_str()) {
+                        Some(body) => (axum::http::StatusCode::OK, (*body).to_owned()),
+                        None => (
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            String::from("{}"),
+                        ),
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        Self {
+            url: format!("http://{addr}/quota"),
+        }
+    }
+}
+
+/// The shape the quota endpoint answers with (`usage::Snapshot::parse_rest`).
+fn quota_body(used: f64) -> String {
+    format!(
+        r#"{{"plan_type":"plus","rate_limit":{{"primary_window":{{"used_percent":{used},"limit_window_seconds":18000,"reset_at":1900000000}}}}}}"#
+    )
+}
+
+/// `proxy-behavior.md` §8.3 — a figure can be asked for per account, so an
+/// account that is held and has never served gets one too.
+///
+/// The account kept as a spare is the one whose headroom decides whether to
+/// switch to it, and becoming the serving account to find out is the question
+/// answering itself. Asking must move nothing: the serving account is asserted
+/// identical either side of the ask.
+#[tokio::test]
+async fn a_stored_account_that_never_served_can_be_asked_for_a_figure() {
+    let endpoint = QuotaEndpoint::start(vec![
+        ("acct_serving", Box::leak(quota_body(11.0).into_boxed_str())),
+        ("acct_spare", Box::leak(quota_body(72.0).into_boxed_str())),
+    ])
+    .await;
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add(&grant("acct_serving", "a-serving"), None)
+        .unwrap();
+    harness
+        .store
+        .add(&grant("acct_spare", "a-spare"), None)
+        .unwrap();
+    harness.store.select("acct_serving").unwrap();
+    let harness = harness.with_quota_endpoint(&endpoint.url).await;
+
+    let serving_before = harness.call("usage").await.unwrap()["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["serving"] == json!(true))
+        .unwrap()["account"]
+        .clone();
+    assert_eq!(serving_before, json!("acct_serving"));
+
+    harness.call("usage.refresh").await.unwrap();
+
+    let answer = harness.call("usage").await.unwrap();
+    let rows = answer["accounts"].as_array().unwrap();
+    let row = |name: &str| {
+        rows.iter()
+            .find(|row| row["account"] == json!(name))
+            .unwrap_or_else(|| panic!("no row for {name}: {answer}"))
+            .clone()
+    };
+
+    let spare = row("acct_spare");
+    assert_eq!(spare["known"], json!(true), "{answer}");
+    assert_eq!(spare["serving"], json!(false), "{answer}");
+    assert_eq!(spare["windows"][0]["used_percent"], json!(72.0), "{answer}");
+    // §8.3 — asked for, not volunteered by a turn. The two are differently
+    // stale and the meter has to say which one this is.
+    assert_eq!(spare["source"], json!("fetch"), "{answer}");
+
+    let serving = row("acct_serving");
+    assert_eq!(
+        serving["windows"][0]["used_percent"],
+        json!(11.0),
+        "{answer}"
+    );
+
+    // Task 20's rule: authorization by name neither reads nor writes the
+    // selection.
+    let serving_after = rows
+        .iter()
+        .find(|row| row["serving"] == json!(true))
+        .unwrap()["account"]
+        .clone();
+    assert_eq!(serving_after, serving_before, "{answer}");
+    assert_eq!(
+        harness.store.load().unwrap().unwrap().access_token,
+        "a-serving",
+        "asking for a figure moved which account serves turns"
+    );
+}
+
+/// One account's failure is that account's, and says so on its own row.
+///
+/// A sweep that abandoned itself on the first refusal would leave every later
+/// account blank, and blank reads as "no quota left to show" rather than "not
+/// asked". Each row carries what happened to it.
+#[tokio::test]
+async fn one_accounts_failure_leaves_every_other_rows_figure_alone() {
+    // `acct_broken` has no answer configured, so the stand-in refuses it.
+    let endpoint = QuotaEndpoint::start(vec![(
+        "acct_good",
+        Box::leak(quota_body(43.0).into_boxed_str()),
+    )])
+    .await;
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add(&grant("acct_broken", "a-broken"), None)
+        .unwrap();
+    harness
+        .store
+        .add(&grant("acct_good", "a-good"), None)
+        .unwrap();
+    harness.store.select("acct_good").unwrap();
+    let harness = harness.with_quota_endpoint(&endpoint.url).await;
+
+    let refreshed = harness.call("usage.refresh").await.unwrap();
+    let asked = refreshed["accounts"].as_array().unwrap();
+    let broken = asked
+        .iter()
+        .find(|row| row["account"] == json!("acct_broken"))
+        .unwrap();
+    assert_eq!(broken["known"], json!(false), "{refreshed}");
+    assert!(
+        broken["detail"].as_str().unwrap().contains("500"),
+        "the row does not say what happened to it: {refreshed}"
+    );
+
+    let answer = harness.call("usage").await.unwrap();
+    let rows = answer["accounts"].as_array().unwrap();
+    let good = rows
+        .iter()
+        .find(|row| row["account"] == json!("acct_good"))
+        .unwrap();
+    assert_eq!(good["known"], json!(true), "{answer}");
+    assert_eq!(good["windows"][0]["used_percent"], json!(43.0), "{answer}");
+
+    let broken = rows
+        .iter()
+        .find(|row| row["account"] == json!("acct_broken"))
+        .unwrap();
+    assert_eq!(broken["known"], json!(false), "{answer}");
+}
+
+/// A row that cannot have a figure keeps the sentence it has rather than
+/// gaining a failed request.
+///
+/// A key holds no subscription entitlement, and asking for one spends a
+/// request to be told so in words that name neither half.
+#[tokio::test]
+async fn an_account_that_cannot_have_a_figure_is_not_asked_for_one() {
+    let endpoint = QuotaEndpoint::start(vec![(
+        "acct_grant",
+        Box::leak(quota_body(5.0).into_boxed_str()),
+    )])
+    .await;
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add(&grant("acct_grant", "a-grant"), None)
+        .unwrap();
+    harness
+        .store
+        .add_key("keyed", "sk-test", Provider::Codex)
+        .unwrap();
+    harness.store.select("acct_grant").unwrap();
+    let harness = harness.with_quota_endpoint(&endpoint.url).await;
+
+    let refreshed = harness.call("usage.refresh").await.unwrap();
+    let keyed = refreshed["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["account"] == json!("keyed"))
+        .unwrap();
+    assert_eq!(keyed["known"], json!(false), "{refreshed}");
+    assert!(
+        keyed["detail"]
+            .as_str()
+            .unwrap()
+            .contains("no quota ceiling"),
+        "the key row lost the sentence it already had: {refreshed}"
+    );
+}
+
+/// Asking for a figure does not refresh a grant the operator did not select.
+///
+/// A refresh rotates a token family, and a second holder of the same grant is
+/// left holding a token the rotation retired — by a sweep it never asked for.
+/// So an expired spare says what is wrong with it rather than being renewed in
+/// the background.
+#[tokio::test]
+async fn asking_does_not_refresh_the_grant_of_an_account_that_was_not_selected() {
+    let endpoint = QuotaEndpoint::start(vec![(
+        "acct_serving",
+        Box::leak(quota_body(9.0).into_boxed_str()),
+    )])
+    .await;
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add(
+            &Credentials {
+                expires_at: Some(1),
+                ..grant("acct_expired", "a-expired")
+            },
+            None,
+        )
+        .unwrap();
+    harness
+        .store
+        .add(&grant("acct_serving", "a-serving"), None)
+        .unwrap();
+    harness.store.select("acct_serving").unwrap();
+    let harness = harness.with_quota_endpoint(&endpoint.url).await;
+
+    let refreshed = harness.call("usage.refresh").await.unwrap();
+    let expired = refreshed["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["account"] == json!("acct_expired"))
+        .unwrap();
+    assert_eq!(expired["known"], json!(false), "{refreshed}");
+    assert!(
+        expired["detail"].as_str().unwrap().contains("expired"),
+        "{refreshed}"
+    );
+
+    assert_eq!(
+        harness
+            .store
+            .credential_for("acct_expired")
+            .unwrap()
+            .grant()
+            .unwrap()
+            .access_token,
+        "a-expired",
+        "asking for a figure rotated a token family nobody selected"
+    );
+    // And the account that was selected still is.
+    assert_eq!(
+        harness.store.load().unwrap().unwrap().access_token,
+        "a-serving"
     );
 }

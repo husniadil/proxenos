@@ -8,6 +8,20 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ### Changed
 
+- **`usage` listed every account and could only ever fill in one of them.** A
+  quota figure reached the store two ways, and both filed under whichever account
+  was serving turns: it rode a relayed turn, or `usage.refresh` asked for it as
+  the serving account. So an account held as a spare had exactly one route to a
+  figure — become the serving account and make a turn — and that is the account
+  whose headroom decides whether to switch to it in the first place. `usage.refresh`
+  now asks once per stored account, each on its own credential, and files each
+  answer under its own name. Nothing about which account serves turns is read or
+  changed. A row whose credential cannot hold a subscription figure is not asked
+  and keeps the sentence it had; a row that is asked and refused says so on its
+  own line and leaves every other row alone; and asking never refreshes the grant
+  of an account the operator did not select, because rotating a token family for
+  an unused account would retire a token some other holder is still using.
+
 - **On the second provider, a key is two credentials wearing one word.** A Claude
   subscription setup token and an anthropic API key were both stored as `key` and
   both read the same line, though they are metered in opposite ways: the setup
