@@ -1151,7 +1151,7 @@ impl AccountStore for FileStore {
                 return Err(file.unknown(from));
             };
             // Another account already answering to that name. Two entries
-            // under one name means whichever `--use` found first would take
+            // under one name means whichever `accounts use` found first would take
             // the turns, which is not a thing to decide by position.
             if let Some(held) = file.index_of(to)
                 && held != index

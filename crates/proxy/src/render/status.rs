@@ -31,10 +31,25 @@ pub fn reloaded_config(result: &Value) -> String {
         format!("reloaded config.toml: {reloaded}")
     };
     let restart = names("needs_restart");
-    if restart.is_empty() {
-        return applied;
+    let mut lines = vec![applied];
+    if !restart.is_empty() {
+        lines.push(format!("still needs a restart: {restart}"));
     }
-    format!("{applied}\nstill needs a restart: {restart}")
+    // Only where the payload carries `serving` at all: a daemon that predates
+    // it is silent here rather than reported as serving nobody.
+    if let Some(serving) = field(result, "serving")
+        && serving.is_null()
+        && field(result, "remaining")
+            .and_then(Value::as_u64)
+            .is_some_and(|remaining| remaining > 0)
+    {
+        lines.push(
+            "no account is serving turns — the one that was is no longer declared; choose \
+             one with `proxenos accounts use NAME`"
+                .to_owned(),
+        );
+    }
+    lines.join("\n")
 }
 
 pub fn status(result: &Value) -> String {

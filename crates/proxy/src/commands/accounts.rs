@@ -86,12 +86,23 @@ async fn remove(name: &str) -> Result<()> {
 /// signed into, which is a choice this command has no basis for making.
 async fn sign_in_profile(args: &cli::AccountLoginArgs) -> Result<()> {
     let config = proxenos::config::Config::load()?;
+    // The key store's names, so a profile cannot be declared under one. The
+    // store is the only place they are, and asking it is cheaper than a
+    // login run for nothing.
+    let store: Arc<dyn proxenos::auth::store::AccountStore> = Arc::new(account_store()?);
+    let keys: Vec<String> = store
+        .accounts()?
+        .into_iter()
+        .filter(|account| account.kind == "key")
+        .map(|account| account.name)
+        .collect();
     let plan = proxenos::auth::profile_login::plan(
         &args.name,
         args.provider,
         args.path.clone(),
         &config,
         &proxenos::config::config_dir(),
+        &keys,
     )?;
     let mut environment = proxenos::auth::profile_login::Stdio::new()?;
     proxenos::auth::profile_login::run(&plan, &mut environment)?;

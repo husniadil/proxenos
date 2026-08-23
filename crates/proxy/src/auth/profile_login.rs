@@ -131,17 +131,28 @@ pub struct Plan {
 /// already declares: it cannot be found out later, because appending a table
 /// TOML already has leaves a file the daemon cannot start from. The name
 /// itself is a positional on the verb, so there is nothing to refuse about it.
+///
+/// `keys` are the names this daemon's own key store already holds. One name is
+/// one account: `add-key` refuses a name that is a profile, and this is the
+/// same rule from the other side.
 pub fn plan(
     name: &str,
     provider: Provider,
     path: Option<PathBuf>,
     config: &crate::config::Config,
     config_dir: &Path,
+    keys: &[String],
 ) -> anyhow::Result<Plan> {
     if config.profiles.contains_key(name) {
         anyhow::bail!(
             "`{name}` is already declared in `[profiles]`. Sign in to it with the command \
              that profile's own client takes, or choose another name."
+        );
+    }
+    if keys.iter().any(|key| key == name) {
+        anyhow::bail!(
+            "`{name}` is already a stored key. Choose another name for the profile, or \
+             remove the key first with `proxenos accounts remove {name}`."
         );
     }
 
@@ -425,6 +436,7 @@ mod tests {
             None,
             &config(document),
             Path::new("/config"),
+            &[],
         )
         .expect("a plan")
     }
@@ -546,6 +558,7 @@ mod tests {
             None,
             &config("[profiles.work]\nprovider = \"codex\"\n"),
             Path::new("/config"),
+            &[],
         )
         .expect_err("already declared")
         .to_string();
@@ -554,6 +567,27 @@ mod tests {
             refusal.contains("already declared in `[profiles]`"),
             "{refusal}"
         );
+    }
+
+    /// A name the key store already holds is refused the same way. `add-key`
+    /// refuses a name that is a profile; without this half, `login` under a
+    /// key's name produced two accounts one `accounts use` could not tell
+    /// apart.
+    #[test]
+    fn a_name_the_key_store_already_holds_is_refused_before_anything_runs() {
+        let refusal = plan(
+            "billing",
+            Provider::Codex,
+            None,
+            &config(""),
+            Path::new("/config"),
+            &["billing".to_owned()],
+        )
+        .expect_err("already a key")
+        .to_string();
+
+        assert!(refusal.contains("already a stored key"), "{refusal}");
+        assert!(refusal.contains("accounts remove billing"), "{refusal}");
     }
 
     /// A directory that already holds a grant is signed in, whoever signed it

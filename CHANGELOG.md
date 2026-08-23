@@ -291,6 +291,12 @@ vanished. Keys in that file keep working exactly as they did.
 
 ### Fixed
 
+- **`accounts login` accepted a name the key store already held**, producing
+  two accounts one `accounts use` could not tell apart; `add-key` had refused
+  the reverse all along. Both directions refuse now.
+- **`reload` could take the serving profile away without saying so.** The
+  answer now carries who serves afterwards, and the CLI says when that is
+  nobody.
 - **`accounts use` on the account already serving reported a switch and paid
   for one.** It ended every conversation and dropped every quota figure to
   arrive where the daemon already was, then said `still on <provider>`. It now

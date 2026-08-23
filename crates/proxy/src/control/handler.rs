@@ -1762,29 +1762,27 @@ async fn remove_account(state: &ControlState, params: Option<&Value>) -> Result<
         .find(|account| account.selected)
         .map(|account| account.name);
 
-    let cleared = match named {
+    // Unnamed means the serving account, and with nothing serving there is
+    // nothing to remove: removing has always been safe to run twice, and the
+    // second run is this.
+    let cleared = match named.map(str::to_owned).or_else(|| serving.clone()) {
         Some(name) => {
             // Two kinds of account, two ways to be rid of one. A key is this
             // daemon's own and the store drops it. A declared profile is a
             // line in `[profiles]` naming a directory another program owns:
             // what goes is the line, and the grant stays exactly where it is
             // (§8.4).
-            if discovered_profile(state, name)? {
-                return Err(found_not_declared(name));
+            if discovered_profile(state, &name)? {
+                return Err(found_not_declared(&name));
             }
-            if declared_profile(state, name)? {
-                remove_declared_profile(state, name)?;
+            if declared_profile(state, &name)? {
+                remove_declared_profile(state, &name)?;
             } else {
-                state.credentials.remove(name)?;
+                state.credentials.remove(&name)?;
             }
-            Some(name.to_owned())
+            Some(name)
         }
-        None => {
-            // Clearing what is already gone is not an error: removing has
-            // always been safe to run twice.
-            state.credentials.clear()?;
-            serving.clone()
-        }
+        None => None,
     };
 
     // §8.3 — the figure that went with the account, whether or not it was the
@@ -1896,12 +1894,19 @@ fn reload_config(state: &ControlState) -> Result<Value, ProxyError> {
     // above may have changed — and through the same validated path a switch
     // takes. With nobody serving there is no account section to resolve
     // against, and the shared tables are the whole answer.
-    put_mapping_in_force(state, &config, serving_name(state).as_deref())?;
+    let serving = serving_name(state);
+    put_mapping_in_force(state, &config, serving.as_deref())?;
     reloaded.push("tiers");
     reloaded.push("effort");
 
     Ok(json!({
         "reloaded": reloaded,
+        // Who serves turns now, and how many accounts there are. A reload can
+        // take the serving profile away — the selection still names it, and
+        // nothing answers the next turn — and the caller has to hear that
+        // from here rather than from a refused turn.
+        "serving": serving,
+        "remaining": state.credentials.accounts()?.len(),
         // Said every time, not only when one of them changed. A caller that
         // has to know which keys a reload cannot reach should not have to
         // discover it from a key it happened to edit.

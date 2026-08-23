@@ -5796,6 +5796,48 @@ async fn reloading_declares_a_profile_without_a_restart() {
     assert_eq!(names, ["spare", "work"], "{after}");
 }
 
+/// A reload that takes away the serving profile says so. The selection names
+/// an account that is no longer there, so nothing serves the next turn — and a
+/// reload that reported only "profiles" would leave that to be found out from
+/// a refused turn.
+#[tokio::test]
+async fn reloading_away_the_serving_profile_says_nothing_serves() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut started_with = proxenos::config::Config::default();
+    for name in ["work", "spare"] {
+        started_with.profiles.insert(
+            name.to_owned(),
+            proxenos::config::ProfileConfig {
+                provider: Provider::Codex,
+                path: Some(std::path::PathBuf::from(format!("/profiles/{name}"))),
+            },
+        );
+    }
+    let state = reloadable(dir.path(), started_with);
+    // Selected through the store rather than the socket: a switch resolves
+    // the mapping against the harness catalog, and the mapping is not what
+    // this test is about.
+    state.credentials.select("work").unwrap();
+
+    std::fs::write(
+        dir.path().join("config.toml"),
+        config_declaring(&[("spare", "/profiles/spare")]),
+    )
+    .unwrap();
+
+    let answer = proxenos::control::handler::dispatch(&state, "config.reload", None)
+        .await
+        .unwrap();
+    assert_eq!(answer["serving"], Value::Null, "{answer}");
+    assert_eq!(answer["remaining"], json!(1), "{answer}");
+    assert_eq!(
+        proxenos::render::reloaded_config(&answer),
+        "reloaded config.toml: profiles, tiers, effort\nstill needs a restart: instructions, \
+         client, transport, upstream, port\nno account is serving turns — the one that was \
+         is no longer declared; choose one with `proxenos accounts use NAME`"
+    );
+}
+
 /// The mapping moves with the file, through the same validated path a switch
 /// takes — so what routes turns changes, not only what this socket reports.
 #[tokio::test]
