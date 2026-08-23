@@ -772,6 +772,65 @@ and no credential is described by a lifetime nothing here can know.
 
 **Done.**
 
+### v0.13.0 — shipped
+
+**The account verbs were built for the code and read like it.** `login` was two
+unrelated commands chosen by `--key` or `--profile`; `accounts` used `--use`,
+`--forget` and `--rename` as actions; one account was `--as` in one verb and
+`--use` in another. They are now one sub-verb each — `accounts list`, `login`,
+`add-key`, `use`, `rename`, `remove` — every account named positionally, one
+word for it throughout. The daemon and the CLI are one binary and nothing else
+speaks the socket yet, so the rename landed on both at once: `accounts.forget`
+became `accounts.remove`, and `login`/`login.cancel` and the whole
+authorization flow behind them are gone (§6's pre-1.0 exception).
+
+`run` gained a counterpart. `start` backgrounds the daemon and returns once it
+answers, the pair of `stop`; `run` stays foreground; `--detach` is gone. On a
+machine already serving, `start` says so and exits rather than failing to bind.
+
+**An edit to `config.toml` reaches a daemon that is already serving.**
+`config.reload` (and `proxenos reload`) re-reads `[profiles]`, the tier mapping
+and the effort ceiling and applies them through the same validated path a
+switch takes, names what still needs a restart, and refuses a file that no
+longer parses while keeping what was running. `accounts login` and
+`accounts remove` call it themselves, so a declared profile no longer waits for
+the next start.
+
+**The listings became tables.** `accounts`, `status`, `models` and `usage`
+print aligned columns with headers, the state that used to trail each row as a
+sentence moved into a column, and every confirmation says what happened on one
+line and its consequence on the next. `--json` means one thing everywhere: the
+socket's own payload. The version string carries a build id, so `stop` can tell
+two builds of one number apart, and `status` names the serving account and
+whether launchd supervises it. The quota snapshot now persists, keyed by each
+window's reset time, so a figure that is still true survives a restart and a
+stale one is dropped rather than shown.
+
+**Two bugs found by driving it, not by a test.** Every tool-search result was
+refused with a 400: the client names a discovered tool `tool_name` and the
+proxy read `name`, and the fixture the probe replays had been written with
+`name` rather than captured, so the probe passed the capability the proxy was
+rejecting. And a relayed tier handed the second provider a first-provider model
+id — `--model haiku` arrived as `gpt-5.6-luna` — because the launch environment
+stated every tier's id; a relayed tier now states one only where the operator
+named it for that account.
+
+**A borrowed Codex grant is refreshed the way a Claude one is.** A profile no
+other session drives is never refreshed by turns through the proxy, which spend
+the access token without rotating it. Claude profiles were poked with a cheap
+`claude -p` turn; Codex profiles were left to expire on the tenth day. The
+daemon now runs a cheap `codex exec` turn for them too, under the same lock and
+deadline. That the turn rotates a genuinely lapsed grant is derived from the
+mechanism and the upstream client's proactive-refresh rule, not observed here —
+a Codex access token is a signed JWT that cannot be backdated locally to force
+the case (§L).
+
+**Done when** a person can drive every account operation without reading the
+source to know which flag means which, and an edit to the configuration reaches
+a running daemon without a restart.
+
+**Done.**
+
 ### Next
 
 Named rather than numbered. Twice now a section here has worn a version that

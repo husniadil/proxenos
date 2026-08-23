@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.13.0]
 
 This proxy no longer holds a subscription of its own. A grant is read from the
 profile of the program that already owns it, so the account paying for a turn is
