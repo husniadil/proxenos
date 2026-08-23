@@ -731,8 +731,8 @@ fn a_tool_search_result_reports_the_discovered_names() {
                 "type": "tool_result",
                 "tool_use_id": "toolu_01",
                 "content": [
-                    { "type": "tool_reference", "name": "Slack" },
-                    { "type": "tool_reference", "name": "Jira" },
+                    { "type": "tool_reference", "tool_name": "Slack" },
+                    { "type": "tool_reference", "tool_name": "Jira" },
                 ],
             }],
         }],
@@ -759,8 +759,8 @@ fn discovered_names_are_recoverable_from_a_request() {
                     "type": "tool_result",
                     "tool_use_id": "toolu_01",
                     "content": [
-                        { "type": "tool_reference", "name": "Slack" },
-                        { "type": "tool_reference", "name": "Jira" },
+                        { "type": "tool_reference", "tool_name": "Slack" },
+                        { "type": "tool_reference", "tool_name": "Jira" },
                     ],
                 }],
             },

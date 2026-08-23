@@ -33,11 +33,11 @@
             "content": [
               {
                 "type": "tool_reference",
-                "name": "SendMessage"
+                "tool_name": "SendMessage"
               },
               {
                 "type": "tool_reference",
-                "name": "ListChannels"
+                "tool_name": "ListChannels"
               }
             ]
           }

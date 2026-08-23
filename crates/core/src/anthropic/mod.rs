@@ -214,7 +214,13 @@ pub enum ContentBlock {
     },
     /// Names a tool that became available through a tool search. Appears only
     /// inside a `tool_result` — see `docs/proxy-behavior.md` §2.5.
+    ///
+    /// The wire field is `tool_name`, measured from the client's own
+    /// transcripts. A fixture once spelled it `name`, and the variant written
+    /// to match it rejected every real tool-search result with a 400 while the
+    /// probe built on that fixture kept passing.
     ToolReference {
+        #[serde(rename = "tool_name")]
         name: String,
     },
     /// No Responses equivalent exists; dropped on the request path.

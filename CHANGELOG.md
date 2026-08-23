@@ -129,6 +129,17 @@ vanished. Keys in that file keep working exactly as they did.
   written. One declared account serves without being chosen; more than one with
   nothing chosen is refused rather than resolved to whichever comes first.
 
+### Fixed
+
+- **Every real tool-search result was refused with a 400.** The client names a
+  discovered tool as `{"type": "tool_reference", "tool_name": ...}`; the proxy
+  read the field as `name`, so a conversation that had run a tool search could
+  not continue — `messages[N].content: data did not match any variant of
+  untagged enum Content`. The fixture the tool-search probe replays had been
+  written with `name` rather than captured, which is why `doctor` kept passing
+  the capability the proxy was rejecting. The fixture now carries what the
+  client sends.
+
 ## [0.12.0]
 
 One figure reported a floor it had not measured; another reported a lifetime it

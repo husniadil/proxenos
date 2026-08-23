@@ -172,8 +172,10 @@ a second discovery path the client cannot observe would let the model load a
 tool whose results never reach the client.
 
 Discovery is observable exactly once: a tool-search result contains
-`tool_reference` blocks naming the tools that became available. Those names are
-recorded on the session, and a recorded tool is forwarded on later turns *even
+`tool_reference` blocks naming the tools that became available, each as
+`{"type": "tool_reference", "tool_name": ...}` — the field is `tool_name`, as
+the client sends it, and a block spelling it any other way is not one the
+client produces. Those names are recorded on the session, and a recorded tool is forwarded on later turns *even
 though it continues to arrive marked `defer_loading`*. That flag is not cleared
 by the client, so the recorded set is the only signal that a tool is live.
 
