@@ -4,6 +4,21 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+### Changed
+
+- **On the second provider, a key is two credentials wearing one word.** A Claude
+  subscription setup token and an anthropic API key were both stored as `key` and
+  both read the same line, though they are metered in opposite ways: the setup
+  token draws down a subscription whose figure arrives on the next relayed turn,
+  while an API key has no ceiling and bills per token. The store now records which
+  of the two a key is — a classification of shape, never any part of the secret —
+  and `usage` has a line for each. A key stored before the field existed, or whose
+  shape matches neither stem, gets a third line that claims neither: a prefix is
+  evidence rather than proof, and nothing re-reads a stored secret to classify it
+  after the fact.
+
 ## [0.10.0]
 
 Everything the meter and the confirmations say about an account now stops at

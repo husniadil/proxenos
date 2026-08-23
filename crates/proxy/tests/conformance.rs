@@ -634,6 +634,7 @@ fn the_live_relay_arm_names_the_account_it_would_spend() {
             name: name.to_owned(),
             kind: "key",
             provider: provider.as_str(),
+            key_flavour: None,
             account_id: None,
             email: None,
             plan: None,

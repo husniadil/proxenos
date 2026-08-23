@@ -493,6 +493,38 @@ fn unavailable(state: &ControlState, account: &crate::auth::store::Account) -> S
     // leaves the reader to work out which one the sentence means.
     let provider = &account.provider;
     if account.provider == crate::auth::store::Provider::Anthropic.as_str() {
+        // §8.2 — this provider files a subscription setup token and an API key
+        // as the same kind, and they are metered in opposite ways. The
+        // sentence below is true of the token and reassuringly false of the
+        // key, so a key that said which it is gets its own.
+        if account.kind == "key" {
+            let served = served_as(state, &account.name);
+            match account.key_flavour {
+                Some("api_key") => {
+                    // The same absence §8.2 states for the other provider's
+                    // key: not a figure pending but a ceiling that does not
+                    // exist. No cost is stated and none is estimated; the one
+                    // honest quantity beside it is what this daemon counted.
+                    return format!(
+                        "an anthropic API key has no quota ceiling; it is metered per token, \
+                         so nothing here bounds its spend ({served})"
+                    );
+                }
+                Some("subscription_token") => {}
+                // A prefix is evidence, not proof, and a file written before
+                // the field existed carries none at all. Either way this
+                // daemon does not know which meter the account is on, and both
+                // other sentences would be claiming it does — one that a
+                // figure is coming, one that none ever will.
+                _ => {
+                    return format!(
+                        "this daemon has not recorded which kind of anthropic key this account \
+                         holds, so it cannot say whether a quota figure will ever arrive for it \
+                         ({served})"
+                    );
+                }
+            }
+        }
         // §9.4 — this provider states quota in the response headers of every
         // relayed turn, and for a subscription token that is the only place it
         // states one: its usage endpoint refuses that credential for want of a
@@ -527,15 +559,7 @@ fn unavailable(state: &ControlState, account: &crate::auth::store::Account) -> S
         // tokens this daemon has served as the account since it started, which
         // is a floor under its real spend rather than the whole of it, and is
         // said to be one.
-        let spent = state.usage.spent_for(&account.name);
-        let served = if spent.total() == 0 {
-            "no turn has been served as it yet".to_owned()
-        } else {
-            format!(
-                "{} tokens served as it since this daemon started, and turns made elsewhere are not counted",
-                spent.total()
-            )
-        };
+        let served = served_as(state, &account.name);
         return format!(
             "a key has no quota ceiling; it is metered per token, so nothing here bounds its spend ({served})"
         );
@@ -544,6 +568,20 @@ fn unavailable(state: &ControlState, account: &crate::auth::store::Account) -> S
     // turn made outside this daemon leaves it nothing to speak from.
     format!(
         "{provider} reports quota when a turn is made; this daemon has recorded no turn as this account yet"
+    )
+}
+
+/// What can honestly stand beside a row with no ceiling: the tokens this daemon
+/// has served as the account since it started (§6.1), said to be a floor under
+/// the account's real spend rather than the whole of it. A count, never a cost.
+fn served_as(state: &ControlState, name: &str) -> String {
+    let spent = state.usage.spent_for(name);
+    if spent.total() == 0 {
+        return "no turn has been served as it yet".to_owned();
+    }
+    format!(
+        "{} tokens served as it since this daemon started, and turns made elsewhere are not counted",
+        spent.total()
     )
 }
 
