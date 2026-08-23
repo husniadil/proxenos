@@ -129,6 +129,15 @@ vanished. Keys in that file keep working exactly as they did.
 
 ### Changed
 
+- **`--json` means one thing everywhere: the control socket's payload for that
+  verb, unrendered.** It already meant that on `accounts` and `usage`, and now
+  means it on `status` and `models` too, which had no way to hand over what they
+  were rendering. `env --json` is **removed, with no alias**: it printed the
+  client settings document, which has a verb of its own — `proxenos settings` —
+  so on one verb out of four the flag named a different verb's output rather
+  than that verb's payload. `env` renders shell exports and nothing else.
+  `statusline` is untouched; its `--json` was never one of these.
+
 - **`accounts` prints a header table.** The rows had no header, a column that
   said `key` where an address belonged, the raw source path, and every state —
   refused, identity changed, a login about to expire — as a parenthesised

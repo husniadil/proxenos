@@ -297,8 +297,8 @@ fn settings_and_exec_refuse_a_daemon_that_predates_client_policy() {
     let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
 
     let server = std::thread::spawn(move || {
-        // Four callers: `settings`, `exec`, `env --json`, and `env`.
-        for stream in listener.incoming().take(4) {
+        // Three callers: `settings`, `exec`, and `env`.
+        for stream in listener.incoming().take(3) {
             let Ok(mut stream) = stream else { continue };
             let mut request = String::new();
             let _ = BufReader::new(stream.try_clone().unwrap()).read_line(&mut request);
@@ -320,14 +320,7 @@ fn settings_and_exec_refuse_a_daemon_that_predates_client_policy() {
             .expect("the binary should run")
     };
 
-    // `env --json` is the same document under the older name, so it has to
-    // refuse for the same reason. Leaving it out is how one of two names for
-    // one thing quietly keeps the behaviour the other one dropped.
-    for verb in [
-        vec!["settings"],
-        vec!["exec", "claude"],
-        vec!["env", "--json"],
-    ] {
+    for verb in [vec!["settings"], vec!["exec", "claude"]] {
         let output = run(&verb);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(

@@ -5,15 +5,14 @@ use anyhow::Result;
 use proxenos::control;
 use proxenos::render;
 
-pub(crate) async fn print_env(args: cli::EnvArgs) -> Result<()> {
-    // The JSON form is the `settings` document, so it goes through `settings`
-    // rather than alongside it. Rendering it here as well left one of the two
-    // names unguarded, and it was the older name — the one a caller reaches for
-    // out of habit — that printed a document quietly missing a permission rule.
-    if args.json {
-        return print_settings().await;
-    }
-
+/// Shell exports, and only those.
+///
+/// There is no `--json` here: the settings document is what that flag used to
+/// print, and it has a verb of its own. `--json` means one thing on every verb
+/// that takes it — the control socket's payload, unrendered — and a flag that
+/// meant "a different verb's document" on one of them is a flag nobody can
+/// read off the surface.
+pub(crate) async fn print_env() -> Result<()> {
     let result = control::call(&control::default_path(), "env", None).await?;
     println!("{}", render::env_shell(&result));
     Ok(())
@@ -127,8 +126,9 @@ pub(crate) async fn exec(args: cli::ExecArgs) -> Result<()> {
 
 /// One complete client settings document, for a file or a launcher.
 ///
-/// The same bytes `env --json` prints. Two names, one document: a caller that
-/// reaches for the obvious one must not get the half that leaves the policy out.
+/// The only name for this document. `env --json` printed it too, which left
+/// one flag meaning two different things across four verbs — and left the
+/// document reachable under a verb whose whole subject is the environment.
 pub(crate) async fn print_settings() -> Result<()> {
     let result = control::call(&control::default_path(), "env", None).await?;
     // A document silently missing a permission rule looks complete and behaves

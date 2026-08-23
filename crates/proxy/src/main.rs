@@ -24,9 +24,9 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Run(args) => commands::daemon::run(args).await,
         Command::Accounts(args) => commands::accounts::accounts(args).await,
-        Command::Status => commands::inspect::print_status().await,
-        Command::Models => commands::inspect::print_models().await,
-        Command::Env(args) => commands::launch::print_env(args).await,
+        Command::Status(args) => commands::inspect::print_status(args).await,
+        Command::Models(args) => commands::inspect::print_models(args).await,
+        Command::Env => commands::launch::print_env().await,
         Command::Settings => commands::launch::print_settings().await,
         Command::Reload => commands::daemon::reload().await,
         Command::Stop => commands::daemon::stop().await,

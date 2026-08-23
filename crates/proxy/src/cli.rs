@@ -18,17 +18,18 @@ pub enum Command {
     /// Stored accounts: list them, add one, choose one, drop one.
     Accounts(AccountsArgs),
     /// Connection, tier mapping, and whether the catalog was reachable.
-    Status,
+    Status(StatusArgs),
     /// Available models.
-    Models,
+    Models(ModelsArgs),
     /// Environment for Claude Code, as shell exports.
-    Env(EnvArgs),
+    Env,
     /// The same configuration as one client settings document.
     ///
     /// A separate verb rather than a flag on `env`, because it produces
     /// something an environment is not: it carries the client policy no export
-    /// can hold. `env --json` prints the identical document and stays for the
-    /// callers that already use it.
+    /// can hold. It is the only name for that document: `env --json` printed
+    /// it too, which made one flag mean "the payload behind this verb" on
+    /// three verbs and "a different verb's document" on the fourth.
     Settings,
     /// Re-read config.toml into the running daemon.
     ///
@@ -195,10 +196,15 @@ pub struct RunArgs {
 }
 
 #[derive(Debug, clap::Args)]
-pub struct EnvArgs {
-    /// Emit a Claude Code settings fragment instead of shell exports.
-    ///
-    /// The same output as the `settings` verb, which is the name for it.
+pub struct StatusArgs {
+    /// Print the socket's own payload instead of the report.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ModelsArgs {
+    /// Print the socket's own payload instead of the table.
     #[arg(long)]
     pub json: bool,
 }
@@ -556,12 +562,47 @@ mod tests {
         assert!(args.json);
     }
 
-    /// `env --json` and `settings` are one document under two names, so a
-    /// caller cannot pick the one that leaves the policy out.
+    /// The settings document has one name. `env` renders shell exports and
+    /// nothing else, so `--json` means the same thing on every verb that takes
+    /// it: the socket's own payload for that verb.
     #[test]
-    fn settings_parses_as_a_verb_of_its_own() {
+    fn settings_parses_as_a_verb_of_its_own_and_env_takes_no_json() {
         let cli = Cli::try_parse_from(["proxenos", "settings"]).unwrap();
         assert!(matches!(cli.command, Command::Settings));
+
+        let cli = Cli::try_parse_from(["proxenos", "env"]).unwrap();
+        assert!(matches!(cli.command, Command::Env));
+
+        assert!(Cli::try_parse_from(["proxenos", "env", "--json"]).is_err());
+    }
+
+    /// The two read-only verbs that rendered a payload and could not hand it
+    /// over. `--json` is the same flag it is on `accounts` and `usage`.
+    #[test]
+    fn status_and_models_take_json() {
+        let cli = Cli::try_parse_from(["proxenos", "status", "--json"]).unwrap();
+        let Command::Status(args) = cli.command else {
+            panic!("status should parse");
+        };
+        assert!(args.json);
+
+        let cli = Cli::try_parse_from(["proxenos", "status"]).unwrap();
+        let Command::Status(args) = cli.command else {
+            panic!("status should parse");
+        };
+        assert!(!args.json);
+
+        let cli = Cli::try_parse_from(["proxenos", "models", "--json"]).unwrap();
+        let Command::Models(args) = cli.command else {
+            panic!("models should parse");
+        };
+        assert!(args.json);
+
+        let cli = Cli::try_parse_from(["proxenos", "models"]).unwrap();
+        let Command::Models(args) = cli.command else {
+            panic!("models should parse");
+        };
+        assert!(!args.json);
     }
 
     /// Everything after the program name belongs to the child, hyphens and

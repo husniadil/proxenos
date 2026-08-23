@@ -117,8 +117,9 @@ proxenos accounts   stored accounts, and which one serves turns (also
   accounts use     NAME   serve every following turn as this account
   accounts rename  OLD NEW   change what this daemon calls an account
   accounts remove  NAME   drop this account, leaving the rest usable
-proxenos status     connection, tier mapping, model catalog
-proxenos models     available models
+proxenos status     connection, tier mapping, model catalog (--json prints the
+                    socket's own payload)
+proxenos models     available models (--json prints the socket's own payload)
 proxenos env        environment for Claude Code, as shell exports
 proxenos settings   the same configuration, as one settings document
 proxenos exec       run a command with that configuration applied
@@ -580,10 +581,13 @@ environment variable of any kind, so this rendering cannot deliver it. It says
 so in a comment, which `eval` steps over, and the comment appears only when
 there is a policy being left out.
 
-`settings` emits one complete client settings document. `env --json` is the same
-verb under the older name and prints the same bytes by running it, rather than
-rendering the document a second time — two renderings of one thing is how the
-older name kept a behaviour the newer one had dropped.
+`settings` emits one complete client settings document, and is the only name for
+it. `env --json` printed it too and is **gone, with no alias**: `--json` means
+one thing on every verb that takes it — the control socket's payload for that
+verb, unrendered, which is what it already meant on `accounts` and `usage` and
+now means on `status` and `models` as well. On `env` it meant a different verb's
+document, so the one flag an operator could read off the surface was the one
+they had to learn twice. `env` renders shell exports and nothing else.
 
 ```json
 {

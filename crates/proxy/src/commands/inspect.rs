@@ -8,15 +8,29 @@ use proxenos::render;
 
 /// Every verb but `run` works through the control socket. The CLI holds no
 /// state of its own, so a second front-end needs no new daemon work.
-pub(crate) async fn print_status() -> Result<()> {
+pub(crate) async fn print_status(args: cli::StatusArgs) -> Result<()> {
     let result = control::call(&control::default_path(), "status", None).await?;
-    println!("{}", render::status(&result));
+    println!(
+        "{}",
+        if args.json {
+            serde_json::to_string_pretty(&result)?
+        } else {
+            render::status(&result)
+        }
+    );
     Ok(())
 }
 
-pub(crate) async fn print_models() -> Result<()> {
+pub(crate) async fn print_models(args: cli::ModelsArgs) -> Result<()> {
     let result = control::call(&control::default_path(), "models", None).await?;
-    println!("{}", render::models(&result));
+    println!(
+        "{}",
+        if args.json {
+            serde_json::to_string_pretty(&result)?
+        } else {
+            render::models(&result)
+        }
+    );
     Ok(())
 }
 
