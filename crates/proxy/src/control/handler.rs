@@ -393,7 +393,7 @@ fn usage(state: &ControlState) -> Value {
         Some(snapshot) => snapshot.to_json(),
         None => json!({
             "known": false,
-            "detail": "the backend reports quota when a turn is made; none has been made yet",
+            "detail": "the backend reports quota when a turn is made; this daemon has recorded no turn yet",
         }),
     };
 
@@ -479,9 +479,14 @@ fn unavailable(account: &crate::auth::store::Account) -> String {
         // states one: its usage endpoint refuses that credential for want of a
         // scope. So the reader is one turn away from a figure, and saying the
         // provider reports none would send them looking for a feature instead.
+        //
+        // What is absent is this daemon's record of such a turn, which is not
+        // the same as the account having relayed none: a turn relayed by a CLI
+        // process reads the same headers and exits with them. The sentence
+        // says which of the two it is describing.
         return format!(
-            "{provider} states quota on every turn; none has been relayed through this daemon \
-             as this account yet"
+            "{provider} states quota on every turn; this daemon has recorded no relayed \
+             turn as this account yet"
         );
     }
     if account.provider != crate::auth::store::Provider::Codex.as_str() {
@@ -503,7 +508,11 @@ fn unavailable(account: &crate::auth::store::Account) -> String {
                 and is not reported to this proxy"
             .to_owned();
     }
-    format!("{provider} reports quota when a turn is made; none has been made as this account yet")
+    // Same reading as the relay case above: the store speaks for itself, and a
+    // turn made outside this daemon leaves it nothing to speak from.
+    format!(
+        "{provider} reports quota when a turn is made; this daemon has recorded no turn as this account yet"
+    )
 }
 
 /// Say why a mapping that served one account is refused by another.
