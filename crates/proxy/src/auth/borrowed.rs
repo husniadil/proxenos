@@ -22,6 +22,18 @@
 use crate::auth::jwt;
 use crate::auth::store::Credentials;
 use serde::Deserialize;
+use sha2::Digest;
+use sha2::Sha256;
+use std::path::Path;
+use std::path::PathBuf;
+
+/// Where an operator signs a Codex profile in, named in every refusal that
+/// wants them to.
+const CODEX_REMEDY: &str = "in the ChatGPT app or with `codex login`";
+
+/// Where an operator signs a Claude profile in. Running the client once is the
+/// whole of it: it completes the sign-in and writes the item this reads.
+const CLAUDE_REMEDY: &str = "by running `claude` in that profile";
 
 /// The `auth_mode` a ChatGPT subscription is filed under.
 ///
@@ -30,21 +42,23 @@ use serde::Deserialize;
 /// `BorrowedError::NotASubscription`.
 pub const SUBSCRIPTION_AUTH_MODE: &str = "chatgpt";
 
-/// Why an `auth.json` yielded no grant.
+/// Why a profile yielded no grant.
 ///
-/// Every variant is a refusal, never a repair. A file this cannot read is a
-/// file the owning program still owns, and guessing at it would put a
+/// Every variant is a refusal, never a repair. A store this cannot read is a
+/// store the owning program still owns, and guessing at it would put a
 /// credential of the wrong kind on the wire.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum BorrowedError {
     #[error("{0} is not valid JSON: {1}")]
     Malformed(String, String),
-    /// The file exists but holds no grant, which is what a profile that has
+    /// The store exists but holds no grant, which is what a profile that has
     /// never completed a sign-in looks like.
-    #[error(
-        "{0} holds no tokens. Sign in to that profile first, in the ChatGPT app or with `codex login`"
-    )]
-    NotSignedIn(String),
+    ///
+    /// The remedy is carried rather than fixed, because the operator's next
+    /// move is in a different program for each provider and naming the wrong
+    /// one sends them somewhere that cannot help.
+    #[error("{0} holds no grant. Sign in to that profile first, {1}")]
+    NotSignedIn(String, &'static str),
     /// A profile authenticating with an API key rather than a subscription.
     /// Refused rather than borrowed: a key is spent against a different
     /// endpoint with different billing, and this proxy already has a place to
@@ -109,7 +123,7 @@ pub fn codex(raw: &str, source: &str) -> Result<Credentials, BorrowedError> {
 
     let tokens = parsed
         .tokens
-        .ok_or_else(|| BorrowedError::NotSignedIn(source.to_owned()))?;
+        .ok_or_else(|| BorrowedError::NotSignedIn(source.to_owned(), CODEX_REMEDY))?;
 
     for (value, name) in [
         (&tokens.access_token, "access_token"),
@@ -143,4 +157,175 @@ pub fn codex(raw: &str, source: &str) -> Result<Credentials, BorrowedError> {
         account_id,
         expires_at,
     })
+}
+
+/// The keychain item a Claude profile's grant is filed under, on macOS.
+///
+/// Two names, and which one applies is decided by whether the client was
+/// launched with `CLAUDE_CONFIG_DIR` set at all — not by what it was set to.
+/// Measured against a real client: no variable gives the bare name, and setting
+/// it to the very directory the bare name describes still gives the hashed one.
+/// So the default profile is the one launched with nothing set, and every other
+/// profile is named by its directory.
+pub const CLAUDE_SERVICE: &str = "Claude Code-credentials";
+
+/// The service name for a profile, given the `CLAUDE_CONFIG_DIR` it is launched
+/// with. `None` is the default profile: launched with the variable unset.
+///
+/// The digest is taken over the variable's value **verbatim**. A trailing
+/// slash, or a path that walks through `..` to the same directory, is a
+/// different service name, because it is a different string. Measured: three
+/// spellings of one directory produced three different items. Nothing here
+/// canonicalizes, since canonicalizing would name an item the client never
+/// writes.
+pub fn claude_service(config_dir: Option<&str>) -> String {
+    let Some(config_dir) = config_dir else {
+        return CLAUDE_SERVICE.to_owned();
+    };
+    let digest = Sha256::digest(config_dir.as_bytes());
+    format!("{CLAUDE_SERVICE}-{:.8}", hex(&digest))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The keychain blob, as the client writes it.
+#[derive(Deserialize)]
+struct ClaudeItem {
+    #[serde(rename = "claudeAiOauth")]
+    oauth: Option<ClaudeOauth>,
+}
+
+#[derive(Deserialize)]
+struct ClaudeOauth {
+    #[serde(rename = "accessToken", default)]
+    access_token: String,
+    #[serde(rename = "refreshToken", default)]
+    refresh_token: String,
+    /// Unix **milliseconds**, unlike everything else here.
+    #[serde(rename = "expiresAt", default)]
+    expires_at: Option<u64>,
+    #[serde(rename = "refreshTokenExpiresAt", default)]
+    refresh_token_expires_at: Option<u64>,
+    #[serde(rename = "subscriptionType", default)]
+    subscription_type: Option<String>,
+}
+
+/// A borrowed Claude grant, and the two facts about it that are not the
+/// credential itself.
+///
+/// They travel together because both decisions that use them are made where
+/// the grant is read. `refresh_token_expires_at` is what says whether asking
+/// the client to refresh can possibly work: past it, a refresh attempt fails
+/// AND the client overwrites the item with an empty token, so an expired
+/// refresh token turns a poke into damage. `plan` is what tells two borrowed
+/// accounts apart for an operator who holds more than one.
+///
+/// `Debug` is derived and safe to derive: the only secret in here is inside
+/// `Credentials`, whose own `Debug` redacts it by hand.
+#[derive(Debug)]
+pub struct ClaudeGrant {
+    pub credentials: Credentials,
+    /// Unix seconds, converted from the milliseconds the item stores.
+    pub refresh_token_expires_at: Option<u64>,
+    pub plan: Option<String>,
+}
+
+/// The grant stored in a Claude profile's keychain item.
+///
+/// `source` names the item, and appears in every refusal.
+pub fn claude(raw: &str, source: &str) -> Result<ClaudeGrant, BorrowedError> {
+    let parsed: ClaudeItem = serde_json::from_str(raw)
+        .map_err(|error| BorrowedError::Malformed(source.to_owned(), error.to_string()))?;
+
+    let oauth = parsed
+        .oauth
+        .ok_or_else(|| BorrowedError::NotSignedIn(source.to_owned(), CLAUDE_REMEDY))?;
+
+    // This is also what a failed refresh leaves behind. The client blanks the
+    // token and zeroes the expiry rather than removing the item, so a profile
+    // whose refresh token has died is indistinguishable from one that was
+    // never signed in — and both want the same answer, which is to sign in.
+    for (value, name) in [
+        (&oauth.access_token, "accessToken"),
+        (&oauth.refresh_token, "refreshToken"),
+    ] {
+        if value.trim().is_empty() {
+            return Err(BorrowedError::EmptyToken(source.to_owned(), name));
+        }
+    }
+
+    Ok(ClaudeGrant {
+        credentials: Credentials {
+            access_token: oauth.access_token,
+            refresh_token: oauth.refresh_token,
+            // The item carries neither. An id token is the other provider's
+            // way of describing an account, and inventing one here would put a
+            // claim on the wire that nothing issued.
+            id_token: None,
+            account_id: None,
+            expires_at: oauth.expires_at.map(milliseconds_to_seconds),
+        },
+        refresh_token_expires_at: oauth.refresh_token_expires_at.map(milliseconds_to_seconds),
+        plan: oauth.subscription_type.filter(|it| !it.trim().is_empty()),
+    })
+}
+
+/// The item stores milliseconds and `Credentials` is in seconds. Truncating is
+/// the safe direction: it can only make a token look older than it is, and the
+/// cost of that is one refresh, where the cost of the other is a turn that
+/// fails mid-request.
+fn milliseconds_to_seconds(milliseconds: u64) -> u64 {
+    milliseconds / 1_000
+}
+
+/// The stock Claude profile, relative to the home directory. Named here rather
+/// than assumed at the call site because it is what "no `CLAUDE_CONFIG_DIR`"
+/// resolves to.
+pub const CLAUDE_DEFAULT_PROFILE: &str = ".claude";
+
+/// What the client falls back to where there is no keychain: a file inside the
+/// profile directory, holding the same JSON the keychain item holds.
+pub const CLAUDE_CREDENTIALS_FILE: &str = ".credentials.json";
+
+/// The platforms a Claude grant has been located on.
+///
+/// A parameter rather than a `cfg`, so every rule below is testable from any
+/// host. Windows is deliberately absent: nobody has checked where the client
+/// puts a grant there, and inventing a location would produce a profile that
+/// reads as "never signed in" for a reason that is our mistake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Host {
+    MacOs,
+    Linux,
+}
+
+/// Where a Claude profile's grant is read from.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ClaudeSource {
+    /// A macOS keychain item, read by spawning `security`. Never through
+    /// Security.framework: the item's ACL trusts that binary, and a process
+    /// asking directly is a different application to the keychain, which
+    /// prompts. One client run reads it sixteen times.
+    Keychain { service: String },
+    /// A file inside the profile directory, `0600`.
+    File { path: PathBuf },
+}
+
+/// Where to look for the grant of the profile launched with `config_dir`.
+///
+/// `None` is the default profile, launched with `CLAUDE_CONFIG_DIR` unset, and
+/// `home` is where that profile lives.
+pub fn claude_source(host: Host, config_dir: Option<&Path>, home: &Path) -> ClaudeSource {
+    match host {
+        Host::MacOs => ClaudeSource::Keychain {
+            service: claude_service(config_dir.map(|dir| dir.to_string_lossy()).as_deref()),
+        },
+        Host::Linux => ClaudeSource::File {
+            path: config_dir
+                .map_or_else(|| home.join(CLAUDE_DEFAULT_PROFILE), Path::to_path_buf)
+                .join(CLAUDE_CREDENTIALS_FILE),
+        },
+    }
 }

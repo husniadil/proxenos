@@ -1123,12 +1123,13 @@ holding that message needs the key that undoes it, not a restatement of it.
 Authentication uses OAuth with PKCE. The proxy operates its own client
 registration and owns its own refresh-token family.
 
-Credentials belonging to other tools are not imported. Refresh-token families
-rotate, and sharing one means two clients writing over each other's stored
-grant. A superseded token was measured still redeeming shortly after rotation,
-so this is about ownership rather than immediate breakage — but a client that
-does not hold the current token is one refresh away from holding nothing. One
-flow, one family, no ambiguity about which tool holds a valid session.
+Credentials belonging to other tools are **read and never written** (§8.4).
+Refresh-token families rotate, and sharing one means two clients writing over
+each other's stored grant. A superseded token was measured still redeeming
+shortly after rotation, so this is about ownership rather than immediate
+breakage — but a client that does not hold the current token is one refresh
+away from holding nothing. So the tool that owns a grant is the only one that
+may rotate it, and this side spends what it finds.
 
 Refresh requests send `grant_type`, `refresh_token`, and `client_id` — **never
 `scope`**. Including it causes the authorization server to re-scope the grant and
@@ -1520,6 +1521,66 @@ as it, whether or not it was the one serving: both belong to an account this
 daemon can no longer spend.
 
 ---
+
+### 8.4 A grant this process does not own
+
+A **borrowed** grant belongs to another program's profile directory: a
+`CODEX_HOME` for the ChatGPT app and the `codex` CLI, a `CLAUDE_CONFIG_DIR` for
+the client. That directory is the identity — point at it and the account it
+holds is the account turns are spent against — so choosing which account pays
+is choosing which directory to read.
+
+**A borrowed grant is read, never written, and never refreshed.** The refresh
+token in one is single-use: exchanging it rotates the stored value in place,
+and the previous one is refused afterwards (`refresh_token_reused`, §8). Doing
+that here would log the operator out of the program that owns the file, and the
+symptom would appear over there rather than here. The owning program refreshes
+on its own next turn; an expired borrowed grant is reported as expired rather
+than repaired.
+
+Every refusal names the store it read and what to do about it, and the remedy
+differs by provider: one sends the operator to the ChatGPT app or `codex
+login`, the other to running the client once. Naming the wrong one sends them
+somewhere that cannot help.
+
+**Codex.** One grant per `CODEX_HOME`, in `auth.json`. The file records no
+expiry, so it is read from the access token's own claim, the same rule the rest
+of §8 follows. `tokens.account_id` and the id token's `chatgpt_account_id`
+claim carry the same value — three signed-in profiles, all three equal — and
+the field is preferred because the owning program writes it deliberately. A
+profile whose `auth_mode` is anything other than `chatgpt` is refused rather
+than borrowed: it authenticates against a different endpoint with different
+billing, and such a profile can still carry a stale `tokens` block from a
+sign-in the operator has replaced, so the mode is checked before the tokens
+are.
+
+**Claude.** On macOS the grant is a keychain item, and **which item is decided
+by whether `CLAUDE_CONFIG_DIR` was set at all, not by what it was set to**:
+unset gives `Claude Code-credentials`, and set gives
+`Claude Code-credentials-<sha256(value)[..8]>` — including when the value names
+the very directory the bare name describes. The digest is taken over the
+value verbatim. Three spellings of one directory produced three different
+items, so nothing canonicalizes; canonicalizing would name an item the client
+never writes. On Linux there is no keychain and the same JSON sits in
+`.credentials.json` inside the profile directory. Windows is unchecked: nobody
+has looked, and inventing a location would produce a profile that reads as
+"never signed in" for a reason of our own making.
+
+The item stores its expiries in **milliseconds** where everything else here is
+in seconds, and they are truncated on the way in. Truncating can only make a
+token look older than it is, which costs one refresh; the other direction costs
+a turn that fails mid-request.
+
+**A blanked item reads as a refusal.** When the client fails to refresh, it
+overwrites the item with an empty access token and a zero expiry rather than
+removing it. That is indistinguishable from a profile nobody signed into, and
+both want the same answer, so an empty half is refused by name rather than
+carried as a grant with an odd expiry.
+
+**The keychain is read by spawning `security`.** The item's ACL trusts that
+binary; a process reading through Security.framework is a different application
+to the keychain and is prompted. One client run reads the item sixteen times,
+so a prompting read is not a nuisance but an unusable daemon.
 
 ## 9. The second provider
 
