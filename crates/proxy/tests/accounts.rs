@@ -591,3 +591,91 @@ async fn a_pinned_tier_does_not_have_to_be_on_the_serving_accounts_catalog() {
         "the pinned mapping should be in force: {status}"
     );
 }
+
+/// §4 — `accounts --use` moves between two accounts on different plans, in
+/// both directions, with the configuration file untouched throughout.
+///
+/// The measured complaint this exists for: one `[tiers]` table, two accounts
+/// whose catalogs differ, and a switch refused for a model the target account
+/// is not offered. `[accounts.<name>.tiers]` is what holds a mapping right for
+/// both, and this drives the shipping binary through the whole round trip to
+/// show no edit is needed between the switches.
+///
+/// The catalog stub answers on loopback and keys its answer on the account
+/// header, so each account really is offered a model the other is not.
+#[tokio::test(flavor = "multi_thread")]
+async fn accounts_use_moves_between_accounts_whose_catalogs_differ() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let app = axum::Router::new().route(
+            "/models",
+            axum::routing::get(|headers: axum::http::HeaderMap| async move {
+                let account = headers
+                    .get("chatgpt-account-id")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("unknown")
+                    .to_owned();
+                format!(r#"{{"data":[{{"id":"model-for-{account}","context_window":272000}}]}}"#)
+            }),
+        );
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let daemon = Daemon::start_with_file(
+        &json!({
+            "selected": "work",
+            "accounts": [
+                { "name": "work", "access_token": "access-acct_one",
+                  "refresh_token": "refresh-acct_one", "id_token": id_token("acct_one"),
+                  "account_id": "acct_one", "expires_at": 4_000_000_000_u64 },
+                { "name": "personal", "access_token": "access-acct_two",
+                  "refresh_token": "refresh-acct_two", "id_token": id_token("acct_two"),
+                  "account_id": "acct_two", "expires_at": 4_000_000_000_u64 },
+            ],
+        }),
+        &format!(
+            "[tiers]\n\
+             opus = \"model-for-acct_one\"\n\
+             sonnet = \"model-for-acct_one\"\n\
+             haiku = \"model-for-acct_one\"\n\
+             fable = \"model-for-acct_one\"\n\
+             [accounts.personal.tiers]\n\
+             opus = \"model-for-acct_two\"\n\
+             sonnet = \"model-for-acct_two\"\n\
+             haiku = \"model-for-acct_two\"\n\
+             fable = \"model-for-acct_two\"\n\
+             [upstream]\n\
+             catalog = \"http://{addr}/models\"\n"
+        ),
+    );
+
+    let config = daemon.dir.path().join("home").join("config.toml");
+    let written = std::fs::read_to_string(&config).unwrap();
+
+    // `run` fails the test on a non-zero exit, so the switch being accepted at
+    // all is the first half of this.
+    let moved = daemon.run(&["accounts", "--use", "personal"]);
+    assert!(
+        moved.contains("personal"),
+        "the switch should name the account now serving: {moved}"
+    );
+    let status = daemon.run(&["status"]);
+    assert!(
+        status.contains("model-for-acct_two") && !status.contains("model-for-acct_one"),
+        "the account switched to should be served its own mapping: {status}"
+    );
+
+    daemon.run(&["accounts", "--use", "work"]);
+    let status = daemon.run(&["status"]);
+    assert!(
+        status.contains("model-for-acct_one") && !status.contains("model-for-acct_two"),
+        "switching back should be served the shared mapping again: {status}"
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        written,
+        "neither switch may need the configuration file changed"
+    );
+}

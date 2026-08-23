@@ -820,7 +820,11 @@ account whose every turn is dispatched to a model the backend will not answer
 for, which fails one turn later, upstream, saying nothing about tier mapping.
 Validation is skipped where the catalog cannot speak for the account being
 selected, which is the fallback list and a refetch that failed; refusing a
-mapping over somebody else's menu would be worse than not checking.
+mapping over somebody else's menu would be worse than not checking. **The
+refusal names the account section as the way out.** Naming the model and the
+list leaves an operator with one shared table and two plans, editing it before
+every switch and undoing the edit after; the section that states what differs
+for the account being switched to is what the refusal points at.
 
 **A pinned tier is served as the account it names.** A tier entry may pin
 another account, and what that decides is which credential authenticates the

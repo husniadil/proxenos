@@ -547,24 +547,6 @@ fn unavailable(state: &ControlState, account: &crate::auth::store::Account) -> S
     )
 }
 
-/// Say why a mapping that served one account is refused by another.
-///
-/// The tier table is shared and a catalog is one account's menu (§7.0), so a
-/// tier mapped to a model only one plan offers is refused on every switch to an
-/// account on another plan. The refusal is correct — serving that mapping would
-/// fail one turn later, upstream, saying nothing about tier mapping — but on
-/// its own it reads as a broken mapping rather than as one belonging to a
-/// different account, and the operator hits it again on the next switch back.
-fn per_account_mapping_hint(refusal: ProxyError, account: &str) -> ProxyError {
-    ProxyError::invalid_request(format!(
-        "{refusal}\n\nThat catalog is `{account}`'s own menu, and the tier mapping it was \
-         checked against is the shared one. Where the two accounts are on different plans \
-         this recurs on every switch: give `{account}` its own mapping, either with \
-         `tiers.set` carrying {{\"account\": \"{account}\"}} or as an \
-         `[accounts.{account}.tiers]` section, and the shared table keeps serving the rest."
-    ))
-}
-
 /// `docs/api.md` §2.1 — the environment Claude Code needs.
 ///
 /// All four tier variables are always emitted. `WebFetch` runs on the haiku
@@ -1341,7 +1323,7 @@ async fn select_account(state: &ControlState, params: Option<&Value>) -> Result<
             && state.credentials.select(&previous).is_ok()
         {
             refresh_catalog(state).await;
-            return Err(per_account_mapping_hint(refusal, name));
+            return Err(refusal);
         }
         return Err(ProxyError::invalid_request(format!(
             "{refusal}\n\nThe previous account could not be restored, so this daemon is \
@@ -1463,15 +1445,36 @@ fn put_mapping_in_force(state: &ControlState, account: &str) -> Result<(), Proxy
         // The third door onto the rule the daemon's start and `tiers.set` use,
         // through the same function: this list is the account being switched
         // to, and a pinned or relayed tier names another menu entirely.
-        catalog.validate(&crate::upstream::relay::validated_models(
-            &state.credentials.accounts().unwrap_or_default(),
-            &tiers,
-        ))?;
+        catalog
+            .validate(&crate::upstream::relay::validated_models(
+                &state.credentials.accounts().unwrap_or_default(),
+                &tiers,
+            ))
+            .map_err(|refusal| refused_switch(&refusal, account))?;
     }
 
     state.policy.set_tiers(tiers);
     state.policy.set_effort_ceiling(ceiling);
     Ok(())
+}
+
+/// The refusal, with the way to hold a mapping that works for both accounts.
+///
+/// A catalog is one account's menu (§7.0), so a mapping written once for the
+/// daemon is only ever right for the models every account has. The bare
+/// refusal names the id and the list and stops there, which leaves an operator
+/// editing `[tiers]` before every switch and undoing it after. The section
+/// that replaces a tier for one account is what they actually want, and it is
+/// named here rather than left to be found in the documentation.
+fn refused_switch(refusal: &ProxyError, account: &str) -> ProxyError {
+    ProxyError::invalid_request(format!(
+        "{}\n\nA catalog is one account's menu, so a mapping that suits another \
+         account can name a model this one is not offered. Write what differs \
+         under `[accounts.{account}.tiers]` in config.toml: it replaces the \
+         tiers it names for this account only, and leaves the shared `[tiers]` \
+         table serving the rest.",
+        refusal.message
+    ))
 }
 
 /// The name the store files the account serving turns under.
