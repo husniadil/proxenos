@@ -218,11 +218,33 @@ pub fn forgotten_account(result: &Value) -> String {
 }
 
 /// What a switch says it did. The name, because the caller may have typed a
-/// label and the daemon is the side that resolved it.
+/// label and the daemon is the side that resolved it — and how far the switch
+/// moved, because the same six words cannot stand for both sizes of it. Within
+/// one provider it changed whose quota is spent. Across providers it changed
+/// which backend answers, which path the turn takes, and which subscription is
+/// drawn down, and an operator who is not told has to go and look.
+///
+/// The providers are named outright: this is operator-facing output, where a
+/// role word is this project's vocabulary and not the reader's.
 pub fn selected_account(result: &Value) -> String {
-    match field(result, "selected").and_then(Value::as_str) {
-        Some(name) => format!("serving turns as {name}"),
-        None => "no account selected".to_owned(),
+    let Some(name) = field(result, "selected").and_then(Value::as_str) else {
+        return "no account selected".to_owned();
+    };
+    let provider = field(result, "provider").and_then(Value::as_str);
+    // Absent for the first account stored, where nothing was serving before.
+    // Saying a provider changed there would be inventing the half that does
+    // not exist, so the line states only what is true: who now serves, on
+    // which provider.
+    let previous = field(result, "previous_provider").and_then(Value::as_str);
+    match (provider, previous) {
+        (Some(provider), Some(previous)) if provider != previous => format!(
+            "serving turns as {name}; {previous} to {provider}, so a different backend on a \
+             different subscription answers every turn"
+        ),
+        (Some(provider), Some(_)) => format!("serving turns as {name}; still on {provider}"),
+        (Some(provider), None) => format!("serving turns as {name} on {provider}"),
+        // A daemon that predates the field says what it always said.
+        (None, _) => format!("serving turns as {name}"),
     }
 }
 

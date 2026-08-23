@@ -4937,3 +4937,66 @@ async fn a_usage_reason_names_the_provider_it_describes() {
         "{main}"
     );
 }
+
+/// §3 — a switch says how far it moved.
+///
+/// A switch between two accounts on one provider changes whose quota is spent.
+/// A switch across providers changes which backend answers, which path the turn
+/// takes, and which subscription is drawn down. The same six words cannot stand
+/// for both, so the answer carries the provider on each side of the move and the
+/// rendered line says which of the two just happened.
+#[tokio::test]
+async fn a_switch_says_whether_it_crossed_providers() {
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add(&grant("acct_one", "a-one"), Some("main"))
+        .unwrap();
+    harness
+        .store
+        .add(&grant("acct_two", "a-two"), Some("spare"))
+        .unwrap();
+    harness
+        .store
+        .add_key("relay", "relay-secret", Provider::Anthropic)
+        .unwrap();
+    harness.store.select("main").unwrap();
+
+    let same = harness
+        .call_with("accounts.select", json!({ "account": "spare" }))
+        .await
+        .unwrap();
+    assert_eq!(same["provider"], json!("codex"));
+    assert_eq!(same["previous_provider"], json!("codex"));
+    assert_eq!(
+        render::selected_account(&same),
+        "serving turns as spare; still on codex"
+    );
+
+    let crossed = harness
+        .call_with("accounts.select", json!({ "account": "relay" }))
+        .await
+        .unwrap();
+    assert_eq!(crossed["provider"], json!("anthropic"));
+    assert_eq!(crossed["previous_provider"], json!("codex"));
+    assert_eq!(
+        render::selected_account(&crossed),
+        "serving turns as relay; codex to anthropic, so a different backend on a \
+         different subscription answers every turn"
+    );
+}
+
+/// The first account stored had nothing serving before it, and a line claiming
+/// a provider changed would be inventing the half it cannot know.
+#[test]
+fn a_first_selection_names_the_provider_without_claiming_a_move() {
+    assert_eq!(
+        render::selected_account(&json!({ "selected": "main", "provider": "codex" })),
+        "serving turns as main on codex"
+    );
+    assert_eq!(
+        render::selected_account(&json!({ "selected": "main" })),
+        "serving turns as main"
+    );
+    assert_eq!(render::selected_account(&json!({})), "no account selected");
+}
