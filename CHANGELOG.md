@@ -14,9 +14,12 @@ in [`docs/api.md`](docs/api.md) §6.
   the configuration directory and read back at startup, so what this daemon has
   served as each account carries across restarts. It holds an account name and
   two token counts, and no part of any credential. Two daemons pointed at one
-  directory merge by taking whichever count is higher per account, so a lost
-  race leaves a floor that is still a floor; an unreadable file is treated as an
-  empty tally rather than as a failure. The quota snapshot deliberately does
+  directory merge by taking whichever count is higher per account, and a write
+  re-reads the file before replacing it so a write that landed in between is not
+  discarded. The file is replaced by rename rather than written into, so a
+  daemon killed mid-write comes back holding the last finished tally instead of
+  a truncated one; an unreadable file is treated as an empty tally rather than
+  as a failure. The quota snapshot deliberately does
   *not* persist: upstream still holds it and `usage --refresh` recovers it
   exactly, where a percentage read back from disk would describe a window that
   may have reset since. `docs/proxy-behavior.md` §6.1 states both halves.

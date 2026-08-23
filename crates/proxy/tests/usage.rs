@@ -845,12 +845,17 @@ fn an_unreadable_tally_reads_as_an_empty_one() {
     assert_eq!(store_tallying("main", &path).spent_for("main").total(), 120);
 }
 
-/// `PROXENOS_HOME` can point two daemons at one directory. A tally only ever
-/// grows, so the merge takes whichever count is higher per account: a write
-/// that lost a race leaves the file stating a floor that is still a floor,
-/// never one that moved backwards.
+/// `PROXENOS_HOME` can point two daemons at one directory, and neither sees the
+/// other's turns. The merge takes whichever count is higher per account, so a
+/// daemon that has been running longer does not have its total replaced by a
+/// younger one's.
+///
+/// This is the sequential case, and it is all this test claims: the second
+/// store reads the first one's file before it writes. The interleaved case —
+/// a write landing between another write's read and its replacement — is
+/// `a_write_that_lost_a_race_starts_over_against_the_newer_file`.
 #[test]
-fn two_daemons_never_move_a_tally_backwards() {
+fn a_second_daemons_write_keeps_the_higher_count() {
     let dir = tempfile::tempdir().expect("temporary directory");
     let path = dir.path().join("spend.json");
 
@@ -878,5 +883,102 @@ fn a_tally_holds_nothing_but_names_and_counts() {
     assert_eq!(
         parsed,
         serde_json::json!({ "main": { "input": 100, "output": 20 } })
+    );
+}
+
+/// **A write that does not finish must not destroy the tally.** `std::fs::write`
+/// truncates the target and then fills it, so a daemon killed between those two
+/// leaves a short file — which parses into nothing and comes back as a floor of
+/// zero, the exact figure this whole change exists to stop reporting.
+///
+/// The kernel will not be raced into a torn write on demand, so what is
+/// asserted is the property that makes one impossible: the target is replaced,
+/// never written into. A file replaced by rename is a different file; a file
+/// truncated in place is the same one.
+#[cfg(unix)]
+#[test]
+fn a_tally_is_replaced_whole_rather_than_written_over_in_place() {
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("spend.json");
+
+    let store = store_tallying("main", &path);
+    store.record_spend(None, 1_000_000, 250_000);
+    let first = std::fs::metadata(&path).expect("metadata").ino();
+
+    store.record_spend(None, 5_000, 500);
+    let second = std::fs::metadata(&path).expect("metadata").ino();
+
+    assert_ne!(
+        first, second,
+        "the tally must be replaced by rename, never truncated in place"
+    );
+    assert_eq!(
+        store_tallying("main", &path).spent_for("main").total(),
+        1_255_500
+    );
+}
+
+/// What a killed write leaves behind is a half-written *sibling*, and the tally
+/// itself is whatever the last finished write left. A stray sibling is not read
+/// and does not stop the next write.
+#[test]
+fn a_sibling_left_by_a_killed_write_does_not_disturb_the_tally() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("spend.json");
+
+    let store = store_tallying("main", &path);
+    store.record_spend(None, 1_000_000, 250_000);
+
+    let mut stray = path.clone().into_os_string();
+    stray.push(".999999.pending");
+    std::fs::write(&stray, "{ \"main\": { \"input\": 1").expect("write");
+
+    let restarted = store_tallying("main", &path);
+    assert_eq!(restarted.spent_for("main").total(), 1_250_000);
+    restarted.record_spend(None, 1, 0);
+    assert_eq!(
+        store_tallying("main", &path).spent_for("main").total(),
+        1_250_001
+    );
+}
+
+/// The merge reads the file once. A write that lands after that read is not in
+/// what this one is about to replace it with, so replacing it would move the
+/// file backwards — the one thing the merge is there to prevent. Re-reading
+/// before the replacement catches it, and the attempt starts over against the
+/// newer file.
+#[test]
+fn a_write_that_lost_a_race_starts_over_against_the_newer_file() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("spend.json");
+
+    let store = store_tallying("main", &path);
+    store.record_spend(None, 500, 0);
+
+    // Another daemon, landing in the window between this write's read and its
+    // replacement, with a count this one has never seen.
+    let raced = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let once = std::sync::Arc::clone(&raced);
+    let elsewhere = path.clone();
+    store.on_tally_write_for_test(move || {
+        if once.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        std::fs::write(
+            &elsewhere,
+            serde_json::json!({ "main": { "input": 9_000, "output": 0 } }).to_string(),
+        )
+        .expect("write");
+    });
+
+    store.record_spend(None, 1, 0);
+
+    let landed = store_tallying("main", &path);
+    assert_eq!(
+        landed.spent_for("main").total(),
+        9_000,
+        "the other daemon's count must survive this write"
     );
 }
