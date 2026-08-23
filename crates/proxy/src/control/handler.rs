@@ -715,12 +715,24 @@ pub fn environment(
     state: &ControlState,
     accounts: &[crate::auth::store::Account],
 ) -> Vec<(String, String)> {
+    let config = configuration(state);
+    let serving = accounts
+        .iter()
+        .find(|account| account.selected)
+        .map(|account| account.name.clone());
+    let stated = |tier: &crate::config::ResolvedTier| {
+        let account = tier.account.as_deref().or(serving.as_deref());
+        account
+            .and_then(|name| config.accounts.get(name))
+            .is_some_and(|section| section.tiers.states(tier.tier))
+    };
     environment_for(
         state.port,
         state.config.client.disable_connectors,
         state.policy.get().tiers(),
         &state.catalog.current(),
         accounts,
+        &stated,
     )
 }
 
@@ -729,12 +741,17 @@ pub fn environment(
 /// Split out so the launch contract can be probed (`docs/api.md` §2.2) without
 /// a daemon: the probe has to assert on what a launch renders, and a renderer
 /// reachable only through a running `ControlState` cannot be asked.
+///
+/// `stated` answers whether the account a tier is served as names that tier's
+/// model in its own `[accounts.<name>.tiers]` section. It decides one thing,
+/// below: whether an unpinned, relayed tier's id is handed to the client.
 pub fn environment_for(
     port: u16,
     disable_connectors: bool,
     tiers: &[crate::config::ResolvedTier],
     catalog: &crate::catalog::Catalog,
     accounts: &[crate::auth::store::Account],
+    stated: &dyn Fn(&crate::config::ResolvedTier) -> bool,
 ) -> Vec<(String, String)> {
     let mut variables = vec![
         (
@@ -757,19 +774,31 @@ pub fn environment_for(
         variables.push(("ENABLE_CLAUDEAI_MCP_SERVERS".to_owned(), "false".to_owned()));
     }
 
-    for tier in tiers {
-        variables.push((
-            format!("ANTHROPIC_DEFAULT_{}_MODEL", tier.tier.to_uppercase()),
-            tier.model.clone(),
-        ));
-    }
-
     // Which side of §9.1 each tier is on, asked once. Everything below turns on
     // it: the two window variables and the long-context flag are global to the
     // client, so a mapping that is not entirely on one provider has to pick.
     let relaying = |tier: &&crate::config::ResolvedTier| {
         crate::upstream::relay::relays(accounts, tier.account.as_deref())
     };
+
+    // A translated tier always hands its id over: the client bakes it in and
+    // sends it for the session, and translation is what makes it serve. A
+    // relayed tier decides nothing (§9.1), and unless the operator named its
+    // model for the relaying account — a pin in the shared table, or an entry
+    // in that account's own section — its id came from the shared table,
+    // which is the first provider's menu. Handing that id over sends the
+    // second provider a model it never had; seen live as `--model haiku`
+    // arriving there as `gpt-5.6-luna`. Left unset, the client's own id for
+    // the tier relays verbatim, which is the one id known to work there.
+    for tier in tiers {
+        if relaying(&tier) && tier.account.is_none() && !stated(tier) {
+            continue;
+        }
+        variables.push((
+            format!("ANTHROPIC_DEFAULT_{}_MODEL", tier.tier.to_uppercase()),
+            tier.model.clone(),
+        ));
+    }
     let translating = tiers.iter().any(|tier| !relaying(&tier));
     let relayed = tiers.iter().any(|tier| relaying(&tier));
 

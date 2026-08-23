@@ -291,6 +291,12 @@ vanished. Keys in that file keep working exactly as they did.
 
 ### Fixed
 
+- **`exec --model haiku` on a relaying account sent the second provider a
+  first-provider id.** The launch environment handed every tier's id to the
+  client, shared table included, so a relayed tier arrived upstream as
+  `gpt-5.6-luna`. A relayed tier now states an id only where the operator
+  named one for that account — a pin, or `[accounts.<name>.tiers]` — and the
+  client's own id relays verbatim otherwise.
 - **Every real tool-search result was refused with a 400.** The client names a
   discovered tool as `{"type": "tool_reference", "tool_name": ...}`; the proxy
   read the field as `name`, so a conversation that had run a tool search could

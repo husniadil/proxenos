@@ -1012,6 +1012,18 @@ them, since this proxy's own window guard sits on the translating path and the
 relay path has none (§9). An early compaction wastes context on the side that is
 still guarded; a late one fails the session on the side that is not.
 
+**A relayed tier states no model id either, unless the operator named one for
+the relaying account.** `ANTHROPIC_DEFAULT_<TIER>_MODEL` is how a translated
+tier reaches the client: the client bakes the id in and sends it, and
+translation is what makes it serve. A relayed tier decides nothing (§9.1), and
+its entry in the shared table is the first provider's menu — handing that id
+over sends the second provider a model it never had. Seen live: `--model haiku`
+arrived at the second provider as `gpt-5.6-luna`. So the variable is emitted for
+a relayed tier only where the model was stated for that account — a pin in the
+shared table, or an entry in `[accounts.<name>.tiers]` — and is left unset
+otherwise, so the client's own id for the tier relays verbatim, which is the one
+id known to work there.
+
 Both are needed. Stating the window alone is worse than saying nothing: the
 client stops applying its own 200,000 assumption and, not recognizing the model,
 then enforces no limit at all — so the session grows until the backend refuses

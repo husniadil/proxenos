@@ -598,6 +598,12 @@ CLAUDE_CODE_AUTO_COMPACT_WINDOW=<effective window>
 CLAUDE_CODE_DISABLE_1M_CONTEXT=1
 ```
 
+A tier the serving account relays (`proxy-behavior.md` §9.1) has no
+`ANTHROPIC_DEFAULT_<TIER>_MODEL` line unless its model was stated for that
+account — pinned in `[tiers]`, or named under `[accounts.<name>.tiers]`. The
+shared table's id is the first provider's, and the client's own id for the
+tier is the one the second provider accepts (`proxy-behavior.md` §7.2).
+
 The two window variables appear only when the catalog knows the window, and
 carry the smallest across the mapped tiers. The client will warn that its
 200,000 limit is not enforced; that is expected, because the real window is

@@ -4007,6 +4007,17 @@ async fn env_for(
     tiers: Vec<ResolvedTier>,
     accounts: impl Fn(&FileStore),
 ) -> Value {
+    env_for_with(dir, tiers, accounts, proxenos::config::Config::default()).await
+}
+
+/// The same, over a stated configuration: the account sections are what
+/// decide whether a relayed tier hands its id to the client at all.
+async fn env_for_with(
+    dir: &tempfile::TempDir,
+    tiers: Vec<ResolvedTier>,
+    accounts: impl Fn(&FileStore),
+    config: proxenos::config::Config,
+) -> Value {
     let store = Arc::new(FileStore::new(dir.path().join("credentials.json")));
     accounts(&store);
     let state = ControlState {
@@ -4030,7 +4041,7 @@ async fn env_for(
         capture: Arc::new(proxenos::recorder::Switches::default()),
         usage: Arc::new(proxenos::usage::UsageStore::default()),
         refusals: std::sync::Arc::new(proxenos::auth::refusals::Refusals::default()),
-        config: Arc::new(proxenos::config::Config::default()),
+        config: Arc::new(config),
         shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
         tokens: None,
         usage_endpoint: String::new(),
@@ -4099,19 +4110,80 @@ async fn an_all_relay_mapping_states_no_window_and_no_long_context_flag() {
         assert!(!injected.contains_key(absent), "{absent} in exec's injects");
     }
 
-    // The final ids are still handed over, which is the whole point of the
-    // launch surface: the client bakes them in and sends them for the session.
+    // And no model id either (§7.2): these came from the shared table, which
+    // is the first provider's menu. A relayed tier decides nothing, and
+    // handing the client an id from that table sends the other provider a
+    // model it never had — seen live as `--model haiku` arriving at the second
+    // provider as `gpt-5.6-luna`. Absent the variable, the client's own id for
+    // the tier relays verbatim, which is the one id that is known to work.
+    for tier in ["OPUS", "SONNET", "HAIKU", "FABLE"] {
+        let variable = format!("ANTHROPIC_DEFAULT_{tier}_MODEL");
+        assert!(!shell.contains(&variable), "{variable} in {shell}");
+        assert_eq!(
+            settings["env"][&variable],
+            Value::Null,
+            "{variable} in settings"
+        );
+        assert!(
+            !injected.contains_key(&variable),
+            "{variable} in exec's injects"
+        );
+    }
+}
+
+/// §7.2 — a relayed tier hands its id over only where the operator named it
+/// for the relaying account.
+///
+/// `[accounts.<name>.tiers]` is a statement about that account's own menu; the
+/// shared table is not. One tier stated, one left to the table: the stated one
+/// reaches the client and the other is left to the client's own default.
+#[tokio::test]
+async fn a_relayed_tier_hands_over_only_the_id_its_account_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let config: proxenos::config::Config = toml::from_str(
+        r#"
+[tiers]
+opus = "gpt-5.6-terra"
+sonnet = "gpt-5.6-terra"
+haiku = "gpt-5.4-mini"
+fable = "gpt-5.6-terra"
+
+[accounts.relay.tiers]
+sonnet = "claude-sonnet-5"
+"#,
+    )
+    .unwrap();
+    let tiers = [
+        ("opus", "gpt-5.6-terra"),
+        ("sonnet", "claude-sonnet-5"),
+        ("haiku", "gpt-5.4-mini"),
+        ("fable", "gpt-5.6-terra"),
+    ]
+    .into_iter()
+    .map(|(tier, model)| ResolvedTier {
+        defaulted: false,
+        account: None,
+        tier,
+        model: model.to_owned(),
+    })
+    .collect();
+    let result = env_for_with(&dir, tiers, relayed("relay"), config).await;
+    let injected: std::collections::BTreeMap<String, String> =
+        render::variables(&result).into_iter().collect();
+
     assert_eq!(
         injected
             .get("ANTHROPIC_DEFAULT_SONNET_MODEL")
             .map(String::as_str),
         Some("claude-sonnet-5")
     );
-    assert!(shell.contains("export ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-sonnet-5"));
-    assert_eq!(
-        settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"],
-        json!("claude-sonnet-5")
-    );
+    for absent in [
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    ] {
+        assert!(!injected.contains_key(absent), "{absent} in {injected:?}");
+    }
 }
 
 /// §7.2 — a mapping split across both providers states no window either, and

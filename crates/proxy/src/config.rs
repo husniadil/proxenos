@@ -1162,6 +1162,17 @@ const DEFAULT_TIERS: [(&str, &str); 4] = [
 ];
 
 impl Tiers {
+    /// Whether this table states a model for one tier, by name.
+    pub fn states(&self, tier: &str) -> bool {
+        match tier {
+            "opus" => self.opus.is_some(),
+            "sonnet" => self.sonnet.is_some(),
+            "haiku" => self.haiku.is_some(),
+            "fable" => self.fable.is_some(),
+            _ => false,
+        }
+    }
+
     /// Resolve all four, defaulting the ones the configuration left out.
     ///
     /// A value that is present but blank is refused rather than defaulted. An
