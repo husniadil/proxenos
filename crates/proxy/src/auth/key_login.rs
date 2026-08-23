@@ -1,0 +1,252 @@
+//! Storing a key read from stdin, over the seam `--setup-token` already uses.
+//!
+//! The two flags are two front doors to one stored credential, so they read
+//! stdin through one trait rather than two. What differs is only what the
+//! terminal half says and where a key is allowed to come from: `--key` takes
+//! any secret, and validates nothing about its shape.
+//!
+//! Silence while reading a tty reads as a hang. The prompt is written to
+//! **stderr** and only where a person is typing, so a piped key stays byte for
+//! byte what it was: `printf '%s' "$KEY" | proxenos login --key ...` prints
+//! nothing that a reader of its stdout did not already see.
+
+use std::io::{self, IsTerminal, Write};
+
+use crate::auth::setup_token::Guide;
+use crate::auth::store::{AccountStore, Provider};
+
+/// Store a key under `label`, reading it through `guide`.
+///
+/// Returns the name it was filed under, which is the string `accounts --use`
+/// takes.
+///
+/// **Never from an argument.** A command line is visible to every process on
+/// the machine and lands in the shell's history file; §8 keeps credentials out
+/// of argv, and this is the path that would break that rule if it took one.
+pub fn run(
+    store: &dyn AccountStore,
+    guide: &mut dyn Guide,
+    label: Option<&str>,
+) -> anyhow::Result<String> {
+    // The name is required: a key carries no account id to be named by, and
+    // the name is what selects it afterwards.
+    let Some(name) = label else {
+        anyhow::bail!(
+            "name the account with `--as NAME`: a key carries no id to be named by, \
+             and the name is what `accounts --use` takes"
+        );
+    };
+
+    guide.explain()?;
+    let key = guide.token()?;
+    let key = key.trim();
+    if key.is_empty() {
+        anyhow::bail!("no key on stdin; pipe it in, or paste it at the prompt");
+    }
+
+    store.add_key(name, key, guide_provider(guide))?;
+    guide.stored(name)?;
+    Ok(name.to_owned())
+}
+
+/// The provider a guide files under. Carried on the guide rather than passed
+/// alongside it, so the text it prints and the store it writes cannot name two
+/// different providers.
+fn guide_provider(guide: &dyn Guide) -> Provider {
+    guide.provider().unwrap_or(Provider::Codex)
+}
+
+/// The terminal half: a prompt on stderr and a hidden read where stdin is a
+/// tty, a plain read from the pipe where it is not.
+pub struct Terminal {
+    provider: Provider,
+    interactive: bool,
+    out: Box<dyn Write>,
+    err: Box<dyn Write>,
+    read: Box<dyn FnMut() -> io::Result<String>>,
+}
+
+impl Terminal {
+    /// The real one: stdin, stdout, stderr, and whatever stdin actually is.
+    pub fn stdio(provider: Provider) -> Self {
+        let interactive = io::stdin().is_terminal();
+        Self {
+            provider,
+            interactive,
+            out: Box::new(io::stdout()),
+            err: Box::new(io::stderr()),
+            read: Box::new(move || {
+                if interactive {
+                    // Hidden, the same way `--setup-token` reads a token: a
+                    // key echoed while it is typed is on the screen and in the
+                    // scrollback of whoever walks past.
+                    rpassword::read_password()
+                } else {
+                    let mut key = String::new();
+                    io::Read::read_to_string(&mut io::stdin(), &mut key)?;
+                    Ok(key)
+                }
+            }),
+        }
+    }
+}
+
+impl Guide for Terminal {
+    fn explain(&mut self) -> io::Result<()> {
+        if !self.interactive {
+            return Ok(());
+        }
+        writeln!(
+            self.err,
+            "Paste the {} key, then press enter. Nothing is echoed, and it is never\n\
+             written anywhere but the credential file.",
+            self.provider.as_str()
+        )?;
+        self.err.flush()
+    }
+
+    fn token(&mut self) -> io::Result<String> {
+        (self.read)()
+    }
+
+    fn name(&mut self) -> io::Result<Option<String>> {
+        // `--key` never asks: `--as NAME` is required, and the flow refuses
+        // before anything is read without one.
+        Ok(None)
+    }
+
+    fn stored(&mut self, name: &str) -> io::Result<()> {
+        writeln!(
+            self.out,
+            "Stored a {} key as {name}.",
+            self.provider.as_str()
+        )?;
+        self.out.flush()
+    }
+
+    fn provider(&self) -> Option<Provider> {
+        Some(self.provider)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::store::FileStore;
+    use std::sync::{Arc, Mutex};
+
+    /// A sink that can be read back after the guide has written to it.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl Captured {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().expect("the sink").clone()).expect("utf-8")
+        }
+    }
+
+    impl Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().expect("the sink").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The real `Terminal`, with the tty answer and the key supplied rather
+    /// than taken from the process. Everything it decides is decided here.
+    fn terminal(
+        provider: Provider,
+        interactive: bool,
+        key: &str,
+    ) -> (Terminal, Captured, Captured) {
+        let (out, err) = (Captured::default(), Captured::default());
+        let key = key.to_owned();
+        let terminal = Terminal {
+            provider,
+            interactive,
+            out: Box::new(out.clone()),
+            err: Box::new(err.clone()),
+            read: Box::new(move || Ok(key.clone())),
+        };
+        (terminal, out, err)
+    }
+
+    fn temp_store() -> (tempfile::TempDir, Arc<FileStore>) {
+        let home = tempfile::tempdir().expect("a temp home");
+        let store = Arc::new(FileStore::new(home.path().join("credentials.json")));
+        (home, store)
+    }
+
+    /// The machine path. A prompt on stdout would corrupt whatever reads it,
+    /// so a piped run prints the one line it has always printed and nothing
+    /// else — on either stream.
+    #[test]
+    fn a_piped_key_prints_only_what_it_stored() {
+        let (_home, store) = temp_store();
+        let (mut guide, out, err) = terminal(Provider::Codex, false, "sk-test-piped\n");
+
+        let name = run(store.as_ref(), &mut guide, Some("robot")).expect("a stored key");
+
+        assert_eq!(name, "robot");
+        assert_eq!(out.text(), "Stored a codex key as robot.\n");
+        assert_eq!(err.text(), "");
+    }
+
+    /// The bug this path had: nothing said while it waited, so a terminal
+    /// operator saw a hang and had to guess the gesture that ends it.
+    #[test]
+    fn a_terminal_key_says_what_it_is_waiting_for() {
+        let (_home, store) = temp_store();
+        let (mut guide, out, err) = terminal(Provider::Anthropic, true, "sk-test-typed");
+
+        run(store.as_ref(), &mut guide, Some("personal-claude")).expect("a stored key");
+
+        let said = err.text();
+        assert!(said.contains("Paste the anthropic key"), "{said}");
+        assert!(said.contains("press enter"), "{said}");
+        assert!(said.contains("Nothing is echoed"), "{said}");
+        // Whatever it says, it says on stderr: stdout is the machine's.
+        assert_eq!(out.text(), "Stored a anthropic key as personal-claude.\n");
+    }
+
+    /// The secret is what this command exists to move. It reaches the store
+    /// and nothing else.
+    #[test]
+    fn the_key_never_reaches_either_stream() {
+        let (_home, store) = temp_store();
+        let (mut guide, out, err) = terminal(Provider::Codex, true, "sk-unguessable-4d1f7c");
+
+        run(store.as_ref(), &mut guide, Some("robot")).expect("a stored key");
+
+        assert!(!out.text().contains("4d1f7c"), "{}", out.text());
+        assert!(!err.text().contains("4d1f7c"), "{}", err.text());
+    }
+
+    /// A name is required before anything is read: there is nothing to file a
+    /// key under, and asking for a secret first would waste the paste.
+    #[test]
+    fn a_key_without_a_name_is_refused_before_it_is_read() {
+        let (_home, store) = temp_store();
+        let (mut guide, out, err) = terminal(Provider::Codex, true, "sk-test");
+
+        let error = run(store.as_ref(), &mut guide, None).expect_err("no name");
+
+        assert!(error.to_string().contains("--as NAME"), "{error}");
+        assert_eq!(out.text(), "");
+        assert_eq!(err.text(), "");
+    }
+
+    /// An empty read is the state the old error described after the fact.
+    #[test]
+    fn an_empty_key_is_refused() {
+        let (_home, store) = temp_store();
+        let (mut guide, _out, _err) = terminal(Provider::Codex, false, "   \n");
+
+        let error = run(store.as_ref(), &mut guide, Some("robot")).expect_err("no key");
+
+        assert!(error.to_string().contains("no key on stdin"), "{error}");
+    }
+}

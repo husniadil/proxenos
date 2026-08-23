@@ -4,6 +4,7 @@ pub mod authorize;
 pub mod daemon_login;
 pub mod flow;
 pub mod jwt;
+pub mod key_login;
 pub mod login;
 pub mod pkce;
 pub mod setup_token;
