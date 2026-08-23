@@ -32,6 +32,15 @@ pub fn config_path() -> std::path::PathBuf {
     config_dir().join("config.toml")
 }
 
+/// Where the per-account token tally lives (§6.1).
+///
+/// Daemon state rather than configuration, and deliberately not the credential
+/// store: it holds an account name and two token counts, and nothing that is
+/// any part of a secret.
+pub fn tally_path() -> std::path::PathBuf {
+    config_dir().join("spend.json")
+}
+
 /// The project was `codex-cc-proxy` before v0.5.0, and a store written under
 /// that name does not stop existing because this binary got a new one.
 ///

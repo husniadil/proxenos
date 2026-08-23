@@ -638,11 +638,36 @@ nothing rather than zero, and a turn no account can be named for is not counted
 at all, because filing it under whoever happens to be serving would put one
 account's spend under another's name.
 
-**It is a floor, not the account's spend.** The tally starts at zero when the
-daemon starts, nothing persists across a restart, and turns made anywhere else
-are invisible to it. Everywhere it is reported it says so, because a figure
-that reads as the whole of an account's spend is wrong in the reassuring
-direction.
+**It is a floor, not the account's spend.** Turns made anywhere else are
+invisible to it. Everywhere it is reported it says so, because a figure that
+reads as the whole of an account's spend is wrong in the reassuring direction.
+
+**The tally persists; the quota snapshot does not.** The two halves of what a
+restart loses are not equally recoverable, and they are settled differently.
+
+- The **quota snapshot** of §8.3 stays in memory only. Upstream still holds it,
+  so an ask recovers it exactly, and a percentage read back from disk describes
+  a window that may have reset since — headroom that may no longer exist, which
+  is the reassuring direction again. The empty row after a restart is the
+  honest one, and `usage --refresh` is how it is filled.
+- The **token tally** is written to disk and read back at startup. Nothing
+  upstream can restate it: it is what *this daemon* served, counted from
+  completed responses. A restart that reset it to zero would state a floor of
+  zero, which is not a figure that was measured.
+
+The tally lives in `spend.json` beside the configuration, under
+`config_dir()`. It is daemon state rather than configuration, and deliberately
+not the credential store: it holds an account name and two token counts, and no
+place for any part of a secret to be written. Forgetting an account removes its
+row, the same way it drops its figure.
+
+`PROXENOS_HOME` can point two daemons at one directory, and neither sees the
+other's turns. A write merges with what is already on disk by taking whichever
+count is higher per account: a tally only ever grows, so a write that lost the
+race leaves a floor that is still a floor rather than one that moved backwards.
+A file that cannot be read or parsed is treated as an empty tally and written
+over — nothing here is worth refusing to serve a turn over, and a tally that
+starts at zero says so everywhere it is reported.
 
 ### 6.2 The two points that need an estimate
 

@@ -4783,7 +4783,7 @@ async fn the_rendered_usage_line_for_a_key_does_not_read_as_reassurance() {
 
     assert_eq!(
         line,
-        "  billing                  no figure — a key has no quota ceiling; it is metered per token, so nothing here bounds its spend (1540 tokens served as it since this daemon started, and turns made elsewhere are not counted)"
+        "  billing                  no figure — a key has no quota ceiling; it is metered per token, so nothing here bounds its spend (1540 tokens served as it by this daemon, and turns made elsewhere are not counted)"
     );
     // And the subscription beside it still shows the percentage it always did.
     assert!(rendered.contains("93% used"), "{rendered}");

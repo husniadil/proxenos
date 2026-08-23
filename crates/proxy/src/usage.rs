@@ -410,10 +410,12 @@ pub struct Measured {
 /// can honestly be said about a metered account is how much of it has been
 /// spent through this daemon, as a quantity.
 ///
-/// **Since this daemon started, and only through it.** Nothing persists across
-/// a restart and nothing here sees a turn made elsewhere, so this is a floor
-/// under the account's real spend, never the whole of it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// **Counted by this daemon, and only through it.** The tally is written to
+/// disk and read back at startup, so it survives a restart — nothing upstream
+/// can restate it, and a restart that reset it to zero would state a floor
+/// that is not true. Turns made anywhere else are still invisible to it, so it
+/// remains a floor under the account's real spend rather than the whole of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Spent {
     pub input: u64,
     pub output: u64,
@@ -434,6 +436,12 @@ impl Spent {
 /// whoever served the turn it came from rather than to whoever is serving when
 /// someone asks.
 pub type ServingAccount = std::sync::Arc<dyn Fn() -> Option<String> + Send + Sync>;
+
+/// What a tally file holds: an account name and two token counts, and no place
+/// for anything else. Nothing here is a credential (CLAUDE.md #7).
+fn read_tally(path: &std::path::Path) -> Option<std::collections::BTreeMap<String, Spent>> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
 
 fn now() -> u64 {
     std::time::SystemTime::now()
@@ -469,6 +477,11 @@ pub struct UsageStore {
     served: Mutex<std::collections::BTreeSet<String>>,
     /// Tokens served per account, as upstream counted them.
     spent: Mutex<std::collections::BTreeMap<String, Spent>>,
+    /// Where the tally is written, if it is written anywhere.
+    ///
+    /// `None` in a test harness and in `doctor`, which have no daemon state
+    /// directory to write into and nothing to carry across a restart.
+    tally: Option<std::path::PathBuf>,
 }
 
 impl std::fmt::Debug for UsageStore {
@@ -500,6 +513,28 @@ impl UsageStore {
     #[must_use]
     pub fn serving(mut self, serving: ServingAccount) -> Self {
         self.serving = Some(serving);
+        self
+    }
+
+    /// Bind the token tally to a file, and read back what is already in it.
+    ///
+    /// The quota snapshots are deliberately not bound to anything: upstream
+    /// still holds those and an ask recovers them exactly, where a percentage
+    /// restored from disk would describe a window that may have reset since
+    /// (§6.1). What is restored here is the one figure nothing upstream can
+    /// restate.
+    ///
+    /// A file that cannot be read is treated as an empty tally. Nothing here
+    /// is worth refusing to serve a turn over, and a tally that starts at zero
+    /// says so everywhere it is reported.
+    #[must_use]
+    pub fn tallying_at(mut self, path: std::path::PathBuf) -> Self {
+        if let Some(loaded) = read_tally(&path)
+            && let Ok(mut spent) = self.spent.lock()
+        {
+            *spent = loaded;
+        }
+        self.tally = Some(path);
         self
     }
 
@@ -550,6 +585,7 @@ impl UsageStore {
         if let Ok(mut spent) = self.spent.lock() {
             spent.remove(account);
         }
+        self.write_tally(Some(account));
     }
 
     /// Forget the figure no account could be named for.
@@ -625,9 +661,50 @@ impl UsageStore {
             entry.input = entry.input.saturating_add(input);
             entry.output = entry.output.saturating_add(output);
         }
+        self.write_tally(None);
     }
 
-    /// What this daemon has served as one account since it started.
+    /// Write what is held, merged with what is on disk.
+    ///
+    /// `PROXENOS_HOME` can point two daemons at one directory, and neither can
+    /// see the other's turns. A tally only ever grows, so the merge takes
+    /// whichever count is higher per account: a write that lost the race
+    /// leaves the file stating a floor that is still a floor, never one that
+    /// moved backwards. `dropped` is the one case that is not a merge — a
+    /// forgotten account is gone, and must not come back off the disk.
+    ///
+    /// Every failure here is silent on purpose. Serving turns does not depend
+    /// on this file, and a daemon that refused a turn because a tally could
+    /// not be written would trade the product for its bookkeeping.
+    fn write_tally(&self, dropped: Option<&str>) {
+        let Some(path) = self.tally.as_ref() else {
+            return;
+        };
+        let Ok(held) = self.spent.lock() else {
+            return;
+        };
+
+        let mut merged = read_tally(path).unwrap_or_default();
+        for (name, spent) in held.iter() {
+            let entry = merged.entry(name.clone()).or_default();
+            entry.input = entry.input.max(spent.input);
+            entry.output = entry.output.max(spent.output);
+        }
+        if let Some(dropped) = dropped {
+            merged.remove(dropped);
+        }
+        drop(held);
+
+        let Ok(body) = serde_json::to_string_pretty(&merged) else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(path, body);
+    }
+
+    /// What this daemon has counted as one account, across restarts.
     #[must_use]
     pub fn spent_for(&self, account: &str) -> Spent {
         self.spent

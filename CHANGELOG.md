@@ -4,6 +4,23 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+### Changed
+
+- **A restart reset the per-account token tally to zero, and zero is not a
+  figure anyone measured.** A supervised daemon is replaced on every install,
+  so this was the ordinary case. The tally is now written to `spend.json` under
+  the configuration directory and read back at startup, so what this daemon has
+  served as each account carries across restarts. It holds an account name and
+  two token counts, and no part of any credential. Two daemons pointed at one
+  directory merge by taking whichever count is higher per account, so a lost
+  race leaves a floor that is still a floor; an unreadable file is treated as an
+  empty tally rather than as a failure. The quota snapshot deliberately does
+  *not* persist: upstream still holds it and `usage --refresh` recovers it
+  exactly, where a percentage read back from disk would describe a window that
+  may have reset since. `docs/proxy-behavior.md` §6.1 states both halves.
+
 ## [0.11.0]
 
 An account held as a spare can now state its own headroom without first being

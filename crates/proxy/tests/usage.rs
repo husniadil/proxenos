@@ -779,3 +779,104 @@ fn forgetting_an_account_drops_what_was_served_as_it() {
     assert_eq!(store.spent_for("spare").total(), 0);
     assert_eq!(store.spent_for("main").total(), 120);
 }
+
+/// A store bound to a tally file, serving `name`.
+fn store_tallying(name: &'static str, path: &std::path::Path) -> proxenos::usage::UsageStore {
+    proxenos::usage::UsageStore::default()
+        .serving(Arc::new(move || Some(name.to_owned())) as proxenos::usage::ServingAccount)
+        .tallying_at(path.to_path_buf())
+}
+
+/// **The half nothing upstream can restate.** A quota figure is recoverable by
+/// asking for it again; the tokens this daemon served are not, and a restart
+/// that resets them to zero states a floor of zero that is not true.
+#[test]
+fn a_tally_survives_a_restart() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("spend.json");
+
+    let first = store_tallying("main", &path);
+    first.record_spend(None, 100, 20);
+    first.record_spend(Some("spare"), 900, 90);
+    drop(first);
+
+    let restarted = store_tallying("main", &path);
+    assert_eq!(restarted.spent_for("main").total(), 120);
+    assert_eq!(restarted.spent_for("spare").total(), 990);
+
+    // And the restored figure keeps counting rather than starting over.
+    restarted.record_spend(None, 1, 1);
+    assert_eq!(restarted.spent_for("main").total(), 122);
+}
+
+/// **The half upstream can restate is not persisted.** A snapshot read from
+/// disk describes a window that may have reset since, and a percentage with a
+/// stale age reads as headroom that may not exist. Asking recovers it exactly,
+/// so the empty row is the honest one.
+#[test]
+fn a_quota_figure_does_not_survive_a_restart() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("spend.json");
+
+    let first = store_tallying("main", &path);
+    first.record_for(None, &snapshot(11.0), Source::Turn);
+    assert!(first.latest_for("main").is_some());
+    drop(first);
+
+    let restarted = store_tallying("main", &path);
+    assert_eq!(restarted.latest_for("main"), None);
+    assert_eq!(restarted.accounts(), Vec::new());
+}
+
+/// A file this daemon cannot read is treated as an empty tally rather than as
+/// a failure: nothing here is worth refusing to serve a turn over, and a
+/// tally that starts at zero says so everywhere it is reported.
+#[test]
+fn an_unreadable_tally_reads_as_an_empty_one() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("spend.json");
+    std::fs::write(&path, "{ this is not json").expect("write");
+
+    let store = store_tallying("main", &path);
+    assert_eq!(store.spent_for("main").total(), 0);
+
+    // And it writes over the unreadable file rather than being stuck behind it.
+    store.record_spend(None, 100, 20);
+    assert_eq!(store_tallying("main", &path).spent_for("main").total(), 120);
+}
+
+/// `PROXENOS_HOME` can point two daemons at one directory. A tally only ever
+/// grows, so the merge takes whichever count is higher per account: a write
+/// that lost a race leaves the file stating a floor that is still a floor,
+/// never one that moved backwards.
+#[test]
+fn two_daemons_never_move_a_tally_backwards() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("spend.json");
+
+    let one = store_tallying("main", &path);
+    let two = store_tallying("main", &path);
+
+    one.record_spend(None, 500, 0);
+    two.record_spend(None, 10, 0);
+
+    assert_eq!(store_tallying("main", &path).spent_for("main").total(), 500);
+}
+
+/// Nothing in the tally is a credential (CLAUDE.md #7): an account name and
+/// two token counts, and no place for anything else to be written.
+#[test]
+fn a_tally_holds_nothing_but_names_and_counts() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("spend.json");
+
+    let store = store_tallying("main", &path);
+    store.record_spend(None, 100, 20);
+
+    let raw = std::fs::read_to_string(&path).expect("read");
+    let parsed: serde_json::Value = serde_json::from_str(&raw).expect("parse");
+    assert_eq!(
+        parsed,
+        serde_json::json!({ "main": { "input": 100, "output": 20 } })
+    );
+}
