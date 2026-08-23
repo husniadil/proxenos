@@ -637,6 +637,45 @@ no line under the matrix names a path the run did not touch.
 **Done.** What the live arm deliberately does not establish is the outbound
 half, and it says so on the row rather than leaving a reader to assume it.
 
+### v0.10.0 — shipped
+
+**The meter stops claiming more than this daemon knows.** Driving the daemon
+rather than reading its tests turned up six lines that made a claim the store
+had no standing for, and every one of them was wrong in the direction nobody
+checks: it read as safety.
+
+The absences were claims about the world. A turn relayed by a CLI process reads
+the same quota headers the ingress path does and exits holding them, so an
+account had spent something the daemon never saw while `usage` said none had
+been. Every reason that claimed spend is now scoped to what this daemon has
+recorded, and §6.1 carries the rule rather than the sentence.
+
+The figures dropped what came with them. A turn's headers state a status per
+window, a threshold the provider itself set, and which window speaks for the
+account; all of it was discarded at parse, so an account at 93% with the
+provider's own warning on it printed exactly like one without. And a figure
+outlives the window it describes: after a reset with no turn since, spend was
+shown against a window back at zero. Staleness is a property of one window and
+never of a snapshot, since a five-hour window turns over while a seven-day one
+has not, and the figure is marked rather than rewritten to zero — a number the
+provider never gave.
+
+The confirmations were the same failure in a different place. A key row said it
+held no quota, which is true and reads as nothing to watch, on the one account
+whose spend accrues with every turn; it now says nothing bounds its spend and
+carries the tokens this daemon served as it, a floor that says it is one. One
+`accounts --use` moved every turn onto another provider and another
+subscription in six words that were identical to a switch that changed nothing
+but whose quota is spent. And a refused switch never mentioned
+`[accounts.<name>.tiers]`, the thing that already solved it.
+
+**Done when** no line under `usage`, and no confirmation from `accounts`, states
+something this daemon has not observed.
+
+**Done.** What stays open is named rather than buried: an anthropic API key and
+a subscription setup token are stored as the same credential kind, so one
+sentence has to serve two meterings and can only be right about one.
+
 ### Next
 
 Named rather than numbered. Twice now a section here has worn a version that

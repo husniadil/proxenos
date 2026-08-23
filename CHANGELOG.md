@@ -4,7 +4,13 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.10.0]
+
+Everything the meter and the confirmations say about an account now stops at
+what this daemon actually knows. Six lines were making claims about the world
+from one process's memory, or printing a number while dropping the warning the
+provider attached to it, and each was wrong in the reassuring direction — the
+one an operator does not go and check.
 
 ### Changed
 
