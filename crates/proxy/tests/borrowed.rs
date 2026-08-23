@@ -11,6 +11,7 @@ use base64::Engine;
 use pretty_assertions::assert_eq;
 use proxenos::auth::borrowed;
 use proxenos::auth::borrowed::BorrowedError;
+use proxenos::auth::store::Provider;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -482,4 +483,62 @@ fn debugging_a_claude_grant_shows_no_token() {
 
     assert!(!rendered.contains("SECRET-VALUE"), "was: {rendered}");
     assert!(!rendered.contains("ALSO-SECRET"), "was: {rendered}");
+}
+
+// --- where one configured profile is read from ----------------------------
+
+/// A Codex profile is always a file inside its directory, on every host.
+#[test]
+fn a_codex_profile_is_a_file_in_its_directory() {
+    let home = Path::new("/Users/husni");
+
+    assert_eq!(
+        borrowed::source(
+            Provider::Codex,
+            borrowed::Host::MacOs,
+            Some(Path::new("/profiles/work")),
+            home
+        ),
+        borrowed::Source::Codex {
+            auth_json: PathBuf::from("/profiles/work/auth.json")
+        }
+    );
+}
+
+/// The stock profile of each program, which is what an entry with no path
+/// designates.
+#[test]
+fn a_profile_with_no_path_is_the_stock_one() {
+    let home = Path::new("/Users/husni");
+
+    assert_eq!(
+        borrowed::source(Provider::Codex, borrowed::Host::MacOs, None, home),
+        borrowed::Source::Codex {
+            auth_json: PathBuf::from("/Users/husni/.codex/auth.json")
+        }
+    );
+    assert_eq!(
+        borrowed::source(Provider::Anthropic, borrowed::Host::MacOs, None, home),
+        borrowed::Source::Claude(borrowed::ClaudeSource::Keychain {
+            service: "Claude Code-credentials".to_owned()
+        })
+    );
+}
+
+/// Naming the stock directory is not the same as leaving the path out: on
+/// macOS it resolves to a different keychain item, which is the whole reason
+/// absence is carried through rather than resolved to a path first.
+#[test]
+fn naming_the_stock_claude_directory_is_a_different_profile() {
+    let home = Path::new("/Users/husni");
+
+    let stock = borrowed::source(Provider::Anthropic, borrowed::Host::MacOs, None, home);
+    let named = borrowed::source(
+        Provider::Anthropic,
+        borrowed::Host::MacOs,
+        Some(Path::new("/Users/husni/.claude")),
+        home,
+    );
+
+    assert_ne!(stock, named);
 }

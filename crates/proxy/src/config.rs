@@ -275,6 +275,31 @@ pub struct Config {
     /// is a tier or two differing rather than a second mapping entire.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, AccountConfig>,
+    /// The profile directories this daemon borrows grants from (§8.4), keyed
+    /// by the name the account is filed under.
+    ///
+    /// Paths only. A credential is never written here, and none is read from
+    /// here either: this says where another program keeps one.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub profiles: BTreeMap<String, ProfileConfig>,
+}
+
+/// One borrowed profile: whose program owns it, and which directory it is.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileConfig {
+    /// Which program's profile this is, and therefore which endpoint the grant
+    /// inside it is spent against.
+    pub provider: crate::auth::store::Provider,
+    /// The profile directory: a `CODEX_HOME`, or a `CLAUDE_CONFIG_DIR`.
+    ///
+    /// **Absent means the stock profile** — the one that program uses when no
+    /// variable designates a directory. That is a different profile from one
+    /// naming the stock directory explicitly, and for Claude on macOS it is a
+    /// different keychain item (§8.4). Writing the path out is not a way of
+    /// saying "the default".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<std::path::PathBuf>,
 }
 
 /// One account's overrides. Every field is what the shared table holds, and
@@ -786,6 +811,7 @@ impl Config {
                  context window. It must be greater than 0 and at most 100."
             )));
         }
+        validate_profiles(&self.profiles)?;
         Ok(())
     }
 
@@ -844,6 +870,7 @@ impl Default for Config {
             client: ClientConfig::default(),
             upstream: UpstreamConfig::default(),
             accounts: BTreeMap::new(),
+            profiles: BTreeMap::new(),
         }
     }
 }
@@ -994,6 +1021,52 @@ pub struct ResolvedTier {
 /// An unrecognized value is an error rather than a silent fallback: an operator
 /// who wrote `effort = "cheap"` meant to cap their spending, and quietly
 /// ignoring it spends their quota at full rate.
+/// What a `[profiles]` table must satisfy before a daemon starts on it.
+///
+/// Every refusal names the entry, because the operator's next move is to edit
+/// one line of a file they can see.
+pub fn validate_profiles(profiles: &BTreeMap<String, ProfileConfig>) -> Result<(), ProxyError> {
+    let mut seen: BTreeMap<(&str, Option<&std::path::Path>), &str> = BTreeMap::new();
+
+    for (name, profile) in profiles {
+        if name.trim().is_empty() {
+            return Err(ProxyError::invalid_request(
+                "a profile name cannot be empty: it is what `accounts --use` takes.".to_owned(),
+            ));
+        }
+
+        if let Some(path) = &profile.path {
+            // A tilde is the shell's, not ours. Expanding it here would make
+            // one spelling of a path work and another fail, and for Claude on
+            // macOS the spelling is part of the identity (§8.4).
+            if path.to_string_lossy().starts_with('~') {
+                return Err(ProxyError::invalid_request(format!(
+                    "`profiles.{name}.path` starts with `~`, which nothing here expands. \
+                     Write the path out in full."
+                )));
+            }
+            if !path.is_absolute() {
+                return Err(ProxyError::invalid_request(format!(
+                    "`profiles.{name}.path` is relative. A profile is found from a daemon \
+                     whose working directory is not the operator's, so it must be absolute."
+                )));
+            }
+        }
+
+        // Two names for one directory would report one account twice, and
+        // `accounts --use` would offer a choice that changes nothing.
+        let key = (profile.provider.as_str(), profile.path.as_deref());
+        if let Some(first) = seen.insert(key, name) {
+            return Err(ProxyError::invalid_request(format!(
+                "`profiles.{name}` and `profiles.{first}` are the same profile. \
+                 One directory holds one grant, so it is one account."
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 pub fn parse_effort(effort: &str) -> Result<proxenos_core::responses::Effort, ProxyError> {
     proxenos_core::responses::Effort::parse(effort).ok_or_else(|| {
         ProxyError::invalid_request(format!(

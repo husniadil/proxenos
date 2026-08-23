@@ -21,6 +21,7 @@
 
 use crate::auth::jwt;
 use crate::auth::store::Credentials;
+use crate::auth::store::Provider;
 use serde::Deserialize;
 use sha2::Digest;
 use sha2::Sha256;
@@ -327,5 +328,42 @@ pub fn claude_source(host: Host, config_dir: Option<&Path>, home: &Path) -> Clau
                 .map_or_else(|| home.join(CLAUDE_DEFAULT_PROFILE), Path::to_path_buf)
                 .join(CLAUDE_CREDENTIALS_FILE),
         },
+    }
+}
+
+/// The stock Codex profile, relative to the home directory: what `CODEX_HOME`
+/// resolves to when nothing sets it.
+pub const CODEX_DEFAULT_PROFILE: &str = ".codex";
+
+/// The file a Codex profile keeps its grant in.
+pub const CODEX_CREDENTIALS_FILE: &str = "auth.json";
+
+/// Where one configured profile's grant is read from.
+///
+/// The two providers differ in kind, not only in path: one is always a file
+/// inside the directory, the other is a keychain item named *after* the
+/// directory on macOS and a file on Linux. Resolving that here keeps the
+/// difference in one place, where §8.4 can be checked against it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Source {
+    Codex { auth_json: PathBuf },
+    Claude(ClaudeSource),
+}
+
+/// Where to read the grant of the profile `config_dir` designates.
+///
+/// `config_dir` is `None` for the stock profile: the one that program uses
+/// when no variable designates a directory. For Claude on macOS that is a
+/// different keychain item from one naming the stock directory explicitly,
+/// which is why absent is carried through rather than resolved to a path
+/// first.
+pub fn source(provider: Provider, host: Host, config_dir: Option<&Path>, home: &Path) -> Source {
+    match provider {
+        Provider::Codex => Source::Codex {
+            auth_json: config_dir
+                .map_or_else(|| home.join(CODEX_DEFAULT_PROFILE), Path::to_path_buf)
+                .join(CODEX_CREDENTIALS_FILE),
+        },
+        Provider::Anthropic => Source::Claude(claude_source(host, config_dir, home)),
     }
 }

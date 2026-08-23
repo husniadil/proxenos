@@ -1144,7 +1144,39 @@ catalog  = "https://..."
 
 [upstream.anthropic]
 endpoint = "https://..."
+
+# Optional. The profile directories grants are borrowed from, keyed by the
+# name the account is filed under.
+[profiles.work]
+provider = "codex"
+path     = "/Users/me/Library/Application Support/Agent Profiles/codex/p/997619b5"
+
+[profiles.personal]
+provider = "anthropic"
 ```
+
+`[profiles]` says where another program keeps a grant this daemon spends
+(`proxy-behavior.md` §8.4). Paths only: no credential is written into this file,
+and none is read out of it.
+
+`provider` names which program owns the profile, and therefore which endpoint
+its grant is spent against. `path` is the profile directory — a `CODEX_HOME`, or
+a `CLAUDE_CONFIG_DIR`.
+
+**Leaving `path` out means the stock profile**, the one that program uses when
+no variable designates a directory. That is a *different* profile from one
+naming the stock directory explicitly: on macOS the client files its grant under
+a keychain item chosen by whether `CLAUDE_CONFIG_DIR` was set at all, so writing
+the path out selects a different item (`proxy-behavior.md` §8.4). Writing it out
+is not a way of saying "the default".
+
+A path must be absolute, and a leading `~` is refused rather than expanded: the
+daemon's working directory is not the operator's, and for a Claude profile the
+spelling of the path is part of the identity. Two entries naming one provider
+and one directory are refused naming both, because one directory holds one grant
+and is therefore one account. Two entries naming one directory under *different*
+providers are two profiles, which is what a directory holding both programs'
+state looks like.
 
 `[upstream.key]` is where an API key is spent, which is not where a grant is
 (`proxy-behavior.md` §8.2). There is no socket in it: the WebSocket protocol
