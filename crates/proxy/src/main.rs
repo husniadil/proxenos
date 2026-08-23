@@ -366,6 +366,34 @@ fn sign_in_profile(args: &cli::LoginArgs) -> Result<()> {
             return Err(error).with_context(|| format!("could not read {}", path.display()));
         }
     };
+    // Declaring anything stops the daemon looking for the stock profiles
+    // (§8.4), so a first `login --profile` would take away every account the
+    // operator already had. They are written down first, exactly as they were
+    // being read, and only the ones that hold a grant: an entry for a program
+    // that was never signed into is an account that cannot serve.
+    let mut document = document;
+    if config.profiles.is_empty() {
+        for found in proxenos::auth::borrowed::discovered() {
+            if found.name == name
+                || proxenos::auth::borrowed::read::grant(
+                    &proxenos::auth::borrowed::read::HostReader,
+                    &found,
+                    host,
+                    &home,
+                )
+                .is_err()
+            {
+                continue;
+            }
+            document =
+                proxenos::config::edit::add_profile(&document, &found.name, found.provider, None)?;
+            println!(
+                "declaring `{}`, which was being read without being declared",
+                found.name
+            );
+        }
+    }
+
     let updated = proxenos::config::edit::add_profile(
         &document,
         name,

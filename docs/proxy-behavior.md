@@ -1716,6 +1716,14 @@ follows, applied one step earlier: the client authenticates, the client writes,
 and this side learns the result by reading. Nothing here sees a token, and a
 directory that holds no grant is declared nowhere.
 
+Declaring the first profile writes down the ones already being read. A written
+entry stops the daemon looking for the stock profiles, so a first
+`login --profile` on a machine that had been discovering them would otherwise
+take away every account the operator already had — the verb adds one, and must
+not subtract two. Only the discovered profiles that hold a grant are written:
+an entry for a program that was never signed into is an account that cannot
+serve.
+
 Two cases fall out of that shape rather than being features of their own. A
 directory that is already signed in is adopted without running anything, which
 is how a profile made elsewhere is taken on. And where there is no terminal to
