@@ -1620,6 +1620,20 @@ The refusal says what does: the program that owns the profile changes what is
 inside it, and the configuration file is where this daemon's view of it is
 edited.
 
+**A borrowed Anthropic grant has a quota endpoint; the credential it replaced
+did not.** `GET /api/oauth/usage` answers 200 for one, carrying `five_hour` and
+`seven_day` utilisation, a `limits` array with the provider's own severity per
+window, spend, and extra usage. A subscription token is refused there for want
+of a scope, which is why quota on that provider had to be read from turn
+headers alone (§8.3) — the borrowed grant is what closes that gap.
+
+Its body is a third shape and shares nothing with the other two: the windows are
+named rather than positional, the figure is already a percentage, and the reset
+is an RFC 3339 timestamp instead of an epoch. Each window carries the provider's
+own severity, read rather than inferred from the percentage: an account can sit
+high on a window the provider is still calling normal. Nothing in that body
+states that a turn would be refused, so nothing derived from it claims one would.
+
 **The keychain is read by spawning `security`.** The item's ACL trusts that
 binary; a process reading through Security.framework is a different application
 to the keychain and is prompted. One client run reads the item sixteen times,

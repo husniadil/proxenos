@@ -375,18 +375,30 @@ pub struct UpstreamConfig {
 pub struct AnthropicEndpoints {
     #[serde(default = "default_anthropic_endpoint")]
     pub endpoint: String,
+    /// Where a borrowed grant's quota is asked for.
+    ///
+    /// Only a grant can ask. A key has no subscription behind it, and the
+    /// long-lived subscription token that wears the same stem is refused here
+    /// for want of a scope — which is the gap borrowing closed (§8.4).
+    #[serde(default = "default_anthropic_usage_endpoint")]
+    pub usage: String,
 }
 
 impl Default for AnthropicEndpoints {
     fn default() -> Self {
         Self {
             endpoint: default_anthropic_endpoint(),
+            usage: default_anthropic_usage_endpoint(),
         }
     }
 }
 
 fn default_anthropic_endpoint() -> String {
     "https://api.anthropic.com/v1/messages".to_owned()
+}
+
+fn default_anthropic_usage_endpoint() -> String {
+    "https://api.anthropic.com/api/oauth/usage".to_owned()
 }
 
 /// The endpoints an API key is spent against.

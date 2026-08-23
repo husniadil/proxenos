@@ -77,6 +77,51 @@ impl Window {
 /// `None` is never stale: a window the provider stated no reset for cannot be
 /// said to have turned over, and guessing would drop a figure on no evidence.
 #[must_use]
+/// Epoch seconds from an RFC 3339 timestamp, for the one provider that states
+/// a reset that way.
+///
+/// Deliberately small: it reads the shape that provider actually sends —
+/// `2026-08-23T09:00:00.383476+00:00`, always UTC — and answers `None` for
+/// anything else rather than guessing at an offset. A wrong answer here marks
+/// a live window stale, or a stale one live.
+pub fn epoch_from_rfc3339(text: &str) -> Option<u64> {
+    let (date, rest) = text.split_once('T')?;
+    let (year, month, day) = {
+        let mut parts = date.split('-');
+        (
+            parts.next()?.parse::<i64>().ok()?,
+            parts.next()?.parse::<i64>().ok()?,
+            parts.next()?.parse::<i64>().ok()?,
+        )
+    };
+
+    // Only UTC. Every timestamp seen from this endpoint is UTC, and reading an
+    // offset we have not seen would be inventing behaviour.
+    let time = rest.strip_suffix('Z').or_else(|| {
+        rest.strip_suffix("+00:00")
+            .or_else(|| rest.strip_suffix("+0000"))
+    })?;
+    let time = time.split('.').next()?;
+    let mut clock = time.split(':');
+    let (hour, minute, second) = (
+        clock.next()?.parse::<i64>().ok()?,
+        clock.next()?.parse::<i64>().ok()?,
+        clock.next()?.parse::<i64>().ok()?,
+    );
+
+    // Days from the civil calendar, Howard Hinnant's algorithm: March-based
+    // years make the leap day the last of the year, which is what removes the
+    // special cases.
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+
+    u64::try_from(days * 86_400 + hour * 3_600 + minute * 60 + second).ok()
+}
+
 pub fn has_reset(resets_at: Option<u64>, now: u64) -> bool {
     resets_at.is_some_and(|resets_at| now >= resets_at)
 }
@@ -176,6 +221,76 @@ impl Snapshot {
                 .get("limit_reached")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            windows,
+        })
+    }
+
+    /// Read a snapshot out of the second provider's quota endpoint.
+    ///
+    /// A third shape, and it shares nothing with the other two: the windows are
+    /// named rather than positional (`five_hour`, `seven_day`), the figure is
+    /// already a percentage, and the reset is an RFC 3339 timestamp instead of
+    /// an epoch. Everything else in the body — spend, extra usage, and several
+    /// windows whose names read as internal flags — is left where it is.
+    ///
+    /// `limits` carries the provider's own word on each window, and it is read
+    /// rather than inferred from the percentage: an account can sit high on a
+    /// window the provider is still calling normal.
+    ///
+    /// `None` where the body carries no window at all. An empty snapshot would
+    /// read as "quota known, nothing used", which is the reassuring direction
+    /// to be wrong in.
+    pub fn parse_anthropic(payload: &str) -> Option<Self> {
+        let body: Value = serde_json::from_str(payload).ok()?;
+
+        let severity_of = |kind: &str| -> Option<String> {
+            body.get("limits")?
+                .as_array()?
+                .iter()
+                .find(|limit| limit.get("kind").and_then(Value::as_str) == Some(kind))?
+                .get("severity")?
+                .as_str()
+                .map(str::to_owned)
+        };
+
+        let windows: Vec<Window> = [
+            ("five_hour", FIVE_HOURS, "session"),
+            ("seven_day", SEVEN_DAYS, "weekly"),
+        ]
+        .into_iter()
+        .filter_map(|(name, minutes, kind)| {
+            let window = body.get(name)?;
+            Some(Window {
+                used_percent: window.get("utilization")?.as_f64()?,
+                window_minutes: Some(minutes),
+                resets_at: window
+                    .get("resets_at")
+                    .and_then(Value::as_str)
+                    .and_then(epoch_from_rfc3339),
+                label: None,
+                status: severity_of(kind),
+                // No threshold is published here, and inventing one would put a
+                // figure in the provider's mouth.
+                surpassed_threshold: None,
+                // Nothing in this body names one window as deciding for the
+                // account, so none is marked.
+                representative: false,
+            })
+        })
+        .collect();
+
+        if windows.is_empty() {
+            return None;
+        }
+
+        Some(Self {
+            // The body states no plan. It is knowable from the stored grant
+            // instead, and reporting it from here would be a second answer to
+            // one question.
+            plan: None,
+            // Stated by a refusal, not by a percentage. Nothing in this body
+            // says a turn would be rejected, so nothing here claims one would.
+            limit_reached: false,
             windows,
         })
     }

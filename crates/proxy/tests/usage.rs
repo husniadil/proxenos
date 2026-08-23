@@ -982,3 +982,117 @@ fn a_write_that_lost_a_race_starts_over_against_the_newer_file() {
         "the other daemon's count must survive this write"
     );
 }
+
+// --- the second provider's quota endpoint ---------------------------------
+//
+// The body below is the shape a real response has, trimmed to the fields this
+// reads. Captured live: `GET /api/oauth/usage` under a borrowed Claude grant.
+
+/// A response as that endpoint sends one.
+fn anthropic_usage() -> String {
+    serde_json::json!({
+        "five_hour": {
+            "utilization": 18.0,
+            "resets_at": "2026-08-23T09:00:00.383476+00:00",
+            "limit_dollars": null,
+        },
+        "seven_day": {
+            "utilization": 20.0,
+            "resets_at": "2026-08-29T04:00:00.383497+00:00",
+        },
+        "seven_day_opus": null,
+        "limits": [
+            { "kind": "session", "group": "session", "percent": 18,
+              "severity": "normal", "resets_at": "2026-08-23T09:00:00.383476+00:00",
+              "scope": null, "is_active": false },
+            { "kind": "weekly", "group": "weekly", "percent": 20,
+              "severity": "warning", "resets_at": "2026-08-29T04:00:00.383497+00:00",
+              "scope": null, "is_active": false },
+        ],
+        "spend": { "percent": 98, "severity": "critical" },
+    })
+    .to_string()
+}
+
+/// Both windows, with the durations that identify them.
+#[test]
+fn the_second_providers_endpoint_yields_both_windows() {
+    let snapshot = Snapshot::parse_anthropic(&anthropic_usage()).expect("parses");
+
+    assert_eq!(snapshot.windows.len(), 2);
+    let five = &snapshot.windows[0];
+    assert_eq!(five.window_minutes, Some(300));
+    assert!((five.used_percent - 18.0).abs() < f64::EPSILON);
+    let seven = &snapshot.windows[1];
+    assert_eq!(seven.window_minutes, Some(7 * 24 * 60));
+    assert!((seven.used_percent - 20.0).abs() < f64::EPSILON);
+}
+
+/// The reset is a timestamp here rather than an epoch, and it is converted
+/// rather than dropped: a window with no reset is never marked stale, so
+/// dropping it would hide a figure that has turned over.
+#[test]
+fn a_timestamp_reset_is_converted_to_an_epoch() {
+    let snapshot = Snapshot::parse_anthropic(&anthropic_usage()).expect("parses");
+
+    assert_eq!(snapshot.windows[0].resets_at, Some(1_787_475_600));
+    assert_eq!(snapshot.windows[1].resets_at, Some(1_787_976_000));
+}
+
+/// The provider's own word on each window is read, not inferred from the
+/// percentage: an account can sit high on a window still called normal.
+#[test]
+fn each_window_carries_the_providers_own_severity() {
+    let snapshot = Snapshot::parse_anthropic(&anthropic_usage()).expect("parses");
+
+    assert_eq!(snapshot.windows[0].status.as_deref(), Some("normal"));
+    assert_eq!(snapshot.windows[1].status.as_deref(), Some("warning"));
+}
+
+/// Nothing in that body says a turn would be refused, so nothing here claims
+/// one would — a spend at 98% is not a limit reached.
+#[test]
+fn a_high_figure_is_not_reported_as_a_limit_reached() {
+    let snapshot = Snapshot::parse_anthropic(&anthropic_usage()).expect("parses");
+
+    assert!(!snapshot.limit_reached);
+}
+
+/// A body with no window says nothing about quota, and saying nothing is not
+/// the same as saying none is used.
+#[test]
+fn a_body_with_no_window_yields_nothing() {
+    assert!(Snapshot::parse_anthropic("{}").is_none());
+    assert!(Snapshot::parse_anthropic(r#"{"seven_day_opus": null}"#).is_none());
+    assert!(Snapshot::parse_anthropic("not json").is_none());
+}
+
+/// The stream shape and this one are different bodies. Reading either with the
+/// other's parser must yield nothing rather than an empty snapshot.
+#[test]
+fn the_two_shapes_do_not_parse_each_other() {
+    assert!(Snapshot::parse(&anthropic_usage()).is_none());
+    assert!(Snapshot::parse_rest(&anthropic_usage()).is_none());
+}
+
+/// The conversion itself, including the forms this endpoint does not send.
+#[test]
+fn only_utc_timestamps_are_converted() {
+    use proxenos::usage::epoch_from_rfc3339;
+
+    assert_eq!(epoch_from_rfc3339("1970-01-01T00:00:00Z"), Some(0));
+    assert_eq!(
+        epoch_from_rfc3339("2026-08-23T09:00:00.383476+00:00"),
+        Some(1_787_475_600)
+    );
+    assert_eq!(
+        epoch_from_rfc3339("2024-02-29T12:00:00Z"),
+        Some(1_709_208_000)
+    );
+
+    // An offset this endpoint has never sent is refused rather than read as
+    // UTC: a wrong answer marks a live window stale, or a stale one live.
+    assert_eq!(epoch_from_rfc3339("2026-08-23T09:00:00+07:00"), None);
+    assert_eq!(epoch_from_rfc3339("2026-08-23"), None);
+    assert_eq!(epoch_from_rfc3339(""), None);
+}
