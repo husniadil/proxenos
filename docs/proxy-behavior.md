@@ -638,11 +638,68 @@ nothing rather than zero, and a turn no account can be named for is not counted
 at all, because filing it under whoever happens to be serving would put one
 account's spend under another's name.
 
-**It is a floor, not the account's spend.** The tally starts at zero when the
-daemon starts, nothing persists across a restart, and turns made anywhere else
-are invisible to it. Everywhere it is reported it says so, because a figure
-that reads as the whole of an account's spend is wrong in the reassuring
-direction.
+**It is a floor, not the account's spend.** Turns made anywhere else are
+invisible to it. Everywhere it is reported it says so, because a figure that
+reads as the whole of an account's spend is wrong in the reassuring direction.
+
+**The tally persists; the quota snapshot does not.** The two halves of what a
+restart loses are not equally recoverable, and they are settled differently.
+
+- The **quota snapshot** of §8.3 stays in memory only. Upstream still holds it,
+  so an ask recovers it exactly, and a percentage read back from disk describes
+  a window that may have reset since — headroom that may no longer exist, which
+  is the reassuring direction again. The empty row after a restart is the
+  honest one, and `usage --refresh` is how it is filled.
+- The **token tally** is written to disk and read back at startup. Nothing
+  upstream can restate it: it is what *this daemon* served, counted from
+  completed responses. A restart that reset it to zero would state a floor of
+  zero, which is not a figure that was measured.
+
+The tally lives in `spend.json` beside the configuration, under
+`config_dir()`. It is daemon state rather than configuration, and deliberately
+not the credential store: it holds an account name and two token counts, and no
+place for any part of a secret to be written. Forgetting an account removes its
+row, the same way it drops its figure.
+
+**A write replaces the file; it never writes into it.** `std::fs::write`
+truncates the target and then fills it, and a daemon killed between those two
+leaves a short file that parses into nothing — read back as an empty tally and
+reported as a floor of zero, which is the defect this section exists to remove.
+`proxenos stop` under the supervisor kills the daemon on every install, so that
+is the ordinary shutdown rather than a rare one. The body is written to a
+sibling carrying the process id, flushed, and renamed over the target, so a
+reader sees the last finished write or the new one. A sibling left behind by a
+killed write is never read.
+
+The file is written at the process umask rather than `0600`. That is
+deliberate: it holds an account name and two token counts and no part of any
+credential, and the restriction the credential store needs would state
+something about this file that is not true.
+
+`PROXENOS_HOME` can point two daemons at one directory, and neither sees the
+other's turns. Two things keep that from costing a count. The **merge** takes
+whichever count is higher per account, so a daemon that has been running longer
+never has its total replaced by a younger one's. The **comparison** covers what
+the merge cannot: the merge reads the file once, and a write that landed after
+that read is not in what this one is about to replace it with, so the file is
+re-read before the replacement and the attempt starts over against the newer
+file. Five attempts, then the last one writes what it has.
+
+This does not close the window and does not claim to — the comparison and the
+rename are two operations, and a write landing between them is still lost.
+What remains is a smaller floor, never a corrupted file and never a count that
+moved backwards for any writer that takes the same path. No lock is taken, for
+the difference `auth/store.rs` §8 turns on: a lost credential write is a whole
+account, a lost tally write is one turn's count.
+
+A file that cannot be read or parsed is treated as an empty tally and written
+over — nothing here is worth refusing to serve a turn over, and a tally that
+starts at zero says so everywhere it is reported.
+
+The write is blocking I/O on the async worker that served the turn. It runs
+once per completed turn rather than per event, over a file of a few hundred
+bytes, and it is not moved off the runtime because a spawned write is a write a
+shutdown can outrun.
 
 ### 6.2 The two points that need an estimate
 

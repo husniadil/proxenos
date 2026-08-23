@@ -556,9 +556,9 @@ fn unavailable(state: &ControlState, account: &crate::auth::store::Account) -> S
         //
         // No cost is stated and none is estimated — nothing here knows a price
         // list. What is stated instead is a quantity upstream counted: the
-        // tokens this daemon has served as the account since it started, which
-        // is a floor under its real spend rather than the whole of it, and is
-        // said to be one.
+        // tokens this daemon has served as the account, carried across
+        // restarts (§6.1), which is a floor under its real spend rather than
+        // the whole of it, and is said to be one.
         let served = served_as(state, &account.name);
         return format!(
             "a key has no quota ceiling; it is metered per token, so nothing here bounds its spend ({served})"
@@ -572,15 +572,16 @@ fn unavailable(state: &ControlState, account: &crate::auth::store::Account) -> S
 }
 
 /// What can honestly stand beside a row with no ceiling: the tokens this daemon
-/// has served as the account since it started (§6.1), said to be a floor under
-/// the account's real spend rather than the whole of it. A count, never a cost.
+/// has served as the account, counted across restarts (§6.1) and said to be a
+/// floor under the account's real spend rather than the whole of it. A count,
+/// never a cost.
 fn served_as(state: &ControlState, name: &str) -> String {
     let spent = state.usage.spent_for(name);
     if spent.total() == 0 {
         return "no turn has been served as it yet".to_owned();
     }
     format!(
-        "{} tokens served as it since this daemon started, and turns made elsewhere are not counted",
+        "{} tokens served as it by this daemon, and turns made elsewhere are not counted",
         spent.total()
     )
 }

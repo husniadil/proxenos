@@ -1048,9 +1048,14 @@ async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
     // §8.3 — a quota figure is filed under the account that earned it, and an
     // unpinned turn's account is whoever this store has selected when the turn
     // is served.
-    let usage = Arc::new(proxenos::usage::UsageStore::for_accounts(Arc::clone(
-        &credentials,
-    )));
+    // §6.1 — the token tally is read back at startup and written as it grows.
+    // The quota snapshots are not persisted: upstream still holds those and an
+    // ask recovers them, where a percentage restored from disk would describe
+    // a window that may have reset since.
+    let usage = Arc::new(
+        proxenos::usage::UsageStore::for_accounts(Arc::clone(&credentials))
+            .tallying_at(proxenos::config::tally_path()),
+    );
 
     // Which account's mapping is in force. Read before the mapping is resolved
     // rather than after, because a catalog is one account's menu (§7.0) and a

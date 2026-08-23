@@ -8,6 +8,22 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ### Changed
 
+- **A restart reset the per-account token tally to zero, and zero is not a
+  figure anyone measured.** A supervised daemon is replaced on every install,
+  so this was the ordinary case. The tally is now written to `spend.json` under
+  the configuration directory and read back at startup, so what this daemon has
+  served as each account carries across restarts. It holds an account name and
+  two token counts, and no part of any credential. Two daemons pointed at one
+  directory merge by taking whichever count is higher per account, and a write
+  re-reads the file before replacing it so a write that landed in between is not
+  discarded. The file is replaced by rename rather than written into, so a
+  daemon killed mid-write comes back holding the last finished tally instead of
+  a truncated one; an unreadable file is treated as an empty tally rather than
+  as a failure. The quota snapshot deliberately does
+  *not* persist: upstream still holds it and `usage --refresh` recovers it
+  exactly, where a percentage read back from disk would describe a window that
+  may have reset since. `docs/proxy-behavior.md` §6.1 states both halves.
+
 - **The stem that says "setup token" is worn by two credentials.** `claude
   setup-token` mints one valid about a year; the harness's own OAuth access
   token, in its `Claude Code-credentials` keychain entry, begins with the same

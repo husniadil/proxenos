@@ -410,10 +410,12 @@ pub struct Measured {
 /// can honestly be said about a metered account is how much of it has been
 /// spent through this daemon, as a quantity.
 ///
-/// **Since this daemon started, and only through it.** Nothing persists across
-/// a restart and nothing here sees a turn made elsewhere, so this is a floor
-/// under the account's real spend, never the whole of it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// **Counted by this daemon, and only through it.** The tally is written to
+/// disk and read back at startup, so it survives a restart — nothing upstream
+/// can restate it, and a restart that reset it to zero would state a floor
+/// that is not true. Turns made anywhere else are still invisible to it, so it
+/// remains a floor under the account's real spend rather than the whole of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Spent {
     pub input: u64,
     pub output: u64,
@@ -434,6 +436,64 @@ impl Spent {
 /// whoever served the turn it came from rather than to whoever is serving when
 /// someone asks.
 pub type ServingAccount = std::sync::Arc<dyn Fn() -> Option<String> + Send + Sync>;
+
+/// What a tally file holds: an account name and two token counts, and no place
+/// for anything else. Nothing here is a credential (CLAUDE.md #7).
+fn read_tally(path: &std::path::Path) -> Option<std::collections::BTreeMap<String, Spent>> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// Take whichever count is higher per account. A tally only ever grows, so the
+/// higher of two counts is the one closer to what was actually served.
+fn merge_into(
+    merged: &mut std::collections::BTreeMap<String, Spent>,
+    held: &std::collections::BTreeMap<String, Spent>,
+) {
+    for (name, spent) in held {
+        let entry = merged.entry(name.clone()).or_default();
+        entry.input = entry.input.max(spent.input);
+        entry.output = entry.output.max(spent.output);
+    }
+}
+
+/// Replace the file, never write into it.
+///
+/// `std::fs::write` truncates and then fills, and a daemon killed between those
+/// two leaves a short file that parses into nothing — which `tallying_at` reads
+/// as an empty tally and reports as a floor of zero. That is the exact defect
+/// this file exists to remove, and `proxenos stop` under the supervisor kills
+/// the daemon on every install. So the body goes to a sibling and is renamed
+/// over the target, and a reader sees the old file or the new one. The
+/// replacement carries the process id because two daemons writing one temporary
+/// path would interleave into a file that is neither.
+///
+/// Written at the process umask rather than `0600`, deliberately: this holds an
+/// account name and two token counts and no part of any credential, so the
+/// restriction the credential store needs would be a claim about this file that
+/// is not true.
+fn write_and_flush(path: &std::path::Path, body: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(body.as_bytes())?;
+    file.sync_all()
+}
+
+fn replace_tally(path: &std::path::Path, body: &str) {
+    let mut pending = path.to_path_buf().into_os_string();
+    pending.push(format!(".{}.pending", std::process::id()));
+    let pending = std::path::PathBuf::from(pending);
+
+    // Flushed before the rename, not after: a rename that lands ahead of the
+    // data it names would expose an empty file on a crash, which is the same
+    // floor-of-zero by a different route.
+    if write_and_flush(&pending, body).is_err() {
+        let _ = std::fs::remove_file(&pending);
+        return;
+    }
+    if std::fs::rename(&pending, path).is_err() {
+        let _ = std::fs::remove_file(&pending);
+    }
+}
 
 fn now() -> u64 {
     std::time::SystemTime::now()
@@ -469,7 +529,25 @@ pub struct UsageStore {
     served: Mutex<std::collections::BTreeSet<String>>,
     /// Tokens served per account, as upstream counted them.
     spent: Mutex<std::collections::BTreeMap<String, Spent>>,
+    /// Where the tally is written, if it is written anywhere.
+    ///
+    /// `None` in a test harness and in `doctor`, which have no daemon state
+    /// directory to write into and nothing to carry across a restart.
+    tally: Option<std::path::PathBuf>,
+    /// Fired in the window a write can be lost in, so a test can make it
+    /// happen. Nothing outside a test sets it.
+    #[allow(clippy::type_complexity)]
+    on_tally_write: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
+
+/// How many times a write starts over when it finds the file changed.
+///
+/// Each attempt is a read, a merge and a replacement with nothing slow in
+/// between, so losing several in a row is not contention. The last attempt
+/// writes what it has: this is a floor and a lost update leaves a smaller
+/// floor, which is the failure this whole file is careful about — but spinning
+/// on the ingress path to chase it would be worse than the count it saves.
+const TALLY_WRITE_ATTEMPTS: usize = 5;
 
 impl std::fmt::Debug for UsageStore {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -500,6 +578,28 @@ impl UsageStore {
     #[must_use]
     pub fn serving(mut self, serving: ServingAccount) -> Self {
         self.serving = Some(serving);
+        self
+    }
+
+    /// Bind the token tally to a file, and read back what is already in it.
+    ///
+    /// The quota snapshots are deliberately not bound to anything: upstream
+    /// still holds those and an ask recovers them exactly, where a percentage
+    /// restored from disk would describe a window that may have reset since
+    /// (§6.1). What is restored here is the one figure nothing upstream can
+    /// restate.
+    ///
+    /// A file that cannot be read is treated as an empty tally. Nothing here
+    /// is worth refusing to serve a turn over, and a tally that starts at zero
+    /// says so everywhere it is reported.
+    #[must_use]
+    pub fn tallying_at(mut self, path: std::path::PathBuf) -> Self {
+        if let Some(loaded) = read_tally(&path)
+            && let Ok(mut spent) = self.spent.lock()
+        {
+            *spent = loaded;
+        }
+        self.tally = Some(path);
         self
     }
 
@@ -550,6 +650,7 @@ impl UsageStore {
         if let Ok(mut spent) = self.spent.lock() {
             spent.remove(account);
         }
+        self.write_tally(Some(account));
     }
 
     /// Forget the figure no account could be named for.
@@ -625,9 +726,99 @@ impl UsageStore {
             entry.input = entry.input.saturating_add(input);
             entry.output = entry.output.saturating_add(output);
         }
+        self.write_tally(None);
     }
 
-    /// What this daemon has served as one account since it started.
+    /// Test seam: run this in the window between what a write reads and what it
+    /// replaces, standing in for another writer getting there first.
+    pub fn on_tally_write_for_test(&self, hook: impl Fn() + Send + Sync + 'static) {
+        if let Ok(mut on_write) = self.on_tally_write.lock() {
+            *on_write = Some(Box::new(hook));
+        }
+    }
+
+    /// Write what is held, merged with what is on disk, and start over if the
+    /// file moved while this write was preparing.
+    ///
+    /// `PROXENOS_HOME` can point two daemons at one directory, and neither can
+    /// see the other's turns. Two things keep that from costing a count.
+    ///
+    /// The **merge** takes whichever count is higher per account, so a daemon
+    /// that has been running longer never has its total replaced by a younger
+    /// one's. The **comparison** covers what the merge cannot: the merge reads
+    /// the file once, and a write that landed after that read is not in what
+    /// this one is about to replace it with. Re-reading before the replacement
+    /// catches it and the attempt starts over against the newer file.
+    ///
+    /// It does not close the window, and does not claim to — the comparison
+    /// and the rename are two operations, and a write landing between them is
+    /// still lost. What it turns into is a smaller floor rather than a
+    /// corrupted file, which is the tradeoff `auth/store.rs` makes for the same
+    /// reason and with a lock this file deliberately does not take: a
+    /// credential write is a whole account, a tally write is one turn's count.
+    ///
+    /// `dropped` is the one case that is not a merge — a forgotten account is
+    /// gone, and must not come back off the disk.
+    ///
+    /// **Blocking I/O, on the async worker that served the turn.** This runs
+    /// once per completed turn rather than per event, over a file of a few
+    /// hundred bytes. It is not moved off the runtime because the write is what
+    /// makes the count survive, and a spawned write is a write that a shutdown
+    /// can outrun.
+    ///
+    /// Every failure here is silent on purpose. Serving turns does not depend
+    /// on this file, and a daemon that refused a turn because a tally could
+    /// not be written would trade the product for its bookkeeping.
+    fn write_tally(&self, dropped: Option<&str>) {
+        let Some(path) = self.tally.as_ref() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        for attempt in 1..=TALLY_WRITE_ATTEMPTS {
+            let read = std::fs::read_to_string(path).ok();
+            let mut merged = read
+                .as_deref()
+                .and_then(|raw| serde_json::from_str(raw).ok())
+                .unwrap_or_default();
+
+            let Ok(held) = self.spent.lock() else {
+                return;
+            };
+            merge_into(&mut merged, &held);
+            drop(held);
+            if let Some(dropped) = dropped {
+                merged.remove(dropped);
+            }
+
+            let Ok(body) = serde_json::to_string_pretty(&merged) else {
+                return;
+            };
+
+            self.fire_tally_write();
+
+            // Someone else got there between the read above and now, and what
+            // they wrote is not in `body`. Start over against their file.
+            if attempt < TALLY_WRITE_ATTEMPTS && std::fs::read_to_string(path).ok() != read {
+                continue;
+            }
+
+            replace_tally(path, &body);
+            return;
+        }
+    }
+
+    fn fire_tally_write(&self) {
+        if let Ok(hook) = self.on_tally_write.lock()
+            && let Some(hook) = hook.as_ref()
+        {
+            hook();
+        }
+    }
+
+    /// What this daemon has counted as one account, across restarts.
     #[must_use]
     pub fn spent_for(&self, account: &str) -> Spent {
         self.spent
