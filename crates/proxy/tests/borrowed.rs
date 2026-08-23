@@ -906,7 +906,7 @@ struct FakeClient {
 }
 
 impl poke::Client for FakeClient {
-    fn refresh(&self, config_dir: Option<&Path>) -> Result<(), ProxyError> {
+    fn refresh(&self, _provider: Provider, config_dir: Option<&Path>) -> Result<(), ProxyError> {
         self.runs
             .lock()
             .expect("not poisoned")
@@ -968,17 +968,24 @@ fn an_unknown_refresh_deadline_is_still_asked_about() {
     );
 }
 
-/// Codex is never run. Its grant refreshes only on a real turn, which spends
-/// quota and rotates the token, and one failing run was measured sending
-/// fourteen refresh requests.
+/// A lapsed Codex grant is asked about too, the same as Claude: the owning
+/// program runs a cheap turn and rotates the token from inside the profile it
+/// owns. The provider only changes which program runs, not whether one does.
 #[test]
-fn a_codex_grant_is_never_poked() {
-    match poke::decide(Provider::Codex, Some(NOW - 1), None, NOW) {
-        poke::Decision::Hopeless(reason) => {
-            assert!(reason.contains("spends quota"), "was: {reason}");
-            assert!(reason.contains("codex"), "was: {reason}");
-        }
-        other => panic!("Codex must never be poked: {other:?}"),
+fn a_lapsed_codex_grant_is_worth_asking_about() {
+    assert_eq!(
+        poke::decide(Provider::Codex, Some(NOW - 1), None, NOW),
+        poke::Decision::Ask
+    );
+}
+
+/// A Codex grant whose refresh token has lapsed is not poked either, for the
+/// same reason it is not on Claude: a failed refresh can blank what is left.
+#[test]
+fn a_dead_codex_refresh_token_is_never_poked() {
+    match poke::decide(Provider::Codex, Some(NOW - 1), Some(NOW - 1), NOW) {
+        poke::Decision::Hopeless(reason) => assert!(reason.contains("Sign in"), "was: {reason}"),
+        other => panic!("a dead refresh token must not be poked: {other:?}"),
     }
 }
 
@@ -1000,7 +1007,13 @@ fn the_client_is_run_against_the_profile_under_a_lock() {
     let client = FakeClient::default();
     let lock = poke::lock_path(dir.path(), "work");
 
-    poke::under_lock(&client, &lock, Some(Path::new("/profiles/work"))).expect("runs");
+    poke::under_lock(
+        &client,
+        Provider::Anthropic,
+        &lock,
+        Some(Path::new("/profiles/work")),
+    )
+    .expect("runs");
 
     assert_eq!(
         client.runs.lock().expect("not poisoned").as_slice(),
@@ -1016,7 +1029,13 @@ fn the_stock_profile_is_run_with_nothing_set() {
     let dir = tempfile::tempdir().expect("tempdir");
     let client = FakeClient::default();
 
-    poke::under_lock(&client, &poke::lock_path(dir.path(), "personal"), None).expect("runs");
+    poke::under_lock(
+        &client,
+        Provider::Anthropic,
+        &poke::lock_path(dir.path(), "personal"),
+        None,
+    )
+    .expect("runs");
 
     assert_eq!(client.runs.lock().expect("not poisoned").as_slice(), [None]);
 }
@@ -1039,7 +1058,11 @@ fn two_profiles_take_different_locks() {
 fn a_failed_run_releases_the_lock() {
     struct Failing;
     impl poke::Client for Failing {
-        fn refresh(&self, _config_dir: Option<&Path>) -> Result<(), ProxyError> {
+        fn refresh(
+            &self,
+            _provider: Provider,
+            _config_dir: Option<&Path>,
+        ) -> Result<(), ProxyError> {
             Err(ProxyError::authentication("no".to_owned()))
         }
     }
@@ -1047,11 +1070,11 @@ fn a_failed_run_releases_the_lock() {
     let dir = tempfile::tempdir().expect("tempdir");
     let lock = poke::lock_path(dir.path(), "work");
 
-    poke::under_lock(&Failing, &lock, None).expect_err("the run failed");
+    poke::under_lock(&Failing, Provider::Anthropic, &lock, None).expect_err("the run failed");
 
     // The proof it was released: the next call takes it without blocking.
     let client = Arc::new(FakeClient::default());
-    poke::under_lock(client.as_ref(), &lock, None).expect("the lock was free");
+    poke::under_lock(client.as_ref(), Provider::Anthropic, &lock, None).expect("the lock was free");
     assert_eq!(client.runs.lock().expect("not poisoned").len(), 1);
 }
 
@@ -1455,8 +1478,8 @@ fn accounts_over(
 ) -> Accounts {
     struct Recording(Arc<FakeClient>);
     impl poke::Client for Recording {
-        fn refresh(&self, config_dir: Option<&Path>) -> Result<(), ProxyError> {
-            self.0.refresh(config_dir)
+        fn refresh(&self, provider: Provider, config_dir: Option<&Path>) -> Result<(), ProxyError> {
+            self.0.refresh(provider, config_dir)
         }
     }
 
@@ -1525,7 +1548,7 @@ fn asking_for_a_live_profile_runs_nothing() {
 /// Codex is never run, and the refusal says why rather than leaving the caller
 /// to wonder what happened.
 #[test]
-fn asking_for_a_lapsed_codex_profile_refuses_without_running_anything() {
+fn asking_for_a_lapsed_codex_profile_runs_the_owning_client() {
     let dir = tempfile::tempdir().expect("tempdir");
     let work = profile("work", Provider::Codex, Some("/profiles/work"));
     let client = Arc::new(FakeClient::default());
@@ -1541,14 +1564,17 @@ fn asking_for_a_lapsed_codex_profile_refuses_without_running_anything() {
         Arc::clone(&client),
     );
 
-    let refusal = accounts
-        .refresh_borrowed("work")
-        .expect_err("Codex is never run")
-        .to_string();
+    let asked = accounts.refresh_borrowed("work").expect("it was asked");
 
-    assert!(refusal.contains("work"), "{refusal}");
-    assert!(refusal.contains("spends quota"), "{refusal}");
-    assert!(client.runs.lock().expect("not poisoned").is_empty());
+    assert!(
+        asked,
+        "a lapsed Codex grant is asked about, the same as Claude"
+    );
+    assert_eq!(
+        client.runs.lock().expect("not poisoned").as_slice(),
+        [Some(PathBuf::from("/profiles/work"))],
+        "the Codex profile is the one handed to the client"
+    );
 }
 
 /// A profile whose refresh token has lapsed too is not run: the client would
@@ -1604,23 +1630,52 @@ fn the_client_runs_the_program_it_was_given() {
         ),
     );
 
-    borrowed::poke::ClaudeClient::new(&script, borrowed::poke::DEADLINE)
-        .refresh(Some(Path::new("/profiles/work")))
+    borrowed::poke::OwningClient::new(&script, "codex-unused", borrowed::poke::DEADLINE)
+        .refresh(Provider::Anthropic, Some(Path::new("/profiles/work")))
         .expect("it ran");
 
     let recorded = std::fs::read_to_string(&record).expect("it recorded");
     assert_eq!(recorded.trim(), "/profiles/work -p ok --model haiku");
 }
 
+/// The Codex arm runs `codex exec` against `CODEX_HOME`, with no model id and
+/// the git-repo check skipped, so a daemon running anywhere can refresh it.
+#[cfg(unix)]
+#[test]
+fn the_codex_client_runs_a_cheap_exec_against_the_profile() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let record = dir.path().join("record");
+    let script = stand_in(
+        dir.path(),
+        &format!(
+            "#!/bin/sh\nprintf '%s %s\\n' \"$CODEX_HOME\" \"$*\" > {}\n",
+            record.display()
+        ),
+    );
+
+    borrowed::poke::OwningClient::new("claude-unused", &script, borrowed::poke::DEADLINE)
+        .refresh(Provider::Codex, Some(Path::new("/profiles/work")))
+        .expect("it ran");
+
+    let recorded = std::fs::read_to_string(&record).expect("it recorded");
+    assert_eq!(
+        recorded.trim(),
+        "/profiles/work exec --skip-git-repo-check ok"
+    );
+}
+
 /// A program that is not there names what was tried, so an operator who set
 /// `claude_program` to the wrong path is told which path that was.
 #[test]
 fn a_client_that_cannot_be_run_names_the_program() {
-    let refusal =
-        borrowed::poke::ClaudeClient::new("/nowhere/at/all/claude", borrowed::poke::DEADLINE)
-            .refresh(None)
-            .expect_err("nothing to run")
-            .to_string();
+    let refusal = borrowed::poke::OwningClient::new(
+        "/nowhere/at/all/claude",
+        "codex-unused",
+        borrowed::poke::DEADLINE,
+    )
+    .refresh(Provider::Anthropic, None)
+    .expect_err("nothing to run")
+    .to_string();
 
     assert!(refusal.contains("/nowhere/at/all/claude"), "{refusal}");
 }
@@ -1633,10 +1688,14 @@ fn a_client_that_does_not_finish_is_given_up_on() {
     let dir = tempfile::tempdir().expect("tempdir");
     let script = stand_in(dir.path(), "#!/bin/sh\nsleep 30\n");
 
-    let refusal = borrowed::poke::ClaudeClient::new(&script, std::time::Duration::from_millis(200))
-        .refresh(None)
-        .expect_err("it never finishes")
-        .to_string();
+    let refusal = borrowed::poke::OwningClient::new(
+        &script,
+        "codex-unused",
+        std::time::Duration::from_millis(200),
+    )
+    .refresh(Provider::Anthropic, None)
+    .expect_err("it never finishes")
+    .to_string();
 
     assert!(refusal.contains("did not finish"), "{refusal}");
     assert!(refusal.contains("left alone"), "{refusal}");
@@ -2493,7 +2552,7 @@ async fn removing_a_discovered_profile_is_refused_by_name() {
 struct NeverRuns;
 
 impl poke::Client for NeverRuns {
-    fn refresh(&self, _config_dir: Option<&Path>) -> Result<(), ProxyError> {
+    fn refresh(&self, _provider: Provider, _config_dir: Option<&Path>) -> Result<(), ProxyError> {
         Err(ProxyError::invalid_request(
             "nothing here asks a client to refresh",
         ))

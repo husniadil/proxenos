@@ -217,6 +217,7 @@ impl AccountStore for Accounts {
             poke::Decision::Ask => {
                 poke::under_lock(
                     self.client.as_ref(),
+                    profile.provider,
                     &poke::lock_path(&self.locks, name),
                     profile.config_dir.as_deref(),
                 )?;
@@ -417,13 +418,17 @@ impl Accounts {
             // Where the operator said the client is, and the bare name
             // otherwise. A daemon started by launchd resolves nothing from
             // `PATH`, so the name alone is not enough there (§4).
-            Box::new(match config.claude_program.as_ref() {
-                Some(program) => crate::auth::borrowed::poke::ClaudeClient::new(
-                    program.clone(),
-                    crate::auth::borrowed::poke::DEADLINE,
-                ),
-                None => crate::auth::borrowed::poke::ClaudeClient::default(),
-            }),
+            Box::new(crate::auth::borrowed::poke::OwningClient::new(
+                config
+                    .claude_program
+                    .clone()
+                    .unwrap_or_else(|| crate::auth::borrowed::poke::PROGRAM.into()),
+                config
+                    .codex_program
+                    .clone()
+                    .unwrap_or_else(|| crate::auth::borrowed::poke::CODEX_PROGRAM.into()),
+                crate::auth::borrowed::poke::DEADLINE,
+            )),
             config_dir.to_path_buf(),
         ))
     }

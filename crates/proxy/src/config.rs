@@ -132,6 +132,12 @@ port = 8787
 # and the name does not resolve there.
 # claude_program = "/opt/homebrew/bin/claude"
 
+# The Codex CLI this daemon runs on its own behalf: a cheap `codex exec` turn to
+# refresh a borrowed Codex grant it owns, the same way `claude_program` refreshes
+# an Anthropic one. Unset, the bare name `codex` is resolved through the daemon's
+# PATH, with the same launchd caveat.
+# codex_program = "/opt/homebrew/bin/codex"
+
 # The defaults, shown so they can be changed. An omitted tier takes the value
 # below; a tier written blank is refused rather than defaulted. WebFetch runs on
 # the haiku tier, so that one matters more than it looks.
@@ -308,6 +314,12 @@ pub struct Config {
     /// out where that is how this daemon starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_program: Option<std::path::PathBuf>,
+    /// Where the Codex CLI is, for the cheap turn the daemon runs to refresh a
+    /// borrowed Codex grant it owns (§8.4). Unset, the bare name `codex`,
+    /// resolved through the daemon's `PATH` — which launchd does not populate,
+    /// so a supervised daemon needs the path written out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_program: Option<std::path::PathBuf>,
     #[serde(default)]
     pub tiers: Tiers,
     #[serde(default)]
@@ -944,6 +956,7 @@ impl Default for Config {
             accounts: BTreeMap::new(),
             profiles: BTreeMap::new(),
             claude_program: None,
+            codex_program: None,
         }
     }
 }

@@ -1641,22 +1641,34 @@ blocked while a client started up would spend a minute before its first byte.
 
 The one move available here is to run the program that owns the profile, wait
 for it to exit, and read the profile again: the rotation happens inside that program,
-which is the only process allowed to perform it. `claude -p` on the cheapest
-tier is that run, with stdin closed — without which the client waits several
-seconds for input that never comes — and a deadline, after which the process is
-killed and the profile is left alone.
+which is the only process allowed to perform it. A cheap turn is that run —
+`claude -p ok` for an Anthropic profile, `codex exec ok` for a Codex one — with
+stdin closed (without which the client waits several seconds for input that
+never comes) and a deadline, after which the process is killed and the profile
+is left alone. The Codex turn carries no model id: an id names one plan's
+catalog and would go stale, and the turn exists to authenticate, not to compute.
 
-**What is run is `claude_program`, or the bare name where that is unset.** A
-bare name is resolved through the *daemon's* `PATH`, and a daemon started by
-launchd inherits almost none of one — so on that machine the ask fails with
-`could not run \`claude\`` until the path is written out (`api.md` §4). The same
-program is what the second provider's quota request reads its version from, so
-one key settles both.
+**What is run is `claude_program` or `codex_program`, or the bare name where
+that is unset.** A bare name is resolved through the *daemon's* `PATH`, and a
+daemon started by launchd inherits almost none of one — so on that machine the
+ask fails with `could not run \`claude\`` (or `codex`) until the path is written
+out (`api.md` §4). `claude_program` is also what the second provider's quota
+request reads its version from, so that one key settles two things.
 
-Codex is never run. Its grant refreshes only on a real turn, which spends the
-operator's quota and rotates the refresh token, and one failing run was measured
-sending fourteen refresh requests in a row; its access token also lasts ten
-days, so the case barely arises.
+Both providers are asked the same way, and for the same reason: a borrowed
+profile no other session drives never has its access token refreshed by use,
+because a turn through this proxy spends the token without rotating it — only
+the owning program rotates it. A Codex access token lasts ten days against
+Claude's shorter life, so the Codex case is rarer, not absent. The earlier rule
+here — that Codex was never run, because its refresh spends quota and one
+failing run was once measured sending fourteen refresh requests — traded a
+standing account for a saved fraction of a turn; the turn is cheap, the deadline
+bounds the failing case, and a daily-driver profile that silently expires on the
+tenth day is the worse outcome. **Derived, not confirmed here:** that a
+`codex exec` turn against a genuinely lapsed grant rotates it has not been
+observed on this machine, because a Codex access token is a signed JWT that
+cannot be backdated locally to force the case (`roadmap.md` §L). The mechanism
+is symmetric with the Claude path, which is confirmed.
 
 **A profile whose refresh token has already lapsed is never asked either.**
 A client that fails to refresh overwrites its own stored item with an empty

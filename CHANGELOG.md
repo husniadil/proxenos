@@ -289,6 +289,18 @@ vanished. Keys in that file keep working exactly as they did.
   written. One declared account serves without being chosen; more than one with
   nothing chosen is refused rather than resolved to whichever comes first.
 
+### Added
+
+- **A borrowed Codex grant is refreshed the way a Claude one is.** When a
+  profile the daemon borrows from is asked about (`usage --refresh`) and its
+  access token has lapsed, the daemon runs a cheap `codex exec` turn against
+  that profile — the owning program rotates the token from inside the directory
+  it owns, exactly as `claude -p` does for an Anthropic profile. A borrowed
+  Codex profile no other session drives no longer silently expires on the tenth
+  day. `codex_program` points a launchd-supervised daemon at the CLI. That the
+  turn rotates a genuinely lapsed grant is derived from the mechanism, not
+  observed here (`roadmap.md` §L).
+
 ### Fixed
 
 - **`accounts login` accepted a name the key store already held**, producing

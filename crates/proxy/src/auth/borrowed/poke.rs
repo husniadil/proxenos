@@ -5,18 +5,21 @@
 //! for it to exit, and reads the profile again. The rotation happens inside
 //! that program, which is the only process allowed to perform it.
 //!
-//! Two rules, both measured, both load-bearing:
+//! Two rules, both load-bearing:
 //!
-//! - **Only Claude is ever asked.** A Codex grant is refreshed only by a real
-//!   turn (`codex exec`), which spends the operator's quota and rotates the
-//!   refresh token — and one failing run was seen sending fourteen refresh
-//!   requests in a row. Its access token also lasts ten days, so the case
-//!   barely arises. Nothing here runs it.
-//! - **A dead refresh token is never poked.** When the client fails to
-//!   refresh, it overwrites its stored item with an empty access token and a
-//!   zero expiry. Asking a profile whose refresh token has already lapsed
-//!   therefore destroys what is left of it, and `refreshTokenExpiresAt` is
-//!   readable locally, for free, before anything is run.
+//! - **Each provider is asked through its own program.** Claude refreshes on a
+//!   cheap `claude -p` turn; Codex refreshes on a cheap `codex exec` turn. Both
+//!   spend a little of the operator's quota and rotate the grant, and in both
+//!   cases the rotation happens *inside* that program — the one process allowed
+//!   to write the profile — so the daemon never exchanges a borrowed refresh
+//!   token itself. A Codex access token lasts ten days, so the case is rarer
+//!   there, but a borrowed profile no other session drives reaches it all the
+//!   same.
+//! - **A dead refresh token is never poked.** When a client fails to refresh,
+//!   it can overwrite its stored item with an empty access token and a zero
+//!   expiry. Asking a profile whose refresh token has already lapsed therefore
+//!   destroys what is left of it, and the deadline is readable locally, for
+//!   free, before anything is run.
 
 use crate::auth::store::Provider;
 use crate::error::ProxyError;
@@ -40,6 +43,11 @@ pub const DEADLINE: Duration = Duration::from_secs(60);
 /// `claude_program` in the configuration file is how a daemon started by
 /// launchd is told where the client actually is (§4).
 pub const PROGRAM: &str = "claude";
+
+/// What the Codex client is called when the operator has not said where it is.
+/// A bare name, resolved through the daemon's `PATH` like `PROGRAM`; a daemon
+/// started by launchd is told where it is with `codex_program` (§4).
+pub const CODEX_PROGRAM: &str = "codex";
 
 /// What to do about a grant that cannot be spent.
 #[derive(Debug, PartialEq, Eq)]
@@ -68,23 +76,19 @@ pub fn decide(
     if expires_at.is_some_and(|expiry| expiry > now) {
         return Decision::Usable;
     }
-    match provider {
-        Provider::Codex => Decision::Hopeless(
-            "a Codex grant is refreshed only by a real turn, which spends quota and rotates \
-             the token, so nothing here runs one. Open the ChatGPT app or run `codex` once \
-             in that profile.",
-        ),
-        Provider::Anthropic => {
-            if refresh_token_expires_at.is_some_and(|expiry| expiry <= now) {
-                return Decision::Hopeless(
-                    "its refresh token has expired too, and asking the client to refresh \
-                     would only blank what is left of the stored grant. Sign in again in \
-                     that profile.",
-                );
-            }
-            Decision::Ask
-        }
+    // The same split for both providers: a lapsed access token is worth asking
+    // about, unless the refresh token behind it has lapsed too. `provider` is
+    // kept because the run itself differs — a different program, a different
+    // turn — and the caller carries it to the client.
+    let _ = provider;
+    if refresh_token_expires_at.is_some_and(|expiry| expiry <= now) {
+        return Decision::Hopeless(
+            "its refresh token has expired too, and asking the owning program to refresh \
+             would only blank what is left of the stored grant. Sign in again in that \
+             profile.",
+        );
     }
+    Decision::Ask
 }
 
 /// Runs the program that owns a profile, once.
@@ -92,58 +96,89 @@ pub fn decide(
 /// A trait so the rules above are tested without a signed-in profile and
 /// without spending a turn.
 pub trait Client: Send + Sync {
-    /// Run it against `config_dir`, returning when it has exited. `None` is
-    /// the stock profile: the one it uses with no variable set.
-    fn refresh(&self, config_dir: Option<&Path>) -> Result<(), ProxyError>;
+    /// Run the program that owns `provider`'s profile against `config_dir`,
+    /// returning when it has exited. `None` is the stock profile: the one that
+    /// program uses with no variable set.
+    fn refresh(&self, provider: Provider, config_dir: Option<&Path>) -> Result<(), ProxyError>;
 }
 
-/// The real one: `claude -p`, with a deadline.
-pub struct ClaudeClient {
-    program: PathBuf,
+/// The real one: a cheap turn against whichever program owns the profile, with
+/// a deadline. Claude runs `claude -p ok`; Codex runs `codex exec ok`. Each
+/// exists to make that program authenticate — and, where the grant is stale,
+/// rotate it — and what it answers is thrown away.
+pub struct OwningClient {
+    claude_program: PathBuf,
+    codex_program: PathBuf,
     deadline: Duration,
 }
 
-impl Default for ClaudeClient {
+impl Default for OwningClient {
     fn default() -> Self {
         Self {
-            program: PathBuf::from(PROGRAM),
+            claude_program: PathBuf::from(PROGRAM),
+            codex_program: PathBuf::from(CODEX_PROGRAM),
             deadline: DEADLINE,
         }
     }
 }
 
-impl ClaudeClient {
-    pub fn new(program: impl Into<PathBuf>, deadline: Duration) -> Self {
+impl OwningClient {
+    pub fn new(
+        claude_program: impl Into<PathBuf>,
+        codex_program: impl Into<PathBuf>,
+        deadline: Duration,
+    ) -> Self {
         Self {
-            program: program.into(),
+            claude_program: claude_program.into(),
+            codex_program: codex_program.into(),
             deadline,
+        }
+    }
+
+    /// The program for one provider, and the variable that points it at a
+    /// profile directory. The two clients name that directory differently —
+    /// `CLAUDE_CONFIG_DIR`, `CODEX_HOME` — the same variables the daemon reads
+    /// the grant back from, so what is signed in and what is read cannot drift.
+    fn command_for(&self, provider: Provider) -> (std::process::Command, &'static str) {
+        match provider {
+            Provider::Anthropic => {
+                let mut command = std::process::Command::new(&self.claude_program);
+                // The cheapest tier there is.
+                command.arg("-p").arg("ok").arg("--model").arg("haiku");
+                (command, "CLAUDE_CONFIG_DIR")
+            }
+            Provider::Codex => {
+                let mut command = std::process::Command::new(&self.codex_program);
+                // No `--model`: an id names one plan's catalog and would go
+                // stale, and the turn exists to authenticate, not to compute.
+                // `--skip-git-repo-check` because the daemon's working
+                // directory is not a repository.
+                command.arg("exec").arg("--skip-git-repo-check").arg("ok");
+                (command, "CODEX_HOME")
+            }
         }
     }
 }
 
-impl Client for ClaudeClient {
-    fn refresh(&self, config_dir: Option<&Path>) -> Result<(), ProxyError> {
-        let mut command = std::process::Command::new(&self.program);
+impl Client for OwningClient {
+    fn refresh(&self, provider: Provider, config_dir: Option<&Path>) -> Result<(), ProxyError> {
+        let (mut command, directory_variable) = self.command_for(provider);
+        let program = command.get_program().to_owned();
         command
-            .arg("-p")
-            .arg("ok")
-            // The cheapest tier there is. This turn exists to make the client
-            // authenticate, and what it answers is thrown away.
-            .arg("--model")
-            .arg("haiku")
-            // Measured: without this the client waits several seconds for
-            // input that is never coming, on every run.
+            // Measured on Claude: without this the client waits several seconds
+            // for input that is never coming. Codex reads a prompt from stdin
+            // too, so the same closes it for both.
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         if let Some(config_dir) = config_dir {
-            command.env("CLAUDE_CONFIG_DIR", config_dir);
+            command.env(directory_variable, config_dir);
         }
 
         let mut child = command.spawn().map_err(|error| {
             ProxyError::authentication(format!(
                 "could not run `{}`: {error}",
-                self.program.display()
+                program.to_string_lossy()
             ))
         })?;
 
@@ -160,7 +195,7 @@ impl Client for ClaudeClient {
                 Err(error) => {
                     return Err(ProxyError::authentication(format!(
                         "could not wait for `{}`: {error}",
-                        self.program.display()
+                        program.to_string_lossy()
                     )));
                 }
             }
@@ -169,7 +204,7 @@ impl Client for ClaudeClient {
                 let _ = child.wait();
                 return Err(ProxyError::authentication(format!(
                     "`{}` did not finish within {} seconds, so the profile was left alone",
-                    self.program.display(),
+                    program.to_string_lossy(),
                     self.deadline.as_secs()
                 )));
             }
@@ -186,6 +221,7 @@ impl Client for ClaudeClient {
 /// to write — so it reads the profile and finds it fresh.
 pub fn under_lock(
     client: &dyn Client,
+    provider: Provider,
     lock_path: &Path,
     config_dir: Option<&Path>,
 ) -> Result<(), ProxyError> {
@@ -206,7 +242,7 @@ pub fn under_lock(
         ProxyError::authentication(format!("could not lock {}: {error}", lock_path.display()))
     })?;
 
-    let outcome = client.refresh(config_dir);
+    let outcome = client.refresh(provider, config_dir);
     // Released either way: a lock held past a failure would make the next
     // caller wait for a run that is not happening.
     let _ = file.unlock();
