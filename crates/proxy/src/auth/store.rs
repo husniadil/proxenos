@@ -485,7 +485,8 @@ impl StoredFile {
     fn unknown(&self, name: &str) -> ProxyError {
         if self.accounts.is_empty() {
             return ProxyError::invalid_request(format!(
-                "no account named `{name}`; none are stored — run `login`"
+                "no account named `{name}`; none are stored — declare a profile under \
+                 `[profiles]`, or store a key with `proxenos login --key --as NAME`"
             ));
         }
         let stored = self

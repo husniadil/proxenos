@@ -1690,7 +1690,8 @@ pub async fn refresh_usage_within(
 ) -> Result<Value, ProxyError> {
     let Some(authorizer) = authorizer(state) else {
         return Err(ProxyError::authentication(
-            "there are no credentials to ask with; run `login` first",
+            "there are no credentials to ask with; declare a profile under `[profiles]`, \
+             or store a key with `proxenos login --key --as NAME`",
         ));
     };
 

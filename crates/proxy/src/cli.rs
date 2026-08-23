@@ -78,22 +78,16 @@ pub enum SupervisorAction {
 
 #[derive(Debug, clap::Args)]
 pub struct LoginArgs {
-    /// Store a key read from stdin instead of starting an authorization.
+    /// Store a key read from stdin.
+    ///
+    /// The only thing `login` does. A subscription grant belongs to the program
+    /// whose profile holds it and is read from there (`proxy-behavior.md`
+    /// §8.4), so there is nothing else here to start.
     ///
     /// The secret arrives on stdin and never as an argument: an argument is
     /// visible to every process on the machine and lands in shell history.
     #[arg(long)]
     pub key: bool,
-    /// Store a Claude subscription token, guided.
-    ///
-    /// The same stored credential `--key --provider anthropic` produces, with
-    /// the part a person needs and a pipe does not: where the token comes
-    /// from, an entry that does not echo it, and a refusal before a credential
-    /// of the wrong kind is filed under a name that spends it later. A
-    /// non-terminal stdin still reads the token from the pipe, so nothing
-    /// scripted regresses.
-    #[arg(long = "setup-token", conflicts_with_all = ["key", "provider"])]
-    pub setup_token: bool,
     /// What to call the account this authorization produces.
     ///
     /// Without one it is named by the account id the grant carries. A label is
@@ -363,29 +357,12 @@ mod tests {
         );
     }
 
-    /// The guided flow is a front door over the same stored credential, so it
-    /// refuses the flags that would describe a different one.
+    /// `--setup-token` is gone with the flow behind it, and the parser is where
+    /// that has to be true: a flag still accepted here would take an operator
+    /// as far as a refusal from somewhere else, about something else.
     #[test]
-    fn login_setup_token_refuses_the_flags_that_contradict_it() {
-        let cli =
-            Cli::try_parse_from(["proxenos", "login", "--setup-token", "--as", "sub"]).unwrap();
-        let Command::Login(args) = cli.command else {
-            panic!("login should parse");
-        };
-        assert!(args.setup_token);
-        assert!(!args.key);
-
-        assert!(Cli::try_parse_from(["proxenos", "login", "--setup-token", "--key"]).is_err());
-        assert!(
-            Cli::try_parse_from([
-                "proxenos",
-                "login",
-                "--setup-token",
-                "--provider",
-                "anthropic",
-            ])
-            .is_err()
-        );
+    fn login_no_longer_takes_setup_token() {
+        assert!(Cli::try_parse_from(["proxenos", "login", "--setup-token"]).is_err());
     }
 
     /// A login names the account it produces, so an operator holding two of

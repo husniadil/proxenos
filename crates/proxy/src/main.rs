@@ -248,9 +248,8 @@ async fn login(args: cli::LoginArgs) -> Result<()> {
 
 /// Store a key, read from stdin.
 ///
-/// The reading half lives in `auth::key_login`, over the same `Guide` seam
-/// `--setup-token` uses, so the tty and pipe halves are testable without a
-/// terminal.
+/// The reading half lives in `auth::key_login`, behind a `Guide` seam, so the
+/// tty and pipe halves are testable without a terminal.
 async fn store_key(
     store: &Arc<dyn proxenos::auth::store::AccountStore>,
     label: Option<&str>,

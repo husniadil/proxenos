@@ -15,9 +15,9 @@
 //! refreshes on its own next turn; this side reads whatever it finds, and an
 //! expired grant is reported as expired rather than repaired.
 //!
-//! The decisions live here as pure functions over the file's text, in the shape
-//! `setup_token` uses: what is wrong with a credential is decided without I/O,
-//! and the caller supplies the path for the message.
+//! The decisions live here as pure functions over the file's text: what is
+//! wrong with a credential is decided without I/O, and the caller supplies the
+//! path for the message.
 
 use crate::auth::jwt;
 use crate::auth::store::Credentials;

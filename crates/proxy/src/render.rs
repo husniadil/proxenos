@@ -257,7 +257,10 @@ pub fn forgotten_account(result: &Value) -> String {
         .unwrap_or("nothing");
     match field(result, "serving").and_then(Value::as_str) {
         Some(serving) => format!("forgot {forgotten}; serving turns as {serving}"),
-        None => format!("forgot {forgotten}; no accounts left — run `proxenos login`"),
+        None => format!(
+            "forgot {forgotten}; no accounts left — declare a profile under `[profiles]`, \
+             or store a key with `proxenos login --key --as NAME`"
+        ),
     }
 }
 
@@ -347,7 +350,9 @@ pub fn status(result: &Value) -> String {
         };
         format!("auth       connected ({who}{kind}{provider})")
     } else {
-        "auth       not connected — run `proxenos login`".to_owned()
+        "auth       not connected — declare a profile under `[profiles]`, or store a key \
+         with `proxenos login --key --as NAME`"
+            .to_owned()
     });
 
     // Reported, never enforced. Models and efforts are gated on it, and a
