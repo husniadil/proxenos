@@ -322,7 +322,7 @@ fn models(state: &ControlState) -> Value {
             "curated": true,
             // Whose list this is. The renderer names it, and naming it from
             // the payload keeps the answer with the account it came from.
-            "provider": serving_provider(state),
+            "provider": selected_provider(state),
             "stale": false,
         });
     }
@@ -1322,6 +1322,10 @@ async fn select_account(state: &ControlState, params: Option<&Value>) -> Result<
     // What to go back to if the account cannot be served. Read before the
     // switch, because after it there is nothing left that remembers.
     let previous = serving_name(state);
+    // The provider on each side of the move, read before the switch for the
+    // same reason: afterwards there is nothing left that remembers which
+    // provider was answering.
+    let previous_provider = selected_provider(state);
 
     state.credentials.select(name)?;
 
@@ -1360,17 +1364,13 @@ async fn select_account(state: &ControlState, params: Option<&Value>) -> Result<
 
     Ok(json!({
         "selected": name,
-        // §9.4 — which provider the selected account is on. One `accounts
-        // --use` moves *every* unpinned turn onto that provider and its
-        // subscription; the operator asked for it, but the command reads
-        // smaller than what it does, and only the daemon knows the answer.
-        "provider": state
-            .credentials
-            .accounts()
-            .unwrap_or_default()
-            .into_iter()
-            .find(|account| account.name == name)
-            .map(|account| account.provider),
+        // Which provider now answers, and which one did a moment ago. A switch
+        // within one provider changes whose quota is spent; a switch across
+        // them changes the backend, the path a turn takes and the subscription
+        // drawn down, and the two cannot be reported by the same sentence.
+        // Absent where the store does not say, rather than guessed.
+        "provider": serving_provider(state),
+        "previous_provider": previous_provider,
         // The catalog is one account's menu (`proxy-behavior.md` §7.0), so it
         // is asked for again as the account now serving. Said out loud because
         // a fetch that failed leaves the previous account's list in force, and
@@ -1487,6 +1487,21 @@ fn serving_name(state: &ControlState) -> Option<String> {
         .into_iter()
         .find(|account| account.selected)
         .map(|account| account.name)
+}
+
+/// Which provider the account serving turns is spent against, or nothing where
+/// no account is serving. Distinct from `serving_provider`, which answers for
+/// what a turn would be dispatched to and so falls back to the default: a
+/// switch reports what the store actually says, and an absent answer is the
+/// first selection rather than a provider to name.
+fn selected_provider(state: &ControlState) -> Option<&'static str> {
+    state
+        .credentials
+        .accounts()
+        .ok()?
+        .into_iter()
+        .find(|account| account.selected)
+        .map(|account| account.provider)
 }
 
 /// Fetch the catalog again for the account now serving turns.

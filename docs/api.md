@@ -145,7 +145,7 @@ authorization runs against one provider's server, so a grant has nothing to
 choose, and naming a provider without `--key` is refused rather than ignored. `--as NAME` is what to call it locally, for
 an operator holding more than one; without it the account id the grant carries
 names it. `accounts` lists what is stored, marking the one serving turns, and
-`--use NAME` switches to another. `--rename FROM TO` changes what an account is
+`--use NAME` switches to another, and its confirmation says how far the switch moved: a switch within one provider changes whose quota is spent and reads `still on codex`, while one across providers changes which backend answers, which path the turn takes and which subscription is drawn down, and names both sides — `codex to anthropic`. The first account stored has nothing serving before it, so it is told which provider now serves and nothing about a move. `--rename FROM TO` changes what an account is
 called here, leaving its grant and the id the backend knows it by alone — a
 login carrying no `--as` names the account by that id, and correcting it should
 not cost an authorization. `--forget NAME` drops one, leaving the rest usable;
@@ -315,7 +315,6 @@ account it names (`proxy-behavior.md` §7.1), so a daemon can hold two live
 figures at once. Each is held under the account that earned it and reported
 beside the serving one, with how it was come by — riding a turn, or asked for
 over the socket — and the moment it was taken. An account with no figure says
-<<<<<<< HEAD
 so, and says why: no turn as it recorded by this daemon yet, a key holding no
 subscription entitlement, or a provider that does not report a quota to this
 proxy at all. That first reason is scoped to the daemon on purpose
@@ -323,23 +322,6 @@ proxy at all. That first reason is scoped to the daemon on purpose
 makes one — reads the same quota headers and exits with them, so the account
 has spent something the daemon never saw, and a line claiming none had been
 spent would be false.
-=======
-so, and says why: no turn made as it yet, a key that has no ceiling to report,
-or a provider that does not report a quota to this proxy at all.
-
-**A key's row states the absence of a ceiling, not the absence of a figure.** A
-key is metered per token, so it is the one account whose spend accrues with
-every turn — and it is the one with no percentage to show. Reported only as
-holding no subscription quota, that row reads as the one with nothing to watch,
-beside a subscription showing a number. It states instead that nothing bounds
-its spend, followed by the one quantity available without a price list: the
-tokens this daemon has served as the account, summed from the counts upstream
-put on each completed turn. No cost is stated and none is estimated. The count
-starts at zero when the daemon starts and cannot see a turn made anywhere else,
-so it is a floor under the account's real spend and the row says so. Where a key
-is the only account held, the same reason is what the daemon-wide line gives,
-since nothing is repeated under its own name below it.
->>>>>>> hdis/task-24
 
 **A second-provider account earns its figure the same way**, from the
 `anthropic-ratelimit-unified-*` headers on the response to a relayed turn
@@ -801,7 +783,7 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 | `status` | connection state, whether the grant has been **refused**, plan and which source reported it, the tier mapping and the effort ceiling, any mapped model the catalog withholds, whether the catalog was authoritative, the client policy in effect, and the build and `instance` serving the socket | yes |
 | `accounts.forget` | forgets one account — the selected one, or `{"account": name}` — and answers with the name it cleared and the one serving turns afterwards; the rest stay usable, and an idle account's removal leaves the serving grant's quota alone | no — was `disconnect` |
 | `accounts` | every stored account, what kind of credential each holds, and which one serves turns; no tokens | no — v0.3 |
-| `accounts.select` | `{"account": name}`, the account every following turn is made as, the `provider` it is on — one select moves every unpinned turn onto that provider's subscription — whether the catalog was refetched for it, and the tier mapping now in force; refuses, and moves nothing, where that account's mapping names a model its catalog does not have, naming whose menu refused and how to give that account its own mapping | no — v0.3 |
+| `accounts.select` | `{"account": name}`, the account every following turn is made as, the provider now serving and the one serving a moment ago (absent where nothing was) — one select moves every unpinned turn onto that provider's subscription — whether the catalog was refetched for it, and the tier mapping now in force; refuses, and moves nothing, where that account's mapping names a model its catalog does not have, naming whose menu refused and how to give that account its own mapping | no — v0.3 |
 | `accounts.rename` | `{"account": from, "name": to}`, the name this daemon calls an account by, and whether an account section moved with it; the grant and the account id are untouched | no — v0.3 |
 | `models` | catalog, whether it is the fallback list, and whether it was fetched for an account other than the one serving turns | yes |
 | `tiers` | tier mapping | no — was `tiers.get` |

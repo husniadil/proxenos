@@ -655,7 +655,15 @@ fn selecting_an_account_says_which_provider_now_serves() {
     }));
     assert!(rendered.contains("personal-relay"), "{rendered}");
     assert!(rendered.contains("anthropic"), "{rendered}");
-    assert!(rendered.contains("subscription"), "{rendered}");
+
+    // And where it is a move rather than a first selection, the line says what
+    // the move costs: a different backend, on a different subscription.
+    let moved = proxenos::render::selected_account(&serde_json::json!({
+        "selected": "personal-relay",
+        "provider": "anthropic",
+        "previous_provider": "codex",
+    }));
+    assert!(moved.contains("subscription"), "{moved}");
 
     // A daemon that could not name the provider says the part it knows and
     // invents nothing.
