@@ -405,3 +405,62 @@ fn opens_table(line: &str, account: Option<&str>, suffix: &str) -> bool {
     };
     rest == format!("{suffix}]")
 }
+
+/// Declare a borrowed profile, appended to the end of the file.
+///
+/// Appending a table header is the one safe append: a header ends whatever
+/// table preceded it, so the keys under it cannot land in somebody else's
+/// table (see the note at the top of this file).
+///
+/// `path` absent writes no `path` key, which is what says *the stock profile*
+/// — a different profile from one naming the stock directory (§8.4). The
+/// difference is not something this function may resolve.
+pub fn add_profile(
+    document: &str,
+    name: &str,
+    provider: crate::auth::store::Provider,
+    path: Option<&std::path::Path>,
+) -> Result<String, ProxyError> {
+    if let Some(occupied) = document
+        .lines()
+        .find(|line| profile_header(line, name).is_some())
+    {
+        return Err(ProxyError::invalid_request(format!(
+            "the configuration file already declares `{}`. Edit that entry, or choose \
+             another name.",
+            occupied.trim()
+        )));
+    }
+
+    let mut document = with_trailing_newline(document.to_owned());
+    if !document.ends_with("\n\n") {
+        document.push('\n');
+    }
+    document.push_str(&format!("[profiles.{}]\n", key(name)));
+    document.push_str(&format!("provider = \"{}\"\n", provider.as_str()));
+    if let Some(path) = path {
+        document.push_str(&format!(
+            "path     = {}\n",
+            string(&path.display().to_string())
+        ));
+    }
+    Ok(document)
+}
+
+/// The remainder of a header line that opens this profile's table.
+///
+/// Both spellings, for the same reason `account_header` recognizes both: TOML
+/// allows a bare key and a quoted one for the same table.
+fn profile_header(line: &str, name: &str) -> Option<String> {
+    let rest = line.trim().strip_prefix("[profiles.")?;
+    let rest = rest
+        .strip_prefix(&format!("\"{name}\""))
+        .or_else(|| rest.strip_prefix(name))?;
+    (rest == "]").then(|| rest.to_owned())
+}
+
+/// A TOML basic string. A profile directory is often under a path with a space
+/// in it, and on Windows one with backslashes.
+fn string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}

@@ -1708,6 +1708,20 @@ else, the directory keeps its name, and every turn afterwards is billed to an
 account nobody pointed at them. A profile that cannot be read is never marked —
 it has not changed identity, it has not been read.
 
+**A second profile is signed in by running the program that will own it.**
+`login --profile` creates a directory, runs that program's own login against it
+with the variable that names it, and afterwards reads the profile to find out
+whether there is anything to declare. It is the rule the rest of this section
+follows, applied one step earlier: the client authenticates, the client writes,
+and this side learns the result by reading. Nothing here sees a token, and a
+directory that holds no grant is declared nowhere.
+
+Two cases fall out of that shape rather than being features of their own. A
+directory that is already signed in is adopted without running anything, which
+is how a profile made elsewhere is taken on. And where there is no terminal to
+answer the login's prompts, the command is printed with its variable already
+attached instead of being started somewhere it can only hang.
+
 **With nothing declared, the stock profile of each program is read.** A first
 run should not make an operator write down what the programs on the machine
 already know: `[profiles]` empty means look at the profile each client uses

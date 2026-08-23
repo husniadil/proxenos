@@ -88,18 +88,37 @@ pub struct LoginArgs {
     /// visible to every process on the machine and lands in shell history.
     #[arg(long)]
     pub key: bool,
+    /// Sign in to a new profile of the owning program, and declare it.
+    ///
+    /// Runs that program's own login against a directory this daemon then
+    /// borrows the grant from. Nothing here sees a token: the client
+    /// authenticates and writes, and this side reads the profile afterwards
+    /// and writes the `[profiles]` entry naming it.
+    #[arg(long, conflicts_with = "key")]
+    pub profile: bool,
+    /// Where the new profile lives. Only with `--profile`.
+    ///
+    /// Absent, it goes under this daemon's own directory. A path given here is
+    /// what gets declared, so it is also how an existing profile directory —
+    /// one another tool made — is signed into and adopted.
+    // `conflicts_with` rather than `requires`: a flag that defaults to false
+    // reads as present to clap, so requiring `--profile` would never refuse
+    // anything. What has to be refused is the pairing that means nothing — a
+    // key has no directory — and that is a conflict.
+    #[arg(long, value_name = "DIR", conflicts_with = "key")]
+    pub path: Option<std::path::PathBuf>,
     /// What to call the account this authorization produces.
     ///
     /// Without one it is named by the account id the grant carries. A label is
     /// a local name for the account and never reaches the backend.
     #[arg(long = "as", value_name = "NAME")]
     pub label: Option<String>,
-    /// Which provider's endpoints the stored key is spent against.
+    /// Which provider this login is about.
     ///
-    /// Only meaningful with `--key`: an authorization is performed against one
-    /// provider's server, so the grant it produces has nothing to choose. The
-    /// default is the provider this project started with, so a login that
-    /// names none stores what it always stored.
+    /// With `--key`, whose endpoints the stored key is spent against. With
+    /// `--profile`, which program is run to sign the profile in. The default
+    /// is the provider this project started with, so a login that names none
+    /// does what it always did.
     #[arg(long, value_enum, default_value_t = proxenos::auth::store::Provider::Codex)]
     pub provider: proxenos::auth::store::Provider,
 }
@@ -355,6 +374,34 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    /// The two kinds of login are different verbs wearing one name, and the
+    /// parser is what keeps them apart: one stores a secret this daemon keeps,
+    /// the other runs somebody else's client. A path belongs only to the
+    /// second.
+    #[test]
+    fn login_separates_signing_in_to_a_profile_from_storing_a_key() {
+        let cli = Cli::try_parse_from([
+            "proxenos",
+            "login",
+            "--profile",
+            "--as",
+            "work",
+            "--provider",
+            "anthropic",
+        ])
+        .unwrap();
+        let Command::Login(args) = cli.command else {
+            panic!("login should parse");
+        };
+        assert!(args.profile);
+        assert!(!args.key);
+        assert_eq!(args.label.as_deref(), Some("work"));
+
+        assert!(Cli::try_parse_from(["proxenos", "login", "--profile", "--key"]).is_err());
+        // A path names where a profile goes, and a key has no directory.
+        assert!(Cli::try_parse_from(["proxenos", "login", "--key", "--path", "/tmp/x"]).is_err());
     }
 
     /// `--setup-token` is gone with the flow behind it, and the parser is where

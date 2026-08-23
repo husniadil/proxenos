@@ -71,6 +71,16 @@ vanished. Keys in that file keep working exactly as they did.
   refuses with `could not run \`claude\``. The same key settles the version the
   second provider's quota request is made as.
 
+- **`login --profile`, which signs in to a second profile without you having to
+  know where a profile lives.** It runs the owning program's own login —
+  `claude auth login` or `codex login` — against a directory (yours with
+  `--path`, else one under this daemon's own directory), reads the profile
+  afterwards, and declares it in `[profiles]` only if it holds a grant. Nothing
+  here sees a token. A directory already signed in is adopted rather than signed
+  in again, and a run with no terminal prints the command with its environment
+  variable attached instead of hanging on prompts nobody can answer. `login`
+  now has to be told which kind it is: `--profile` or `--key`.
+
 - **A first run with nothing to configure.** `[profiles]` empty now means the
   stock profile of each program — what `claude` and `codex` themselves use with
   no variable set — and whichever is signed in becomes an account. One signed-in

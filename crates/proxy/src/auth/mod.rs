@@ -6,5 +6,6 @@ pub mod borrowed;
 pub mod grants;
 pub mod jwt;
 pub mod key_login;
+pub mod profile_login;
 pub mod selection;
 pub mod store;

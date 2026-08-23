@@ -96,8 +96,11 @@ the vocabulary above.
 
 ```
 proxenos run        start the daemon (--detach: in the background)
-proxenos login      store an API key, read from stdin (--as NAME names it,
-                    --provider names which provider it is spent against)
+proxenos login      --profile: sign in to a new profile of the owning program
+                    and declare it (--as NAME names it, --provider says which
+                    program, --path says where; absent it goes under this
+                    daemon's own directory). --key: store an API key, read
+                    from stdin
 proxenos accounts   stored accounts (--use switches, --rename, --forget drops)
                     one row per account: a `*` on the one serving turns, the
                     name, the address or `key`, and the provider — named on
@@ -118,14 +121,34 @@ proxenos record     capture exchanges as fixtures
 Every verb except `run`, `login`, and `doctor` operates through the control
 socket (§3) against a running daemon.
 
-`login` stores **a key, and only a key**. A subscription grant is not this
-daemon's to obtain: it belongs to the program whose profile holds it, and is
-read from there (`proxy-behavior.md` §8.4). Running `login` without `--key` is
-refused, and the refusal says to sign in over there and declare the profile
-under `[profiles]` instead. There is no authorization flow here, no callback
-port, and no `--setup-token`: what that flag existed to store is what a
-borrowed Claude profile now supplies, with a refresh behind it rather than a
-token that silently stops working.
+`login` is two verbs wearing one name, and it has to be told which. **Neither
+obtains a subscription grant of this daemon's own**; there is no authorization
+flow here, no callback port, and no `--setup-token`.
+
+`--key` stores an API key, and only that: a key belongs to nobody and has to be
+kept somewhere.
+
+`--profile` signs in to a profile the daemon will then borrow from
+(`proxy-behavior.md` §8.4). It runs that program's own login — `claude auth
+login` or `codex login` — against a directory, with the same environment
+variable the daemon later resolves the grant from, so what was signed in and
+what is read cannot drift apart. Nothing here sees a token. Afterwards the
+profile is read, and only a directory that holds a grant is written into
+`[profiles]`.
+
+A directory that is **already** signed in is adopted rather than signed in
+again: no client is run, and the entry is written. That is how a profile
+another tool made is taken on, and how a second run finishes the job after the
+operator ran the printed line themselves.
+
+Where there is no terminal to answer a login's prompts, the command is printed
+instead of run — with the environment variable already on it — along with the
+line that declares the profile afterwards. A client that wants a browser and a
+keyboard, started from something with neither, hangs with nothing said.
+
+A declared profile reaches the daemon at its next start: `[profiles]` is read
+once, at startup (§4). The verb says so rather than leaving the operator to
+find out from an account that never appeared.
 
 Storing a key never moves which account pays. A lone account serves turns
 without anything recorded, so the choice is written down before a second
