@@ -1664,6 +1664,30 @@ async fn forget_account(state: &ControlState, params: Option<&Value>) -> Result<
 /// reads one account by name and neither reads nor writes the selection, so
 /// nothing about which account serves turns moves here.
 async fn refresh_usage(state: &ControlState) -> Result<Value, ProxyError> {
+    refresh_usage_within(state, REFRESH_BUDGET).await
+}
+
+/// How long one sweep may spend asking owning clients to refresh.
+///
+/// One client run for the whole sweep, not one per account. A profile is asked
+/// by starting the program that owns it and waiting for it to exit (§8.4), and
+/// four lapsed profiles asked in turn is four minutes of a caller that looks
+/// hung — nothing here or in the CLI times out. So the first account that
+/// needs it may spend the lot, and the ones after it are reported without
+/// being asked.
+pub const REFRESH_BUDGET: std::time::Duration = crate::auth::borrowed::poke::DEADLINE;
+
+/// What a row says about an account the budget ran out before.
+const NOT_ASKED: &str = "It was not asked to refresh: one sweep spends at most one client run,                          and an earlier account used it. Run the client once in that profile, or                          ask again.";
+
+/// The sweep, with its budget stated rather than assumed.
+///
+/// Separate so the bound can be asserted on without a test that waits a minute
+/// to watch it hold.
+pub async fn refresh_usage_within(
+    state: &ControlState,
+    budget: std::time::Duration,
+) -> Result<Value, ProxyError> {
     let Some(authorizer) = authorizer(state) else {
         return Err(ProxyError::authentication(
             "there are no credentials to ask with; run `login` first",
@@ -1676,13 +1700,17 @@ async fn refresh_usage(state: &ControlState) -> Result<Value, ProxyError> {
     // credential.
     let client = reqwest::Client::new();
 
+    let started = std::time::Instant::now();
     let mut rows = Vec::with_capacity(accounts.len());
     for account in &accounts {
+        // Read before the ask, not after: what decides whether this account
+        // may run a client is what earlier accounts have already spent.
+        let may_ask = started.elapsed() < budget;
         // Asked for one at a time. A refusal, an expiry, or a dead endpoint
         // belongs to the account it happened to, and a sweep that abandoned
         // itself on the first one would leave every later row blank — which
         // reads as "no quota left to show" rather than "not asked".
-        let mut row = match ask_for(state, &authorizer, &client, account).await {
+        let mut row = match ask_for(state, &authorizer, &client, account, may_ask).await {
             Ok(snapshot) => {
                 // Recorded where the stream path records its own, under the
                 // account it was asked for as, and saying it was asked for
@@ -1691,6 +1719,12 @@ async fn refresh_usage(state: &ControlState) -> Result<Value, ProxyError> {
                     .usage
                     .record_for(Some(&account.name), &snapshot, crate::usage::Source::Fetch);
                 snapshot.to_json()
+            }
+            // Only on a grant, and only where the budget is the reason it
+            // could not be asked: appending this to a key's row would explain
+            // a refusal that has another cause entirely.
+            Err(detail) if !may_ask && account.kind == "grant" => {
+                json!({ "known": false, "detail": format!("{detail} {NOT_ASKED}") })
             }
             Err(detail) => json!({ "known": false, "detail": detail }),
         };
@@ -1730,6 +1764,7 @@ async fn ask_for(
     authorizer: &crate::auth::authorize::AccountAuthorizer,
     client: &reqwest::Client,
     account: &crate::auth::store::Account,
+    may_ask: bool,
 ) -> Result<crate::usage::Snapshot, String> {
     // Only where a figure is possible. A key holds no subscription
     // entitlement, and the long-lived subscription token that wears the same
@@ -1750,12 +1785,19 @@ async fn ask_for(
     //
     // Off the runtime, because it runs a process and waits for it. Nothing
     // else on this daemon should stop while a client starts up.
-    let credentials = Arc::clone(&state.credentials);
-    let asked = account.name.clone();
-    tokio::task::spawn_blocking(move || credentials.refresh_borrowed(&asked))
-        .await
-        .map_err(|error| format!("could not ask for a refresh: {error}"))?
-        .map_err(|error| error.message)?;
+    //
+    // Where the sweep's budget is spent the account is asked for anyway,
+    // without the refresh. A grant that is still live answers as it always
+    // did; a lapsed one refuses, and the row says both why it refused and why
+    // nothing was run for it.
+    if may_ask {
+        let credentials = Arc::clone(&state.credentials);
+        let asked = account.name.clone();
+        tokio::task::spawn_blocking(move || credentials.refresh_borrowed(&asked))
+            .await
+            .map_err(|error| format!("could not ask for a refresh: {error}"))?
+            .map_err(|error| error.message)?;
+    }
 
     let authorization = authorizer
         .authorize(Some(&account.name))

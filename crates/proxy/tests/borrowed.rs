@@ -1816,3 +1816,98 @@ fn a_keychain_item_that_is_not_there_reads_as_absent() {
 
     assert_eq!(read, None);
 }
+
+// --- what one refresh sweep is allowed to spend ---------------------------
+
+/// A state whose store is these profiles, and whose quota endpoints answer
+/// nothing: the assertion is about what was run, not about what was fetched.
+fn state_over(accounts: Arc<Accounts>) -> proxenos::control::handler::ControlState {
+    let tokens = Arc::new(proxenos::auth::grants::Grants::new(
+        Arc::clone(&accounts) as Arc<dyn proxenos::auth::store::CredentialStore>,
+        Arc::new(proxenos::auth::grants::SystemClock),
+    ));
+    proxenos::control::handler::ControlState {
+        port: 8787,
+        policy: Arc::new(proxenos::policy::Policy::new(
+            proxenos::policy::Snapshot::new(
+                Vec::new(),
+                None,
+                proxenos::config::CrossAccountTiers::Refused,
+            ),
+        )),
+        catalog: Arc::new(proxenos::catalog::CatalogSource::fixed(
+            proxenos::catalog::Catalog::parse(r#"{"data":[]}"#, 95.0).expect("a catalog"),
+        )),
+        credentials: accounts as Arc<dyn proxenos::auth::store::AccountStore>,
+        capture: Arc::new(proxenos::recorder::Switches::default()),
+        usage: Arc::new(proxenos::usage::UsageStore::default()),
+        config: Arc::new(proxenos::config::Config::default()),
+        shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
+        tokens: Some(tokens),
+        // Empty, and never reached with a lapsed grant: the authorization
+        // refuses before a request is built. No test may reach the network.
+        usage_endpoint: String::new(),
+        anthropic_usage_endpoint: String::new(),
+        sessions: Arc::new(proxenos::session::SessionStore::new()),
+        config_path: None,
+    }
+}
+
+/// Two lapsed profiles, so the sweep has something to spend its budget on.
+fn two_lapsed_profiles(dir: &Path, client: Arc<FakeClient>) -> Arc<Accounts> {
+    let first = profile("first", Provider::Anthropic, Some("/profiles/first"));
+    let second = profile("second", Provider::Anthropic, Some("/profiles/second"));
+    Arc::new(accounts_over(
+        dir,
+        vec![first.clone(), second.clone()],
+        &[
+            (&first, claude_blob(1, 4_000_000_000)),
+            (&second, claude_blob(1, 4_000_000_000)),
+        ],
+        client,
+    ))
+}
+
+/// A sweep asks each lapsed profile in turn while it has budget left. Both
+/// profiles here are lapsed and the client returns at once, so both are asked.
+#[tokio::test]
+async fn a_sweep_asks_every_lapsed_profile_it_has_budget_for() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = Arc::new(FakeClient::default());
+    let state = state_over(two_lapsed_profiles(dir.path(), Arc::clone(&client)));
+
+    proxenos::control::handler::refresh_usage_within(
+        &state,
+        proxenos::control::handler::REFRESH_BUDGET,
+    )
+    .await
+    .expect("the sweep answers");
+
+    assert_eq!(client.runs.lock().expect("not poisoned").len(), 2);
+}
+
+/// With the budget already spent, nothing is run at all — and the rows say so,
+/// rather than reporting a figure that was never asked for. This is the bound:
+/// asking a profile means starting a program and waiting for it, and a sweep
+/// that did that once per account has no ceiling a caller can rely on.
+#[tokio::test]
+async fn a_spent_budget_asks_nothing_and_says_why() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = Arc::new(FakeClient::default());
+    let state = state_over(two_lapsed_profiles(dir.path(), Arc::clone(&client)));
+
+    let answer =
+        proxenos::control::handler::refresh_usage_within(&state, std::time::Duration::ZERO)
+            .await
+            .expect("the sweep answers");
+
+    assert!(client.runs.lock().expect("not poisoned").is_empty());
+
+    let rows = answer["accounts"].as_array().expect("a row per account");
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row["known"], serde_json::json!(false));
+        let detail = row["detail"].as_str().expect("a sentence");
+        assert!(detail.contains("not asked to refresh"), "{detail}");
+    }
+}

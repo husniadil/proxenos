@@ -1615,6 +1615,14 @@ free, before anything is run. Where the client never recorded it, the profile
 is asked anyway: unknown is not dead, and if it turns out to be dead the
 operator has to sign in again either way.
 
+**One run for a whole sweep, however many profiles it covers.** `usage
+--refresh` asks about every account, and asking means starting a program and
+waiting for it — so a per-account bound is no bound at all: four lapsed
+profiles would be four minutes of a caller with nothing to time it out. The
+budget is one client run, spent by whichever account needs it first. The rest
+are asked for their figures without a refresh, and each row says it was not
+asked rather than reporting a figure nobody obtained.
+
 **One run per profile, under a lock held for its whole duration.** Ten callers
 arriving at once produce one client, not ten: the rest block on the lock, and
 by the time they take it the run has already written whatever it was going to
