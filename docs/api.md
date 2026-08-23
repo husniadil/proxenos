@@ -1249,6 +1249,21 @@ necessarily the build that asked: one file is both, and replacing it does not
 restart a running daemon. The CLI says so only when the two differ, because a
 line printed on every run is one nobody reads on the run that matters.
 
+**`version` carries a build id, and is compared for equality or not at all.**
+The string is the version number, a `+`, the short commit the binary was built
+from — `unknown` where there was no git to ask, a tarball build being the case
+— and `-dirty` where the tree had uncommitted changes: `0.12.0+ab12cd3`,
+`0.12.0+ab12cd3-dirty`, `0.12.0+unknown`. Two builds of one version number are
+therefore different strings, which is what makes "the binary is new and nothing
+changed" answerable by `status` and `stop` (§2.4) rather than only by a release
+bump. **A caller must not parse it**: §6 already says not to compare versions,
+and the suffix is exactly the part a comparison would get wrong. The same
+string is what `--version`, the `daemon` line of `status`, both halves of
+`stop`, and the notice from `supervisor install` (§2.6) print. It is not what
+goes upstream — `[upstream].client_version` is a claim about a client the
+backend filters its catalog by, and a build id there would describe a different
+program.
+
 **`env` keeps its name although its payload now carries more than an
 environment.** The two halves are named inside it — `variables` and `settings` —
 and a caller reading only the first is untouched by the second. Renaming the

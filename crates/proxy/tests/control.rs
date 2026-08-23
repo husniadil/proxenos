@@ -2240,7 +2240,7 @@ fn status_names_a_version_skew_between_the_daemon_and_this_binary() {
         "the daemon's version has to appear: {rendered}"
     );
     assert!(
-        rendered.contains(env!("CARGO_PKG_VERSION")),
+        rendered.contains(proxenos::version::build()),
         "and this binary's, so the two can be compared at a glance: {rendered}"
     );
     assert!(
@@ -2256,7 +2256,7 @@ async fn status_is_quiet_when_the_daemon_is_this_binary() {
     let harness = Harness::start().await;
     let result = harness.call("status").await.unwrap();
 
-    assert_eq!(result["version"], json!(env!("CARGO_PKG_VERSION")));
+    assert_eq!(result["version"], json!(proxenos::version::build()));
     let rendered = render::status(&result);
     assert!(
         !rendered.to_lowercase().contains("restart the daemon"),
@@ -2300,7 +2300,7 @@ async fn a_stop_answers_first_and_releases_the_run_loop_after() {
     assert_eq!(result["stopping"], json!(true));
     assert_eq!(
         result["version"],
-        json!(env!("CARGO_PKG_VERSION")),
+        json!(proxenos::version::build()),
         "the answer says which build is going away: {result}"
     );
 
@@ -2331,7 +2331,7 @@ async fn nothing_arms_a_stop_that_was_not_asked_for() {
 fn status_names_an_older_build_even_when_the_version_string_matches() {
     let same_version_older_build = json!({
         "base_url": "http://127.0.0.1:8787",
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": proxenos::version::build(),
         "auth": { "connected": false },
     });
 

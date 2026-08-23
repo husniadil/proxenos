@@ -141,6 +141,20 @@ vanished. Keys in that file keep working exactly as they did.
 
 ### Changed
 
+- **Every version this proxy prints carries a build id.** `0.12.0+ab12cd3`,
+  with `-dirty` where the tree had uncommitted changes and `+unknown` where
+  there was no git to ask — read at build time, since a binary that has been
+  installed or shipped has no checkout to consult. It is what `--version`, the
+  `daemon` line of `status`, `stop`'s before and after, the `supervisor
+  install` notice, and `status.version` over the socket all say. The point is
+  the question those verbs are asked after a rebuild: two builds of one version
+  number used to be one string, so `stop` reported "on the same build" for a
+  daemon that was demonstrably not it. A caller must not parse the string —
+  `docs/api.md` §6 already said not to compare versions, and the suffix is the
+  part a comparison gets wrong. What goes upstream is unchanged:
+  `[upstream].client_version` names a client the backend filters its catalog
+  by, and a build id there would describe a different program.
+
 - **`stop` names the supervisor that brought the daemon back.** Under launchd
   a stop is how a running daemon is replaced by the build on disk, and
   reporting that as "something started it again" describes the mechanism the

@@ -5,7 +5,10 @@ use clap::Subcommand;
 
 /// Run Claude Code against models served over a ChatGPT subscription.
 #[derive(Debug, Parser)]
-#[command(name = "proxenos", version, about, long_about = None)]
+// The build id rides along: `--version` is what an operator reads to answer
+// "is the binary on disk the one I just built", and a version number alone
+// cannot answer it.
+#[command(name = "proxenos", version = proxenos::version::build(), about, long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

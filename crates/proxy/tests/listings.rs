@@ -592,7 +592,7 @@ fn a_daemon() -> serde_json::Value {
             "haiku": "gpt-5.6-luna",
             "fable": { "model": "gpt-5.5", "account": "personal-codex" },
         },
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": proxenos::version::build(),
         "pid": 4711,
         "supervised": true,
         "client": { "deny_skills": [] },
@@ -655,7 +655,7 @@ fn the_daemon_line_names_the_build_the_process_and_its_supervisor() {
     assert!(
         rendered.contains(&format!(
             "daemon     {} (pid 4711), supervised",
-            env!("CARGO_PKG_VERSION")
+            proxenos::version::build()
         )),
         "{rendered}"
     );

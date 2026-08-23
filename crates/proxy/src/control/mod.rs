@@ -94,9 +94,13 @@ pub fn ensure_addressable(path: &Path) -> Result<(), ProxyError> {
     )))
 }
 
-/// This binary's version. One file is both the daemon and the CLI, so the
-/// daemon answering a socket is not necessarily the build that asked.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// This binary's version, build id included. One file is both the daemon and
+/// the CLI, so the daemon answering a socket is not necessarily the build that
+/// asked — and within one version number the id is the only thing that says so
+/// (`crate::version`).
+pub fn version() -> &'static str {
+    crate::version::build()
+}
 
 /// Refuse a payload from a daemon that predates client policy.
 ///

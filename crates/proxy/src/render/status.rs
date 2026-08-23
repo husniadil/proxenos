@@ -368,9 +368,9 @@ pub fn status_at(result: &Value, now: u64) -> String {
     match (daemon_version, older_build) {
         // Across releases the string is the plain answer, and it names both
         // sides so the reader can tell which way round it is.
-        (Some(daemon), _) if daemon != crate::control::VERSION => lines.push(format!(
+        (Some(daemon), _) if daemon != crate::control::version() => lines.push(format!(
             "version    daemon {daemon}, this binary {} — restart the daemon",
-            crate::control::VERSION
+            crate::control::version()
         )),
         // Old enough that it does not report a version at all. Saying which
         // number it did not report would be inventing one.

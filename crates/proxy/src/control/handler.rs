@@ -136,7 +136,7 @@ pub async fn dispatch(
         // daemon is replaced by the build on disk.
         "shutdown" => {
             state.shutdown.request();
-            Ok(json!({ "stopping": true, "version": VERSION }))
+            Ok(json!({ "stopping": true, "version": version() }))
         }
         "record.stop" => {
             state.capture.stop();
@@ -173,8 +173,12 @@ fn any_tier_translates(state: &ControlState, accounts: &[crate::auth::store::Acc
 
 /// This binary's version, reported so a caller can see whether the daemon
 /// answering it is the same build it was invoked from. One file is both, and
-/// replacing it on disk does not restart what is already running.
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// replacing it on disk does not restart what is already running — so the
+/// string carries a build id, and two builds of one version number differ
+/// (`crate::version`).
+fn version() -> &'static str {
+    crate::version::build()
+}
 
 /// Minted once, when this process starts.
 ///
@@ -314,7 +318,7 @@ fn status(state: &ControlState) -> Value {
         "catalog_account": catalog.fetched_for.clone(),
         // The build actually serving this socket, which is not necessarily the
         // build the caller was invoked from.
-        "version": VERSION,
+        "version": version(),
         // This process, as distinct from any other that serves the same socket.
         "instance": &*INSTANCE,
         // The process serving it, so `status` names what `stop`, `supervisor`

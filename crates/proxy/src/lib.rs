@@ -25,3 +25,4 @@ pub mod supervisor;
 pub mod surface;
 pub mod upstream;
 pub mod usage;
+pub mod version;
