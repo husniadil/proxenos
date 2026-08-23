@@ -111,7 +111,7 @@ proxenos settings   the same configuration, as one settings document
 proxenos exec       run a command with that configuration applied
 proxenos stop       ask the running daemon to stop
 proxenos doctor     probe backend capabilities (--live answers from the real one)
-proxenos usage      what quota is left
+proxenos usage      what quota is left (--refresh asks, per account)
 proxenos statusline wrap a status-line script, adding that quota
 proxenos record     capture exchanges as fixtures
 ```
@@ -313,6 +313,16 @@ anything about the response, so the figure rides along with a turn already being
 made and is never polled. Before any turn has been made it says so rather than
 answering with zeroes. `--json` emits the snapshot as it stands, for a status
 line.
+
+`--refresh` **asks** before reporting: it calls `usage.refresh` (§3), which
+sweeps every stored account that can hold a figure, each on its own credential
+and each recorded under its own name, and then reports the `usage` document as
+it now stands. It spends one request per askable account, which is why it is
+opted into: a bare `usage` asks for nothing and stays the cheap read. Nothing
+about which account serves turns moves, a failure belongs to the row it
+happened on, and an unselected account's expired grant is never refreshed. The
+document `--json` emits is the same one either way — asking changes the figures
+in it, never its shape.
 
 **A figure per account, not per daemon.** A pinned tier's turns spend the
 account it names (`proxy-behavior.md` §7.1), so a daemon can hold two live

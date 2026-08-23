@@ -46,7 +46,7 @@ pub enum Command {
     Exec(ExecArgs),
     /// Probe backend capabilities.
     Doctor(DoctorArgs),
-    /// What quota is left, as of the last turn.
+    /// What quota is left: what the last turn reported, or what asking finds.
     Usage(UsageArgs),
     /// Wrap a status-line script, adding the quota the client cannot supply.
     Statusline(StatuslineArgs),
@@ -196,6 +196,13 @@ pub struct UsageArgs {
     /// Emit the raw snapshot, for a status line or a script.
     #[arg(long)]
     pub json: bool,
+    /// Ask the backend for a figure per account before reporting.
+    ///
+    /// Costs one request per account that can be asked, so it is what an
+    /// operator opts into. Without it nothing is asked and the daemon reports
+    /// what it already holds, which is the cheap default and stays that way.
+    #[arg(long)]
+    pub refresh: bool,
 }
 
 #[derive(Debug, clap::Args)]

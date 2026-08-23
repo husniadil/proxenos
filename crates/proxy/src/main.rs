@@ -444,8 +444,17 @@ async fn print_models() -> Result<()> {
 
 /// What quota is left. Reported from the snapshot the backend volunteers on
 /// each turn, so it costs nothing to ask and is as of the last turn made.
+///
+/// `--refresh` asks first, which spends a request per askable account and fills
+/// in the accounts no turn has ever been served as. What is reported afterwards
+/// is still the `usage` document, so the shape a status line parses does not
+/// depend on whether a figure was just asked for.
 async fn print_usage(args: cli::UsageArgs) -> Result<()> {
-    let result = control::call(&control::default_path(), "usage", None).await?;
+    let socket = control::default_path();
+    if args.refresh {
+        control::call(&socket, "usage.refresh", None).await?;
+    }
+    let result = control::call(&socket, "usage", None).await?;
     println!(
         "{}",
         if args.json {
