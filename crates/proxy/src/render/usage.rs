@@ -140,7 +140,7 @@ fn account_rows(account: &Value, now: u64) -> Vec<Vec<String>> {
         .cloned()
         .unwrap_or_default();
     if windows.is_empty() {
-        return vec![vec![
+        let mut rows = vec![vec![
             head,
             provider,
             "none reported".to_owned(),
@@ -148,9 +148,11 @@ fn account_rows(account: &Value, now: u64) -> Vec<Vec<String>> {
             source.to_owned(),
             age,
         ]];
+        rows.extend(credit_row(account));
+        return rows;
     }
 
-    windows
+    let mut rows: Vec<Vec<String>> = windows
         .iter()
         .enumerate()
         .map(|(index, window)| {
@@ -175,7 +177,85 @@ fn account_rows(account: &Value, now: u64) -> Vec<Vec<String>> {
                 age,
             ]
         })
-        .collect()
+        .collect();
+    rows.extend(credit_row(account));
+    rows
+}
+
+/// The credit balance, on a row of its own under the account's windows.
+///
+/// A balance is not a window: it has no reset and it is money rather than a
+/// percentage of an entitlement, so it gets the USED cell and leaves the rest
+/// blank — the name, the provider, and the freshness belong to the account and
+/// are said once, on its first row.
+///
+/// Everything on it is the provider's own. The percentage is not recomputed
+/// from the amounts, and the severity word appears only where the provider
+/// said something other than `normal`: a word on every row is a word nobody
+/// reads.
+fn credit_row(account: &Value) -> Option<Vec<String>> {
+    let credit = field(account, "credit")?;
+    let used = money(credit, "used_minor")?;
+
+    let mut cell = match money(credit, "limit_minor") {
+        Some(limit) => format!("credit: {used} / {limit}"),
+        None => format!("credit: {used}"),
+    };
+    // The currency, where it is one this has no symbol for. Naming it beats
+    // dressing another currency as dollars.
+    if let Some(code) = field(credit, "currency").and_then(Value::as_str)
+        && symbol(code).is_none()
+    {
+        cell.push_str(&format!(" {code}"));
+    }
+    if let Some(percent) = field(credit, "percent").and_then(Value::as_f64) {
+        cell.push_str(&format!(" · {percent:.0}%"));
+    }
+    match field(credit, "severity").and_then(Value::as_str) {
+        Some(severity) if severity != "normal" => cell.push_str(&format!(" ({severity})")),
+        _ => {}
+    }
+
+    Some(vec![
+        String::new(),
+        String::new(),
+        cell,
+        String::new(),
+        String::new(),
+        String::new(),
+    ])
+}
+
+/// An amount in minor units, as the money it is.
+///
+/// The exponent is the provider's, and an amount without one is not rendered
+/// at all — a hundredth of the real figure reads as headroom.
+fn money(credit: &Value, name: &str) -> Option<String> {
+    let minor = field(credit, name).and_then(Value::as_u64)?;
+    let exponent = usize::try_from(field(credit, "exponent").and_then(Value::as_u64)?).ok()?;
+    let digits = minor.to_string();
+    let amount = if exponent == 0 {
+        digits
+    } else {
+        let padded = format!("{digits:0>width$}", width = exponent + 1);
+        let (whole, fraction) = padded.split_at(padded.len() - exponent);
+        format!("{whole}.{fraction}")
+    };
+
+    let symbol = field(credit, "currency")
+        .and_then(Value::as_str)
+        .and_then(symbol)
+        .unwrap_or("");
+    Some(format!("{symbol}{amount}"))
+}
+
+/// The symbol for a currency, where there is one this proxy is sure of. Any
+/// other currency is named by its code instead of being dressed as dollars.
+fn symbol(currency: &str) -> Option<&'static str> {
+    match currency {
+        "USD" => Some("$"),
+        _ => None,
+    }
 }
 
 /// The figure, and the provider's own words about the window it describes.

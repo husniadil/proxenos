@@ -4425,6 +4425,7 @@ fn quota(used_percent: f64) -> proxenos::usage::Snapshot {
             resets_at: Some(resets_at),
             ..proxenos::usage::Window::default()
         }],
+        ..proxenos::usage::Snapshot::default()
     }
 }
 

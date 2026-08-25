@@ -438,6 +438,17 @@ for a provider that states none. A metered row's USED cell carries the tally of
 The explanation of an empty row is one note under the table, said once however
 many rows are empty, and it names `usage --refresh` as the way to fill them.
 
+**A credit balance gets a row of its own.** Where the provider states one
+(`proxy-behavior.md` §8.4), the account's windows are followed by a row whose
+USED cell reads `credit: $205.75 / $210.52 · 98%`, with the provider's severity
+word in parentheses where it said anything other than `normal`. It is money
+rather than a percentage of an entitlement and has no reset, so the RESETS,
+SOURCE and AS OF cells stay blank — those belong to the account, and are said
+once on its first row. The amounts are the minor units the provider stated
+divided by the exponent it stated, and the percentage is the provider's own,
+never recomputed from them. A currency this proxy has no symbol for is named by
+its code rather than dressed as dollars.
+
 **A figure per account, not per daemon.** A pinned tier's turns spend the
 account it names (`proxy-behavior.md` §7.1), so a daemon can hold two live
 figures at once. Each is held under the account that earned it and reported
@@ -967,7 +978,7 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 | `accounts.rename` | `{"account": from, "name": to}`, the name this daemon calls an account by, and whether an account section moved with it; the grant and the account id are untouched | no — v0.3 |
 | `models` | catalog, whether it is the fallback list, and whether it was fetched for an account other than the one serving turns | yes |
 | `tiers` | tier mapping | no — was `tiers.get` |
-| `usage` | the serving account's quota as of its last turn, or that no turn has been made, plus `models` — the ids this daemon serves — and `accounts`, one entry per stored account with its own figure, its freshness, and `unavailable` where it has none. Each account entry also carries `served_tokens`, the §6.1 tally, and an entry with no figure carries `reason` beside its `detail` — `no_turn`, `no_relayed_turn`, `metered`, `unknown_key_kind`, `not_reported` — the same fact in a word, so a renderer never matches on prose. Each window carries `used_percent`, `window_minutes`, `resets_at`, and — where the provider stated them — `status`, `surpassed_threshold`, `representative`, and `label` for a window no duration identifies | yes |
+| `usage` | the serving account's quota as of its last turn, or that no turn has been made, plus `models` — the ids this daemon serves — and `accounts`, one entry per stored account with its own figure, its freshness, and `unavailable` where it has none. Each account entry also carries `served_tokens`, the §6.1 tally, and an entry with no figure carries `reason` beside its `detail` — `no_turn`, `no_relayed_turn`, `metered`, `unknown_key_kind`, `not_reported` — the same fact in a word, so a renderer never matches on prose. Each window carries `used_percent`, `window_minutes`, `resets_at`, and — where the provider stated them — `status`, `surpassed_threshold`, `representative`, and `label` for a window no duration identifies. An entry whose provider states a credit balance also carries `credit` — `used_minor`, `limit_minor`, `exponent`, `currency`, `percent`, `severity` — money in the units the provider stated it in, present only where there is a balance to state | yes |
 | `usage.refresh` | asks the backend for a figure now, **per account** — every stored account whose credential can hold one, each on its own credential and each recorded under its own name. The answer is the serving account's outcome plus `accounts`, one entry per stored account carrying either its figure or the sentence saying why it has none. Nothing about which account serves turns is read or changed | yes |
 | `env` | the §2.2 block: `variables`, and `settings` always present | yes |
 | `shutdown` | `{"stopping": true, "version": ...}`, then the process goes once the answer is written | yes |

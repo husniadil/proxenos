@@ -60,6 +60,13 @@ render() {
               elif $s < 3600 then "\($s / 60 | floor)m ago"
               elif $s < 86400 then "\($s / 3600 | floor)h ago"
               else "\($s / 86400 | floor)d ago" end;
+        # Minor units as money. The exponent is the one the provider stated,
+        # and the digits are padded rather than divided so nothing is rounded.
+        def money($minor; $exp): ($minor | tostring) as $m
+            | if $exp == 0 then $m
+              else (if ($m | length) > $exp then $m
+                    else ("0" * ($exp - ($m | length) + 1)) + $m end) as $p
+                   | $p[0:($p | length) - $exp] + "." + $p[($p | length) - $exp:] end;
         def wname: if .window_minutes == null then (.label // "?" | ascii_downcase)
             elif .window_minutes >= 1440 then "\(.window_minutes / 1440 | floor)d"
             else "\(.window_minutes / 60 | floor)h" end;
@@ -78,6 +85,16 @@ render() {
                   "    " + (.reason // .detail // "no figure")
                       + (if .served_tokens and .served_tokens > 0 then " · \(.served_tokens) tok served" else "" end)
                end),
+              # The credit balance, where the account reports one. Money rather
+              # than a percentage of an entitlement, so it carries no bar.
+              (if .credit then (.credit
+                  | (if .currency == "USD" then "$" else "" end) as $sym
+                  | "    credit " + $sym + money(.used_minor; .exponent)
+                      + (if .limit_minor then " / " + $sym + money(.limit_minor; .exponent) else "" end)
+                      + (if .currency and .currency != "USD" then " " + .currency else "" end)
+                      + (if .percent then "  \(.percent | floor)%" else "" end)
+                      + (if .severity and .severity != "normal" then " (\(.severity))" else "" end))
+               else empty end),
               ""
         )'
 }

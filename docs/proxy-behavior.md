@@ -1738,6 +1738,38 @@ own severity, read rather than inferred from the percentage: an account can sit
 high on a window the provider is still calling normal. Nothing in that body
 states that a turn would be refused, so nothing derived from it claims one would.
 
+**The credit balance is money, and it is read from `spend`.** Once an account's
+plan windows are full, further turns come out of an extra-usage credit, and
+that balance is the figure a row of percentages cannot state: measured live, an
+account sat at 6% of its five-hour window and 98% of a credit it had nearly
+spent. `spend` states it as money objects — minor units, a currency, and an
+exponent — beside the provider's own percentage and its own severity word. The
+percentage is used as given and never recomputed from the amounts: they work
+out to 97.73% against a stated 98, and the stated one is what the provider acts
+on.
+
+It is read only where the provider says the facility is `enabled`; disabled or
+absent is no credit rather than a ceiling shown as a balance. Everything else
+about it fails closed. A `used` amount that cannot be read yields no credit
+rather than a zero — a field renamed upstream would otherwise render as nothing
+spent, which is the reassuring direction to be wrong in — and so does an amount
+with no exponent, since dividing by a guessed hundred misstates money by orders
+of magnitude. Two amounts stating different currencies, or different exponents,
+are not a balance and yield nothing.
+
+**`extra_usage` is the legacy duplicate and is deliberately not parsed.** The
+same body carries the same figure a second time in float cents under that name.
+`spend` is its correctly-typed successor — integer minor units with the
+exponent stated rather than assumed — and reading both would be two answers to
+one question, with the float one free to disagree in the last place.
+
+**A header states an overage window; the usage endpoint states the balance.**
+The two are not the same figure and neither replaces the other. A relayed
+turn's headers carry an overage *window* — how much of the allowance that turn
+has spent, as a percentage with a reset (§8.3) — and no money at all. The
+balance behind it has no reset and is stated only at the usage endpoint, which
+is why a snapshot read from headers carries no credit.
+
 The plan is not in that body. It is asked for at the profile endpoint beside
 it, which states the organization's type and, for a max org, the multiplier as
 a rate-limit tier (`default_claude_max_20x` renders `max 20x`). A refresh asks

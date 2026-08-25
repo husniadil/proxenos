@@ -130,6 +130,30 @@ pub fn has_reset(resets_at: Option<u64>, now: u64) -> bool {
     resets_at.is_some_and(|resets_at| now >= resets_at)
 }
 
+/// The credit an account spends once its plan windows are full.
+///
+/// A balance rather than a window: it has no reset, and it is money rather
+/// than a percentage of an entitlement. Everything here is the provider's own —
+/// the amounts in the minor units it stated them in, its own percentage, and
+/// its own severity word.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Credit {
+    /// Minor units, as stated. Divided by `exponent` only where it is rendered.
+    pub used_minor: u64,
+    /// The ceiling, where the provider stated one. A balance with no ceiling
+    /// is still a figure worth showing.
+    pub limit_minor: Option<u64>,
+    /// How many decimal places the minor units carry.
+    pub exponent: u32,
+    pub currency: Option<String>,
+    /// The provider's own percentage, never recomputed from the amounts. The
+    /// two do not agree to the digit, and the provider's is the one it will
+    /// act on.
+    pub percent: Option<f64>,
+    /// The provider's own word — `normal`, `warning`, `critical`.
+    pub severity: Option<String>,
+}
+
 /// The account's quota, as of one turn.
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -137,6 +161,11 @@ pub struct Snapshot {
     pub plan: Option<String>,
     pub limit_reached: bool,
     pub windows: Vec<Window>,
+    /// The credit balance beside the windows, where the provider states one.
+    ///
+    /// Additive: a snapshot written before this field existed parses back
+    /// without it, and reports no credit rather than a zero balance.
+    pub credit: Option<Credit>,
 }
 
 /// The header names this client reads a quota out of.
@@ -177,6 +206,9 @@ impl Snapshot {
             .collect();
 
         Some(Self {
+            // No credit is stated here. The first provider's stream event
+            // carries windows and nothing else.
+            credit: None,
             plan: event
                 .get("plan_type")
                 .and_then(Value::as_str)
@@ -218,6 +250,8 @@ impl Snapshot {
         }
 
         Some(Self {
+            // The first provider's quota body states no credit balance.
+            credit: None,
             plan: body
                 .get("plan_type")
                 .and_then(Value::as_str)
@@ -235,8 +269,10 @@ impl Snapshot {
     /// A third shape, and it shares nothing with the other two: the windows are
     /// named rather than positional (`five_hour`, `seven_day`), the figure is
     /// already a percentage, and the reset is an RFC 3339 timestamp instead of
-    /// an epoch. Everything else in the body — spend, extra usage, and several
-    /// windows whose names read as internal flags — is left where it is.
+    /// an epoch. `spend` is read beside them as the account's credit balance;
+    /// `extra_usage`, the legacy duplicate of the same figure in float cents,
+    /// and several windows whose names read as internal flags are left where
+    /// they are.
     ///
     /// `limits` carries the provider's own word on each window, and it is read
     /// rather than inferred from the percentage: an account can sit high on a
@@ -330,6 +366,7 @@ impl Snapshot {
         }
 
         Some(Self {
+            credit: parse_credit(body.get("spend")),
             // The body states no plan. It is knowable from the stored grant
             // instead, and reporting it from here would be a second answer to
             // one question.
@@ -437,6 +474,11 @@ impl Snapshot {
         }
 
         Some(Self {
+            // A header states an overage *window* — how much of the extra
+            // usage allowance a turn has spent — and never the balance behind
+            // it. The balance is money and is stated only at the usage
+            // endpoint, so nothing here reports one.
+            credit: None,
             plan: None,
             // Only an outright refusal is the limit being reached. The
             // provider also says `allowed_warning`, which is a turn that went
@@ -516,8 +558,12 @@ impl Snapshot {
     }
 
     /// The snapshot as the control socket reports it, windows and all.
+    ///
+    /// The credit is carried only where the provider stated one. A `credit`
+    /// key holding nulls would read as a balance of zero, which is the
+    /// reassuring direction to be wrong in.
     pub fn to_json(&self) -> Value {
-        serde_json::json!({
+        let mut answer = serde_json::json!({
             "known": true,
             "plan": self.plan,
             "limit_reached": self.limit_reached,
@@ -530,7 +576,24 @@ impl Snapshot {
                 "surpassed_threshold": window.surpassed_threshold,
                 "representative": window.representative,
             })).collect::<Vec<_>>(),
-        })
+        });
+
+        if let Some(credit) = &self.credit
+            && let Some(object) = answer.as_object_mut()
+        {
+            object.insert(
+                "credit".to_owned(),
+                serde_json::json!({
+                    "used_minor": credit.used_minor,
+                    "limit_minor": credit.limit_minor,
+                    "exponent": credit.exponent,
+                    "currency": credit.currency,
+                    "percent": credit.percent,
+                    "severity": credit.severity,
+                }),
+            );
+        }
+        answer
     }
 }
 
@@ -563,6 +626,69 @@ fn parse_rest_window(value: &Value) -> Option<Window> {
             .map(|seconds| seconds / 60),
         resets_at: value.get("reset_at").and_then(Value::as_u64),
         ..Window::default()
+    })
+}
+
+/// The credit balance a `spend` block states, where it states one.
+///
+/// **Read only where the provider says it is enabled.** A block sitting there
+/// disabled is a facility the account does not have, and reporting its ceiling
+/// as a balance would read as money to spend.
+///
+/// **Fail closed everywhere else.** A `used` amount this cannot read yields no
+/// credit rather than a zero: a field renamed upstream would otherwise render
+/// as nothing spent, which is the reassuring direction to be wrong in. Two
+/// amounts in different currencies are not a balance either, and neither is an
+/// amount with no exponent — dividing by a guessed hundred misstates money by
+/// orders of magnitude.
+///
+/// The percentage is the provider's own and is never computed from the
+/// amounts. Measured on one account, the amounts work out to 97.73% against a
+/// stated 98, and the stated one is what the provider acts on.
+fn parse_credit(value: Option<&Value>) -> Option<Credit> {
+    let spend = value?;
+    if spend.get("enabled").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+
+    let money = |name: &str| -> Option<(u64, u32, Option<String>)> {
+        let amount = spend.get(name)?;
+        Some((
+            amount.get("amount_minor").and_then(Value::as_u64)?,
+            u32::try_from(amount.get("exponent").and_then(Value::as_u64)?).ok()?,
+            amount
+                .get("currency")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        ))
+    };
+
+    let (used_minor, exponent, currency) = money("used")?;
+    let limit = spend.get("limit").and_then(|_| money("limit"));
+    // A limit stated in another currency, or in other units, cannot be the
+    // ceiling of this amount. Rendering one against the other would state a
+    // headroom nobody reported.
+    if let Some((_, limit_exponent, limit_currency)) = &limit
+        && (*limit_exponent != exponent || *limit_currency != currency)
+    {
+        return None;
+    }
+    // A limit the provider stated but this cannot read is the same case: the
+    // block was not understood, and half of it is not a balance.
+    if spend.get("limit").is_some_and(|limit| !limit.is_null()) && limit.is_none() {
+        return None;
+    }
+
+    Some(Credit {
+        used_minor,
+        limit_minor: limit.map(|(amount, _, _)| amount),
+        exponent,
+        currency,
+        percent: spend.get("percent").and_then(Value::as_f64),
+        severity: spend
+            .get("severity")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     })
 }
 

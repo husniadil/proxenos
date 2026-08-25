@@ -6,6 +6,18 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- `usage` reports the extra-usage credit a borrowed Anthropic grant states.
+  Once an account's plan windows are full, further turns come out of a money
+  balance no percentage in the table describes — measured live, 6% of a
+  five-hour window beside a credit at 98% — and it now renders as its own row,
+  `credit: $205.75 / $210.52 · 98% (critical)`, and travels under `credit` in
+  `usage --json` and the herdr popup. Read from the provider's `spend` block
+  only where it says the facility is enabled, with the provider's own
+  percentage rather than a ratio of the amounts, and dropped entirely where an
+  amount, its exponent, or the two currencies cannot be read: a renamed field
+  read as zero spent is headroom that is not there. The legacy `extra_usage`
+  duplicate of the same figure in float cents is deliberately not parsed.
+
 - The herdr plugin's popup reads keys raw where the terminal allows it, so
   `q` — and now `Esc` — closes it without Enter, and `r` refreshes on the
   keypress. A terminal stty cannot reshape keeps the old line-buffered reads.

@@ -226,6 +226,7 @@ fn snapshot(used_percent: f64) -> Snapshot {
             resets_at: Some(1_789_487_264),
             ..proxenos::usage::Window::default()
         }],
+        ..Snapshot::default()
     }
 }
 
@@ -1047,6 +1048,7 @@ fn a_snapshot_file_holds_nothing_but_names_and_figures() {
                         "surpassed_threshold": null,
                         "representative": false,
                     }],
+                    "credit": null,
                 },
                 "source": "turn",
                 "at": at,
@@ -1339,6 +1341,284 @@ fn a_body_with_no_window_yields_nothing() {
     assert!(Snapshot::parse_anthropic("{}").is_none());
     assert!(Snapshot::parse_anthropic(r#"{"seven_day_opus": null}"#).is_none());
     assert!(Snapshot::parse_anthropic("not json").is_none());
+}
+
+/// The `spend` block, as one live account states it: money in minor units,
+/// beside the provider's own percentage and its own severity word.
+///
+/// `extra_usage` sits in the same body carrying the same figure in float
+/// cents. It is the legacy duplicate and is deliberately not parsed.
+fn anthropic_usage_with_credit() -> String {
+    serde_json::json!({
+        "five_hour": {
+            "utilization": 6.0,
+            "resets_at": "2026-08-23T09:00:00.383476+00:00",
+        },
+        "extra_usage": {
+            "is_enabled": true,
+            "monthly_limit": 21052,
+            "used_credits": 20575.0,
+            "utilization": 97.734_182_025_460_75,
+            "currency": "USD",
+            "decimal_places": 2,
+        },
+        "spend": {
+            "used": { "amount_minor": 20575, "currency": "USD", "exponent": 2 },
+            "limit": { "amount_minor": 21052, "currency": "USD", "exponent": 2 },
+            "percent": 98,
+            "severity": "critical",
+            "enabled": true,
+            "disabled_reason": null,
+        },
+    })
+    .to_string()
+}
+
+/// The credit an account burns once its plan windows are spent. Captured
+/// live: 20575 minor units of 21052, at the provider's own 98%.
+#[test]
+fn the_spend_block_is_read_as_the_accounts_credit() {
+    let snapshot = Snapshot::parse_anthropic(&anthropic_usage_with_credit()).expect("parses");
+    let credit = snapshot.credit.clone().expect("the spend block is read");
+
+    assert_eq!(credit.used_minor, 20_575);
+    assert_eq!(credit.limit_minor, Some(21_052));
+    assert_eq!(credit.exponent, 2);
+    assert_eq!(credit.currency.as_deref(), Some("USD"));
+    assert_eq!(credit.severity.as_deref(), Some("critical"));
+
+    // And it reaches whoever asks over the socket.
+    let reported = snapshot.to_json();
+    assert_eq!(
+        reported["credit"],
+        json!({
+            "used_minor": 20_575,
+            "limit_minor": 21_052,
+            "exponent": 2,
+            "currency": "USD",
+            "percent": 98.0,
+            "severity": "critical",
+        })
+    );
+}
+
+/// The percentage is the provider's own word and is never recomputed. The
+/// amounts here work out to 97.73%; the provider says 98, and 98 is what a
+/// reader is shown.
+#[test]
+fn the_credit_percent_is_the_providers_own_rather_than_a_ratio() {
+    let snapshot = Snapshot::parse_anthropic(&anthropic_usage_with_credit()).expect("parses");
+    let credit = snapshot.credit.expect("the spend block is read");
+
+    assert_eq!(credit.percent, Some(98.0));
+}
+
+/// A credit the provider has not enabled is not a balance to spend. Only
+/// `enabled: true` is a credit; false and absent are both silence.
+#[test]
+fn a_credit_the_provider_has_not_enabled_is_not_reported() {
+    let disabled = serde_json::json!({
+        "five_hour": { "utilization": 6.0 },
+        "spend": {
+            "used": { "amount_minor": 20575, "currency": "USD", "exponent": 2 },
+            "limit": { "amount_minor": 21052, "currency": "USD", "exponent": 2 },
+            "percent": 98,
+            "enabled": false,
+        },
+    })
+    .to_string();
+    assert_eq!(
+        Snapshot::parse_anthropic(&disabled).expect("parses").credit,
+        None
+    );
+
+    // The fixture beside this one states a spend block with neither `enabled`
+    // nor amounts, which is the same silence.
+    assert_eq!(
+        Snapshot::parse_anthropic(&anthropic_usage())
+            .expect("parses")
+            .credit,
+        None
+    );
+}
+
+/// Fail closed. A spend block whose `used` this proxy cannot read is no
+/// credit at all — a renamed field read as zero spent is headroom that is not
+/// there.
+#[test]
+fn a_spend_block_this_proxy_cannot_read_is_no_credit() {
+    let missing_used = serde_json::json!({
+        "five_hour": { "utilization": 6.0 },
+        "spend": {
+            "limit": { "amount_minor": 21052, "currency": "USD", "exponent": 2 },
+            "percent": 98,
+            "enabled": true,
+        },
+    })
+    .to_string();
+    assert_eq!(
+        Snapshot::parse_anthropic(&missing_used)
+            .expect("parses")
+            .credit,
+        None
+    );
+
+    // An amount with no exponent cannot be turned into money, and dividing by
+    // a guessed hundred misstates it by orders of magnitude.
+    let no_exponent = serde_json::json!({
+        "five_hour": { "utilization": 6.0 },
+        "spend": {
+            "used": { "amount_minor": 20575, "currency": "USD" },
+            "percent": 98,
+            "enabled": true,
+        },
+    })
+    .to_string();
+    assert_eq!(
+        Snapshot::parse_anthropic(&no_exponent)
+            .expect("parses")
+            .credit,
+        None
+    );
+}
+
+/// Two amounts in different currencies are not a balance, and rendering one
+/// against the other would state a headroom nobody reported.
+#[test]
+fn a_credit_whose_amounts_disagree_on_currency_is_not_reported() {
+    let mismatched = serde_json::json!({
+        "five_hour": { "utilization": 6.0 },
+        "spend": {
+            "used": { "amount_minor": 20575, "currency": "USD", "exponent": 2 },
+            "limit": { "amount_minor": 21052, "currency": "EUR", "exponent": 2 },
+            "percent": 98,
+            "enabled": true,
+        },
+    })
+    .to_string();
+    assert_eq!(
+        Snapshot::parse_anthropic(&mismatched)
+            .expect("parses")
+            .credit,
+        None
+    );
+}
+
+/// The legacy duplicate is not the successor. `extra_usage` states the same
+/// figure in float cents; `spend` states it in minor units and is the only
+/// one read, so a body carrying only the old block reports no credit.
+#[test]
+fn the_legacy_extra_usage_block_is_not_read() {
+    let legacy = serde_json::json!({
+        "five_hour": { "utilization": 6.0 },
+        "extra_usage": {
+            "is_enabled": true,
+            "monthly_limit": 21052,
+            "used_credits": 20575.0,
+            "utilization": 97.734_182_025_460_75,
+            "currency": "USD",
+            "decimal_places": 2,
+        },
+    })
+    .to_string();
+    assert_eq!(
+        Snapshot::parse_anthropic(&legacy).expect("parses").credit,
+        None
+    );
+}
+
+/// A credit is part of the figure, so it comes back off the disk with it. A
+/// restored snapshot that dropped it would report an account as having a
+/// balance it no longer states.
+#[test]
+fn a_credit_survives_a_restart() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let mut held = snapshot(11.0);
+    held.credit = Snapshot::parse_anthropic(&anthropic_usage_with_credit())
+        .expect("parses")
+        .credit;
+
+    let first = store_remembering("main", dir.path());
+    first.record_for(None, &held, Source::Turn);
+    drop(first);
+
+    let restarted = store_remembering("main", dir.path());
+    assert_eq!(
+        restarted
+            .latest_for("main")
+            .expect("the figure is restored")
+            .snapshot
+            .credit,
+        held.credit
+    );
+}
+
+/// The meter says what the credit is in the money the provider stated it in,
+/// with the provider's own percentage and its own severity word. A row of
+/// percentages says nothing about a balance that is nearly spent.
+#[test]
+fn the_meter_states_the_credit_the_provider_reports() {
+    let mut held = snapshot(11.0);
+    held.credit = Snapshot::parse_anthropic(&anthropic_usage_with_credit())
+        .expect("parses")
+        .credit;
+
+    let mut result = held.to_json();
+    result["accounts"] = json!([{
+        "known": true,
+        "account": "personal-claude",
+        "provider": "anthropic",
+        "serving": true,
+        "source": "fetch",
+        "measured_at": 1_787_337_760u64,
+        "served_tokens": 0,
+        "windows": [{ "used_percent": 11.0, "window_minutes": 300, "resets_at": 1_787_349_520u64 }],
+        "credit": held.to_json()["credit"].clone(),
+    }]);
+
+    let rendered = proxenos::render::usage_at(&result, 1_787_338_000);
+    let line = row_for(&rendered, "credit:");
+    assert!(
+        line.contains("credit: $205.75 / $210.52 · 98% (critical)"),
+        "{rendered}"
+    );
+    // Everything but the figure belongs to the account and is said once, so
+    // the credit row repeats neither the name nor the freshness.
+    assert!(!line.contains("personal-claude"), "{rendered}");
+    assert!(!line.contains("ago"), "{rendered}");
+}
+
+/// A severity the provider calls normal is not worth a word, and a currency
+/// this proxy has no symbol for is named rather than dressed as dollars.
+#[test]
+fn a_credit_says_only_what_the_provider_said() {
+    let quiet = serde_json::json!({
+        "known": true,
+        "accounts": [{
+            "known": true,
+            "account": "personal-claude",
+            "provider": "anthropic",
+            "serving": true,
+            "source": "fetch",
+            "measured_at": 1_787_337_760u64,
+            "windows": [],
+            "credit": {
+                "used_minor": 20_575,
+                "limit_minor": 21_052,
+                "exponent": 2,
+                "currency": "EUR",
+                "percent": 98.0,
+                "severity": "normal",
+            },
+        }],
+    });
+
+    let line = row_for(
+        &proxenos::render::usage_at(&quiet, 1_787_338_000),
+        "credit:",
+    );
+    assert!(line.contains("credit: 205.75 / 210.52 EUR · 98%"), "{line}");
+    assert!(!line.contains("normal"), "{line}");
 }
 
 /// The profile endpoint names the plan with its multiplier where one exists.
