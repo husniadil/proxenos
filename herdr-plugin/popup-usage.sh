@@ -1,11 +1,48 @@
 #!/bin/sh
 # The usage dashboard: every account the daemon holds, bars and resets per
 # window, rendered from `proxenos usage --json` and redrawn every 30 seconds.
-# `r` asks the providers for fresh figures (`usage --refresh`); `q` quits.
+# `r` asks the providers for fresh figures (`usage --refresh`); `q` or Esc
+# quits. Keys are read raw (one character, no Enter) where stty allows it.
 set -u
 
 command -v jq >/dev/null 2>&1 || { echo "proxenos usage: jq is required" >&2; exit 1; }
 command -v proxenos >/dev/null 2>&1 || { echo "proxenos usage: proxenos is not on PATH" >&2; exit 1; }
+
+# Raw terminal input, so a single keypress — Esc included — acts without
+# Enter. A terminal stty cannot reshape falls back to line-buffered reads,
+# where Enter is still needed and Esc cannot be seen.
+saved_tty=$(stty -g 2>/dev/null || true)
+restore_tty() { [ -n "$saved_tty" ] && stty "$saved_tty" 2>/dev/null; }
+trap 'restore_tty' EXIT INT TERM
+raw=0
+if [ -n "$saved_tty" ] && stty -icanon -echo min 0 time 0 2>/dev/null; then
+    raw=1
+fi
+esc=$(printf '\033')
+
+# Waits up to $1 seconds and prints the first key pressed, or nothing on
+# timeout. Raw mode polls once a second; the fallback is the old read.
+next_key() {
+    if [ "$raw" = 1 ]; then
+        waited=0
+        while [ "$waited" -lt "$1" ]; do
+            c=$(dd bs=1 count=1 2>/dev/null)
+            [ -n "$c" ] && { printf '%s' "$c"; return 0; }
+            sleep 1
+            waited=$((waited + 1))
+        done
+        return 0
+    fi
+    started=$(date +%s)
+    key=""
+    if ! read -r -t "$1" key 2>/dev/null; then
+        # A shell without `read -t` returns at once; sleep the interval so
+        # the loop stays a redraw rather than a spin. Quitting still works —
+        # the popup closes with the pane.
+        [ $(($(date +%s) - started)) -lt 2 ] && sleep "$1"
+    fi
+    printf '%s' "$key"
+}
 
 render() {
     proxenos usage --json 2>/dev/null | jq -r --argjson now "$(date +%s)" '
@@ -27,7 +64,7 @@ render() {
             elif .window_minutes >= 1440 then "\(.window_minutes / 1440 | floor)d"
             else "\(.window_minutes / 60 | floor)h" end;
 
-        "proxenos usage" + (" " * 34) + "r refresh · q quit",
+        "proxenos usage" + (" " * 30) + "r refresh · esc quit",
         "",
         (.accounts[]
             | (if .serving then "* " else "  " end) as $mark
@@ -49,16 +86,9 @@ while :; do
     printf '\033[2J\033[H'
     render || echo "the daemon is not answering; is it running?"
 
-    started=$(date +%s)
-    key=""
-    if ! read -r -t 30 key 2>/dev/null; then
-        # A shell without `read -t` returns at once; sleep the interval so
-        # the loop stays a redraw rather than a spin. Quitting still works —
-        # the popup closes with the pane.
-        [ $(($(date +%s) - started)) -lt 2 ] && sleep 30
-    fi
+    key=$(next_key 30)
     case "$key" in
-        q | Q) exit 0 ;;
+        q | Q | "$esc") exit 0 ;;
         r | R)
             printf 'asking the providers for fresh figures...\n'
             proxenos usage --refresh >/dev/null 2>&1

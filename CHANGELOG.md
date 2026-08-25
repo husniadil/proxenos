@@ -6,6 +6,9 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- The herdr plugin's popup reads keys raw where the terminal allows it, so
+  `q` — and now `Esc` — closes it without Enter, and `r` refreshes on the
+  keypress. A terminal stty cannot reshape keeps the old line-buffered reads.
 - A herdr plugin, under `herdr-plugin/`: quota bars for every claude pane in
   the sidebar — routed panes show the serving account, direct panes the
   keychain anthropic account, model-scoped windows included — and the full

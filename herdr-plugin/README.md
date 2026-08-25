@@ -33,7 +33,8 @@ manual merge, because a second declaration of one TOML table is an error.
 Two actions and two event hooks, all shell scripts in this directory, plus a
 detached per-pane watcher:
 
-- `proxenos.open` opens the dashboard popup (`r` refreshes, `q` quits).
+- `proxenos.open` opens the dashboard popup (`r` refreshes, `q` or `Esc`
+  quits).
 - `proxenos.report` re-resolves the focused pane's routing and pushes its
   quota tokens; the same script runs on herdr's `pane.agent_detected` and
   `pane.agent_status_changed` events. Reporting a claude pane starts the
