@@ -1253,7 +1253,14 @@ fn anthropic_usage() -> String {
 fn the_second_providers_endpoint_yields_both_windows() {
     let snapshot = Snapshot::parse_anthropic(&anthropic_usage()).expect("parses");
 
-    assert_eq!(snapshot.windows.len(), 2);
+    assert_eq!(
+        snapshot
+            .windows
+            .iter()
+            .filter(|window| window.window_minutes.is_some())
+            .count(),
+        2
+    );
     let five = &snapshot.windows[0];
     assert_eq!(five.window_minutes, Some(300));
     assert!((five.used_percent - 18.0).abs() < f64::EPSILON);
@@ -1289,9 +1296,31 @@ fn each_window_carries_the_providers_own_severity() {
         snapshot
             .windows
             .iter()
+            .filter(|window| window.label.is_none())
             .all(|window| window.status.as_deref() != Some("critical")),
         "the scoped entry is one model's, not the window's"
     );
+}
+
+/// A scoped entry is one model's figure, and it is kept as its own window
+/// rather than dropped: the model's name is its label, and it carries no
+/// duration — a second seven-day window would answer a duration lookup
+/// meant for the account's.
+#[test]
+fn a_scoped_entry_is_its_own_labeled_window() {
+    let snapshot = Snapshot::parse_anthropic(&anthropic_usage()).expect("parses");
+
+    let scoped = snapshot
+        .windows
+        .iter()
+        .find(|window| window.label.is_some())
+        .expect("the scoped entry is kept");
+    assert_eq!(scoped.label.as_deref(), Some("Fable"));
+    assert_eq!(scoped.window_minutes, None);
+    assert!((scoped.used_percent - 0.0).abs() < f64::EPSILON);
+    assert_eq!(scoped.status.as_deref(), Some("critical"));
+    assert_eq!(scoped.resets_at, Some(1_787_976_000));
+    assert!(!scoped.representative);
 }
 
 /// Nothing in that body says a turn would be refused, so nothing here claims

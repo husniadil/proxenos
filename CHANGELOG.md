@@ -4,6 +4,15 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- `usage` keeps a model-scoped limit as its own labeled window. The quota
+  endpoint of a borrowed Anthropic grant states per-model figures beside the
+  account's — measured live, one model sat at 16% against a weekly window at
+  49% — and they were previously dropped. Each now appears labeled with the
+  model's display name, carrying its own percentage, severity, and reset, and
+  no duration.
+
 ## [0.13.0]
 
 This proxy no longer holds a subscription of its own. A grant is read from the

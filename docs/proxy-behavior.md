@@ -1738,6 +1738,15 @@ own severity, read rather than inferred from the percentage: an account can sit
 high on a window the provider is still calling normal. Nothing in that body
 states that a turn would be refused, so nothing derived from it claims one would.
 
+A `limits` entry whose `scope` names a model is that one model's figure, not the
+account's, and it is kept as its own window rather than dropped: labeled with
+the model's display name, carrying the entry's own percentage, severity, and
+reset, and carrying no duration — measured live, the scoped entry sat at 16%
+against a `weekly_all` of 49%, so folding either figure into the other would
+misstate both. Giving it the group's duration would also put a second seven-day
+window where a duration lookup expects the account's, which is why it is named
+rather than measured.
+
 **A credential names whose endpoints it belongs to, as well as which of that
 provider's two it reaches.** Both are needed: a borrowed subscription grant on
 the second provider is a subscription credential that must never be sent to the

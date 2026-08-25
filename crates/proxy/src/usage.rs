@@ -270,7 +270,7 @@ impl Snapshot {
                 .map(str::to_owned)
         };
 
-        let windows: Vec<Window> = [
+        let mut windows: Vec<Window> = [
             ("five_hour", FIVE_HOURS, "session"),
             ("seven_day", SEVEN_DAYS, "weekly"),
         ]
@@ -295,6 +295,35 @@ impl Snapshot {
             })
         })
         .collect();
+
+        // A scoped entry is one model's figure. It is kept as its own window,
+        // named by the model rather than measured: giving it the group's
+        // duration would put a second seven-day window where a duration
+        // lookup expects the account's.
+        if let Some(limits) = body.get("limits").and_then(Value::as_array) {
+            windows.extend(limits.iter().filter_map(|limit| {
+                let model = limit
+                    .get("scope")?
+                    .get("model")?
+                    .get("display_name")?
+                    .as_str()?;
+                Some(Window {
+                    used_percent: limit.get("percent")?.as_f64()?,
+                    window_minutes: None,
+                    resets_at: limit
+                        .get("resets_at")
+                        .and_then(Value::as_str)
+                        .and_then(epoch_from_rfc3339),
+                    label: Some(model.to_owned()),
+                    status: limit
+                        .get("severity")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    surpassed_threshold: None,
+                    representative: false,
+                })
+            }));
+        }
 
         if windows.is_empty() {
             return None;
