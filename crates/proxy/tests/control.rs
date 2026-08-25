@@ -4395,13 +4395,23 @@ async fn a_switch_is_not_refused_over_a_pinned_tiers_model() {
 
 /// A snapshot with a percentage nothing else in these tests reports.
 fn quota(used_percent: f64) -> proxenos::usage::Snapshot {
+    // Relative to the clock the renderer reads, with the remainder pinned
+    // mid-hour: a fixed epoch drifts through an exact day boundary once a
+    // day, where `until` drops the hours and every verbatim row narrows.
+    let resets_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs()
+        + 21 * 86_400
+        + 12 * 3_600
+        + 1_800;
     proxenos::usage::Snapshot {
         plan: Some("plus".to_owned()),
         limit_reached: false,
         windows: vec![proxenos::usage::Window {
             used_percent,
             window_minutes: Some(300),
-            resets_at: Some(1_789_487_264),
+            resets_at: Some(resets_at),
             ..proxenos::usage::Window::default()
         }],
     }
