@@ -6,6 +6,12 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- `exec --account <name>` serves one session as the named account without
+  moving the selection — the per-session switch beside `accounts use`'s
+  standing one. The flag is consumed by `exec` and never forwarded; the name
+  travels as the otherwise-ignored `ANTHROPIC_AUTH_TOKEN` value, outranks a
+  tier's pinned account on both paths, and an unknown name is refused at
+  launch and again at the turn, each time naming it.
 - A borrowed Anthropic grant's plan carries its multiplier: `usage --refresh`
   also asks the provider's profile endpoint, so a max account renders
   `max 20x` rather than `max`. Asked at most hourly; a declined answer leaves

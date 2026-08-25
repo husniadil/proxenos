@@ -142,6 +142,19 @@ impl Relay {
         Ok(relayed_by(&self.store.accounts()?, account).map(|stored| stored.name.clone()))
     }
 
+    /// Whether the store holds an account under this name at all.
+    ///
+    /// A tagged launch is refused on this answer before its turn spends
+    /// anything: the tag is the launch's word on who pays, and a name with
+    /// nothing behind it must not fall through to whoever is selected.
+    pub fn holds(&self, account: &str) -> Result<bool, ProxyError> {
+        Ok(self
+            .store
+            .accounts()?
+            .iter()
+            .any(|stored| stored.name == account))
+    }
+
     /// Which account serves this model id, where one does.
     ///
     /// Routing is by model id because the body carries an id: this path never

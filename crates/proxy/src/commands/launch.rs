@@ -90,12 +90,41 @@ pub(crate) async fn exec(args: cli::ExecArgs) -> Result<()> {
         );
     }
 
+    // `--account`: this session's turns are made as the named account, and
+    // the selection is neither read nor moved. The name is checked against
+    // the store before anything starts — a session that refuses its first
+    // turn is a worse place to learn about a typo than a launch that refuses
+    // to happen — and it travels as the auth token value, which the daemon
+    // reads and the backend never sees.
+    if let Some(account) = &args.account {
+        let accounts = control::call(&control::default_path(), "accounts", None).await?;
+        let stored: Vec<&str> = accounts
+            .get("accounts")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row.get("name").and_then(serde_json::Value::as_str))
+            .collect();
+        if !stored.contains(&account.as_str()) {
+            anyhow::bail!(
+                "`{account}` names no stored account; this daemon holds {}",
+                stored
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        eprintln!("serving this session as `{account}`");
+    }
+
     // Who pays for this session, said once, at the one moment there is a
     // person deciding whether to start it. A borrowed grant is why it is worth
     // saying: the account is a directory signed into somewhere else, and it
     // can have become somebody else since it was chosen. A read that fails
     // says nothing rather than delaying the launch.
-    if let Ok(accounts) = control::call(&control::default_path(), "accounts", None).await
+    if args.account.is_none()
+        && let Ok(accounts) = control::call(&control::default_path(), "accounts", None).await
         && let Some(line) = render::serving_line(&accounts)
     {
         eprintln!("{line}");
@@ -105,6 +134,12 @@ pub(crate) async fn exec(args: cli::ExecArgs) -> Result<()> {
     child.args(&plan.arguments);
     for (name, value) in render::variables(&result) {
         child.env(name, value);
+    }
+    if let Some(account) = &args.account {
+        child.env(
+            "ANTHROPIC_AUTH_TOKEN",
+            format!("{}{account}", proxenos::ingress::ACCOUNT_TAG),
+        );
     }
 
     // A real exec on Unix, so signals, job control, the terminal, and the exit

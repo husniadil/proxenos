@@ -182,6 +182,26 @@ struct Routed {
     model: String,
 }
 
+/// What an account-tagged launch puts in front of the account name, in the
+/// auth token value the client already sends (`api.md` §2.3).
+///
+/// The value is otherwise ignored by design, which is what makes it a channel
+/// a launch can use without the client's argv or the wire gaining a secret:
+/// the tag carries a *name*, and the credential it resolves to never leaves
+/// this daemon.
+pub const ACCOUNT_TAG: &str = "proxenos-account:";
+
+/// The account a launch tagged this turn with, if it tagged one.
+fn tagged_account(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")?
+        .strip_prefix(ACCOUNT_TAG)
+        .map(str::to_owned)
+}
+
 async fn messages(
     State(state): State<AppState>,
     // Read for the ingress capture, and relayed as sent on the §9 path.
@@ -197,37 +217,66 @@ async fn messages(
     // being prepared for.
     let policy = state.policy.get();
 
+    // §2.3 — the account an `exec --account` launch tagged this session with.
+    // It is the launch's word on who pays, so it outranks the mapping's pins
+    // on both paths: relay when the named account is on the second provider,
+    // translate as it otherwise.
+    let tagged = tagged_account(&headers);
+
     // §9.1 — routed before it is parsed. A body that does not even carry a
     // model falls through to the parse below, which is what states what is
     // wrong with it.
     if let Some(relay) = &state.relay
         && let Ok(routed) = serde_json::from_slice::<Routed>(&body)
     {
-        let claimed = match relay.account_for(&routed.model, policy.models()) {
-            Ok(claimed) => claimed,
-            Err(error) => return error.into_response(),
-        };
-
-        // §9.1 — an id no relayed mapping claims still relays when the account
-        // that would otherwise authenticate its translation is on the second
-        // provider. Translating it would spend that credential against the
-        // first provider's backend — a key leaking to an endpoint it was never
-        // stored for. Relayed, the credential travels only to its own
-        // provider, and that provider judges the id, which is the only
-        // authoritative answer to whether it is served. A launch-time model
-        // override rides on this: any id the account's subscription serves
-        // works without a mapping edit.
-        let account = match claimed {
-            Some(account) => Some(account),
-            None => {
-                let pinned = policy
-                    .models()
-                    .iter()
-                    .find(|mapping| mapping.requested == routed.model)
-                    .and_then(|mapping| mapping.account.clone());
-                match relay.relaying_account(pinned.as_deref()) {
-                    Ok(name) => name,
+        let account = if let Some(tag) = &tagged {
+            // The mapping's claims are not consulted for a tagged turn: `None`
+            // here is a tag on the first provider, which falls through to the
+            // translating path and authenticates as that account there. A name
+            // the store does not hold is refused now, before the turn spends
+            // anything, as whoever typed the launch flag would want to hear it.
+            match relay.relaying_account(Some(tag)) {
+                Ok(Some(name)) => Some(name),
+                Ok(None) => match relay.holds(tag) {
+                    Ok(true) => None,
+                    Ok(false) => {
+                        return ProxyError::authentication(format!(
+                            "`{tag}` names no stored account; `proxenos accounts` \
+                                 lists what this daemon holds"
+                        ))
+                        .into_response();
+                    }
                     Err(error) => return error.into_response(),
+                },
+                Err(error) => return error.into_response(),
+            }
+        } else {
+            let claimed = match relay.account_for(&routed.model, policy.models()) {
+                Ok(claimed) => claimed,
+                Err(error) => return error.into_response(),
+            };
+
+            // §9.1 — an id no relayed mapping claims still relays when the account
+            // that would otherwise authenticate its translation is on the second
+            // provider. Translating it would spend that credential against the
+            // first provider's backend — a key leaking to an endpoint it was never
+            // stored for. Relayed, the credential travels only to its own
+            // provider, and that provider judges the id, which is the only
+            // authoritative answer to whether it is served. A launch-time model
+            // override rides on this: any id the account's subscription serves
+            // works without a mapping edit.
+            match claimed {
+                Some(account) => Some(account),
+                None => {
+                    let pinned = policy
+                        .models()
+                        .iter()
+                        .find(|mapping| mapping.requested == routed.model)
+                        .and_then(|mapping| mapping.account.clone());
+                    match relay.relaying_account(pinned.as_deref()) {
+                        Ok(name) => name,
+                        Err(error) => return error.into_response(),
+                    }
                 }
             }
         };
@@ -314,7 +363,10 @@ async fn messages(
     // §7.1 — the account this tier's turns are made as, where the entry pinned
     // one. Taken from the same snapshot as the model, so a turn cannot be
     // translated for one tier's model and authenticated as another's account.
-    let account = routed.and_then(|mapping| mapping.account.clone());
+    // A launch tag outranks the pin (§2.3): it is this session's word on who
+    // pays, and a name the store does not hold is refused downstream rather
+    // than silently served as anyone else.
+    let account = tagged.or_else(|| routed.and_then(|mapping| mapping.account.clone()));
 
     // A turn past this point translates as an account on the first provider:
     // the block above already relayed every turn whose authenticating account

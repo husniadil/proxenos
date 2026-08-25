@@ -18,7 +18,10 @@ authentication: every caller reaching the socket is already a local process
 running as the user.
 
 `ANTHROPIC_AUTH_TOKEN` must be set for Claude Code's own sake. Its value is
-ignored.
+ignored, with one carve-out: a value of `proxenos-account:<name>` is a launch
+tag (`exec --account`, §2.3) naming the stored account that session's turns
+are made as. The tag is a name, never a secret, and the credential it resolves
+to never leaves the daemon.
 
 | Endpoint | Purpose |
 |---|---|
@@ -711,7 +714,20 @@ token's value is ignored by design — so a command line is a fine place for it.
 
 Everything from the program name onward is opaque and forwarded in order, so the
 client's own flags keep working unchanged. `--` is accepted for a command whose
-first argument would otherwise be read as this verb's. On Unix the child is
+first argument would otherwise be read as this verb's.
+
+**`--account <name>` serves this session as the named account, without moving
+the selection.** The flag is this verb's, consumed before the program name and
+never forwarded: the child's argv gains nothing, and the name travels as the
+`ANTHROPIC_AUTH_TOKEN` value — otherwise ignored by design (§1) — as
+`proxenos-account:<name>`. The daemon reads the tag per turn and it outranks a
+tier's pinned account: relay when the named account is on the second provider,
+translate as it otherwise, exactly the fork the selection would have decided.
+A name the store does not hold is refused twice, each time naming it: at
+launch, before anything starts, and at the turn, so an account removed
+mid-session fails loudly rather than falling back to whoever is selected.
+`accounts use` is the standing switch; this is the per-session one, the way a
+`kubectl` command can name a context without touching the current one. On Unix the child is
 `exec`d, so signals, job control, the terminal, and the exit status pass through
 untouched.
 

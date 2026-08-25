@@ -277,6 +277,84 @@ async fn turn(base: &str, body: &'static str) -> reqwest::Response {
         .expect("the ingress should answer")
 }
 
+/// The same turn, launched with an account tag riding the bearer the client
+/// was told to send (`exec --account`, api.md §2.3).
+async fn tagged_turn(base: &str, body: &'static str, account: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("{base}/v1/messages"))
+        .header("content-type", "application/json")
+        .header(
+            "authorization",
+            format!("Bearer {}{account}", proxenos::ingress::ACCOUNT_TAG),
+        )
+        .header("anthropic-version", "2023-06-01")
+        .body(body)
+        .send()
+        .await
+        .expect("the ingress should answer")
+}
+
+/// A launch tagged with a second-provider account relays, with no mapping
+/// claim in sight: the tag names who pays, and that account's provider says
+/// which path the turn leaves by.
+#[tokio::test]
+async fn a_tagged_second_provider_account_relays_an_unclaimed_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store_with_a_relay_account(&dir);
+    // The serving account stays on the first provider; only the tag differs
+    // from `an_unclaimed_model_id_still_takes_the_translating_path`.
+    let (base, seen) = daemon(store, vec![tier("sonnet", "gpt-5.6-terra", None)], false).await;
+
+    let response = tagged_turn(&base, CLIENT_BODY, "relay").await;
+
+    assert_eq!(response.status(), 200);
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.bodies[0], CLIENT_BODY);
+    assert_eq!(
+        seen.headers[0]
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer relay-key-value")
+    );
+}
+
+/// A launch tagged with a first-provider account translates as that account,
+/// even where the tier's own pin would have relayed: the tag is the launch's
+/// word on who pays, and it outranks the mapping's.
+#[tokio::test]
+async fn a_tagged_first_provider_account_outranks_a_relaying_pin() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store_with_a_relay_account(&dir);
+    let (base, seen) = daemon(
+        store,
+        vec![tier("sonnet", "claude-sonnet-5", Some("relay"))],
+        false,
+    )
+    .await;
+
+    // The translating path's transport points nowhere, so failing there is
+    // the assertion: the pin alone would have relayed this turn.
+    let response = tagged_turn(&base, CLIENT_BODY, "acct_serving").await;
+    assert_ne!(response.status(), 200);
+    assert!(seen.lock().unwrap().bodies.is_empty());
+}
+
+/// A tag naming no stored account is refused, naming the name — never served
+/// as whoever happens to be selected.
+#[tokio::test]
+async fn a_tag_naming_no_stored_account_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store_with_a_relay_account(&dir);
+    let (base, seen) = daemon(store, vec![tier("sonnet", "claude-sonnet-5", None)], false).await;
+
+    let response = tagged_turn(&base, CLIENT_BODY, "no-such-account").await;
+
+    assert_ne!(response.status(), 200);
+    let body = response.text().await.expect("a body");
+    assert!(body.contains("no-such-account"), "{body}");
+    assert!(seen.lock().unwrap().bodies.is_empty());
+}
+
 /// **Build 3.** The body the client sent is the body the upstream receives,
 /// byte for byte.
 #[tokio::test]

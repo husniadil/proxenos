@@ -225,6 +225,14 @@ pub struct ModelsArgs {
 
 #[derive(Debug, clap::Args)]
 pub struct ExecArgs {
+    /// The stored account this session's turns are made as, without changing
+    /// which account serves everything else.
+    ///
+    /// Consumed here and never forwarded: the child's argv gains nothing, and
+    /// the name travels as the auth token value the client already sends. An
+    /// unknown name is refused before anything starts.
+    #[arg(long)]
+    pub account: Option<String>,
     /// The program to start, and everything to hand it.
     ///
     /// Opaque from the program name onward, so the client's own flags keep
@@ -645,6 +653,36 @@ mod tests {
             panic!("expected exec");
         };
         assert_eq!(args.command, ["claude", "--resume", "abc", "-p"]);
+    }
+
+    /// `--account` is this verb's, consumed before the program name and never
+    /// forwarded: the child's argv gains nothing, and the same spelling after
+    /// the program name still belongs to the child.
+    #[test]
+    fn exec_consumes_its_own_account_flag() {
+        let cli = Cli::try_parse_from([
+            "proxenos",
+            "exec",
+            "--account",
+            "personal",
+            "claude",
+            "--model",
+            "haiku",
+        ])
+        .unwrap();
+        let Command::Exec(args) = cli.command else {
+            panic!("expected exec");
+        };
+        assert_eq!(args.account.as_deref(), Some("personal"));
+        assert_eq!(args.command, ["claude", "--model", "haiku"]);
+
+        let cli =
+            Cli::try_parse_from(["proxenos", "exec", "some-tool", "--account", "theirs"]).unwrap();
+        let Command::Exec(args) = cli.command else {
+            panic!("expected exec");
+        };
+        assert_eq!(args.account, None);
+        assert_eq!(args.command, ["some-tool", "--account", "theirs"]);
     }
 
     /// `--` for the command whose own first argument would otherwise be read

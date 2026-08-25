@@ -1919,6 +1919,14 @@ account is on the second provider is relayed. An id no mapping names follows
 the account that would authenticate it: relayed when that account is on the
 second provider, translated as before when it is on the first.
 
+**A launch tag outranks all of it.** A session started with `exec --account`
+(`api.md` §2.3) carries the account's name in the auth token value the client
+already sends, and a tagged turn is that account's: relayed when it is on the
+second provider, translated as it otherwise, with the mapping's claims not
+consulted. The tag is the launch's word on who pays. A tag naming nothing
+stored is refused before the turn spends anything, naming the name — never
+served as whoever happens to be selected.
+
 The unpinned case matters on its own. An operator who stores a key for this
 provider and selects it has said where their turns go, and routing that ignored
 the selection would send every one of them to the other provider's endpoint —
@@ -1976,7 +1984,8 @@ invented where the client sent none.
 
 - **`authorization` is replaced** with the account's credential. The client's
   own bearer is a placeholder: `ANTHROPIC_AUTH_TOKEN` has to be set for the
-  client's sake and its value is ignored (§8).
+  client's sake and its value is ignored (§8) — or is a launch tag naming the
+  account (§9.1), which is read for routing and replaced here all the same.
 - **`x-api-key` is dropped.** No observed client sends one, and a turn
   authenticated as whatever the caller happened to hold is a turn this proxy
   did not route.
