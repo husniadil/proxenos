@@ -6,6 +6,11 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- A herdr plugin, under `herdr-plugin/`: quota bars for every claude pane in
+  the sidebar — routed panes show the serving account, direct panes the
+  keychain anthropic account, model-scoped windows included — and the full
+  per-account table in a popup on `prefix+u`. Install is `herdr plugin link`
+  plus `sh install.sh`; see its README.
 - `exec --account <name>` serves one session as the named account without
   moving the selection — the per-session switch beside `accounts use`'s
   standing one. The flag is consumed by `exec` and never forwarded; the name

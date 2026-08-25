@@ -1,0 +1,67 @@
+#!/bin/sh
+# The usage dashboard: every account the daemon holds, bars and resets per
+# window, rendered from `proxenos usage --json` and redrawn every 30 seconds.
+# `r` asks the providers for fresh figures (`usage --refresh`); `q` quits.
+set -u
+
+command -v jq >/dev/null 2>&1 || { echo "proxenos usage: jq is required" >&2; exit 1; }
+command -v proxenos >/dev/null 2>&1 || { echo "proxenos usage: proxenos is not on PATH" >&2; exit 1; }
+
+render() {
+    proxenos usage --json 2>/dev/null | jq -r --argjson now "$(date +%s)" '
+        def bar: (. / 10 | floor | if . > 10 then 10 else . end) as $f
+            | ("▰" * $f) + ("▱" * (10 - $f));
+        def pad5: (" " * (5 - length)) + .;
+        def pct3: (" " * (3 - length)) + .;
+        def until: (. - $now) as $s
+            | if $s <= 0 then "already reset"
+              elif $s < 3600 then "resets in \($s / 60 | floor)m"
+              elif $s < 86400 then "resets in \($s / 3600 | floor)h \($s % 3600 / 60 | floor)m"
+              else "resets in \($s / 86400 | floor)d \($s % 86400 / 3600 | floor)h" end;
+        def age: ($now - .) as $s
+            | if $s < 60 then "just now"
+              elif $s < 3600 then "\($s / 60 | floor)m ago"
+              elif $s < 86400 then "\($s / 3600 | floor)h ago"
+              else "\($s / 86400 | floor)d ago" end;
+        def wname: if .window_minutes == null then (.label // "?" | ascii_downcase)
+            elif .window_minutes >= 1440 then "\(.window_minutes / 1440 | floor)d"
+            else "\(.window_minutes / 60 | floor)h" end;
+
+        "proxenos usage" + (" " * 34) + "r refresh · q quit",
+        "",
+        (.accounts[]
+            | (if .serving then "* " else "  " end) as $mark
+            | ($mark + .account + " (" + .provider + ")"
+                + (if .plan then " — " + .plan else "" end)
+                + (if .measured_at then "   as of " + (.measured_at | age) else "" end)),
+              (if (.windows // [] | length) > 0 then
+                  (.windows[] | "    \(wname | pad5)  \(.used_percent // 0 | floor | bar)  \(.used_percent // 0 | floor | tostring | pct3)%"
+                      + (if .resets_at then "   \(.resets_at | until)" else "" end))
+               else
+                  "    " + (.reason // .detail // "no figure")
+                      + (if .served_tokens and .served_tokens > 0 then " · \(.served_tokens) tok served" else "" end)
+               end),
+              ""
+        )'
+}
+
+while :; do
+    printf '\033[2J\033[H'
+    render || echo "the daemon is not answering; is it running?"
+
+    started=$(date +%s)
+    key=""
+    if ! read -r -t 30 key 2>/dev/null; then
+        # A shell without `read -t` returns at once; sleep the interval so
+        # the loop stays a redraw rather than a spin. Quitting still works —
+        # the popup closes with the pane.
+        [ $(($(date +%s) - started)) -lt 2 ] && sleep 30
+    fi
+    case "$key" in
+        q | Q) exit 0 ;;
+        r | R)
+            printf 'asking the providers for fresh figures...\n'
+            proxenos usage --refresh >/dev/null 2>&1
+            ;;
+    esac
+done

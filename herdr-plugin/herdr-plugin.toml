@@ -1,0 +1,39 @@
+id = "proxenos"
+name = "proxenos"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Quota bars for claude panes, and the full usage table in a popup"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "dashboard"
+title = "proxenos usage"
+description = "Every account's quota, bars and resets, refreshed live"
+placement = "popup"
+command = ["sh", "popup-usage.sh"]
+
+[[actions]]
+id = "open"
+title = "Open proxenos usage"
+description = "Open the usage dashboard in a popup"
+contexts = ["global", "workspace"]
+command = ["sh", "open-pane.sh", "dashboard"]
+
+[[actions]]
+id = "report"
+title = "Refresh this pane's quota bars"
+description = "Re-resolve the focused pane's routing and push its quota tokens"
+contexts = ["global", "workspace", "pane"]
+command = ["sh", "report-usage.sh"]
+
+# A pane's account can change with no herdr event — the serving account moves,
+# or quota simply ticks — so the reporter also starts a per-pane watcher that
+# re-publishes on a timer. The hooks are what get the first report out the
+# moment a claude pane appears.
+[[events]]
+on = "pane.agent_detected"
+command = ["sh", "report-usage.sh"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["sh", "report-usage.sh"]
