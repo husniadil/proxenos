@@ -6,6 +6,10 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- A borrowed Anthropic grant's plan carries its multiplier: `usage --refresh`
+  also asks the provider's profile endpoint, so a max account renders
+  `max 20x` rather than `max`. Asked at most hourly; a declined answer leaves
+  the plan as the grant last stated it rather than inventing one.
 - `usage` keeps a model-scoped limit as its own labeled window. The quota
   endpoint of a borrowed Anthropic grant states per-model figures beside the
   account's — measured live, one model sat at 16% against a weekly window at

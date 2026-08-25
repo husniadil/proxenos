@@ -1348,6 +1348,7 @@ catalog  = "https://..."
 [upstream.anthropic]
 endpoint = "https://..."
 usage    = "https://..."
+profile  = "https://..."
 
 # Optional. The profile directories grants are borrowed from, keyed by the
 # name the account is filed under.
@@ -1400,7 +1401,10 @@ credential to the other's endpoint is refused before anything leaves.
 and `usage` is where that provider states quota for a borrowed grant
 (`proxy-behavior.md` §8.4). Only a grant can ask there: a key has no
 subscription behind it, and the long-lived subscription token wearing the same
-stem is refused for want of a scope. Otherwise the relay does one thing: it speaks the surface this proxy
+stem is refused for want of a scope. `profile` is where the same provider
+states the account's plan with its multiplier (`max 20x`); it is asked beside
+a quota refresh, at most hourly, and an answer it declines to give leaves the
+plan absent rather than invented. Otherwise the relay does one thing: it speaks the surface this proxy
 already exposes, so there is no catalog to translate and no socket protocol to
 speak.
 

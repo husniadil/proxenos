@@ -825,6 +825,7 @@ async fn a_relayed_turn_joins_the_served_models_a_status_line_reads() {
         tokens: None,
         usage_endpoint: String::new(),
         anthropic_usage_endpoint: String::new(),
+        anthropic_profile_endpoint: String::new(),
         sessions: Arc::new(proxenos::session::SessionStore::new()),
         config_path: None,
     };

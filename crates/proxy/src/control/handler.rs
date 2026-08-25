@@ -69,6 +69,8 @@ pub struct ControlState {
     /// Where the second provider states quota. Separate because it is a
     /// different endpoint answering in a different shape (§8.4).
     pub anthropic_usage_endpoint: String,
+    /// Where the second provider states an account's plan, beside its quota.
+    pub anthropic_profile_endpoint: String,
     /// The live conversations. A switch has to reach them: a conduit fixes its
     /// account on the connection at dial and reuses it for the conversation's
     /// life, so a session left alone keeps being served as the account it
@@ -2151,22 +2153,47 @@ async fn ask_for(
         .map_err(|error| error.message)?;
 
     // Each provider states quota at its own endpoint, in its own shape.
-    let endpoint = if account.provider == crate::auth::store::Provider::Anthropic.as_str() {
+    let anthropic = account.provider == crate::auth::store::Provider::Anthropic.as_str();
+    let endpoint = if anthropic {
         &state.anthropic_usage_endpoint
     } else {
         &state.usage_endpoint
     };
+    let claude_program = state
+        .config
+        .claude_program
+        .as_deref()
+        .unwrap_or_else(|| std::path::Path::new(crate::auth::borrowed::poke::PROGRAM));
 
-    crate::usage::fetch(
-        client,
-        endpoint,
-        &authorization,
-        state
-            .config
-            .claude_program
-            .as_deref()
-            .unwrap_or_else(|| std::path::Path::new(crate::auth::borrowed::poke::PROGRAM)),
-    )
-    .await
-    .map_err(|error| error.message)
+    let mut snapshot = crate::usage::fetch(client, endpoint, &authorization, claude_program)
+        .await
+        .map_err(|error| error.message)?;
+
+    // The second provider's quota body states no plan; its profile endpoint
+    // beside it does, multiplier included. Asked at most hourly, and a
+    // declined answer leaves the plan absent rather than invented.
+    if anthropic && snapshot.plan.is_none() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or_default();
+        snapshot.plan = match state.usage.cached_profile_plan(&account.name, now) {
+            Some(plan) => Some(plan),
+            None => {
+                let plan = crate::usage::fetch_anthropic_plan(
+                    client,
+                    &state.anthropic_profile_endpoint,
+                    &authorization,
+                    claude_program,
+                )
+                .await;
+                if let Some(plan) = &plan {
+                    state.usage.record_profile_plan(&account.name, plan, now);
+                }
+                plan
+            }
+        };
+    }
+
+    Ok(snapshot)
 }

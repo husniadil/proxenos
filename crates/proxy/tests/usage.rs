@@ -1341,6 +1341,49 @@ fn a_body_with_no_window_yields_nothing() {
     assert!(Snapshot::parse_anthropic("not json").is_none());
 }
 
+/// The profile endpoint names the plan with its multiplier where one exists.
+/// Captured live: `organization_type: "claude_max"` beside
+/// `rate_limit_tier: "default_claude_max_20x"`.
+#[test]
+fn the_profile_endpoint_names_the_plan_with_its_multiplier() {
+    let plan = |body: &str| Snapshot::plan_from_anthropic_profile(body);
+
+    assert_eq!(
+        plan(
+            r#"{"organization":{"organization_type":"claude_max",
+                "rate_limit_tier":"default_claude_max_20x"}}"#
+        ),
+        Some("max 20x".to_owned())
+    );
+    assert_eq!(
+        plan(
+            r#"{"organization":{"organization_type":"claude_max",
+                "rate_limit_tier":"default_claude_max_5x"}}"#
+        ),
+        Some("max 5x".to_owned())
+    );
+    // A max org whose tier states no multiplier is still a max org.
+    assert_eq!(
+        plan(r#"{"organization":{"organization_type":"claude_max"}}"#),
+        Some("max".to_owned())
+    );
+    assert_eq!(
+        plan(r#"{"organization":{"organization_type":"claude_pro"}}"#),
+        Some("pro".to_owned())
+    );
+    assert_eq!(
+        plan(r#"{"organization":{"organization_type":"claude_team"}}"#),
+        Some("team".to_owned())
+    );
+    // An unrecognized organization is no plan, never a fabricated one.
+    assert_eq!(
+        plan(r#"{"organization":{"organization_type":"claude_zeppelin"}}"#),
+        None
+    );
+    assert_eq!(plan("{}"), None);
+    assert_eq!(plan("not json"), None);
+}
+
 /// The stream shape and this one are different bodies. Reading either with the
 /// other's parser must yield nothing rather than an empty snapshot.
 #[test]
@@ -1507,6 +1550,66 @@ async fn the_first_provider_is_unchanged() {
         .header("user-agent")
         .expect("a user agent was sent");
     assert!(!agent.starts_with("claude-cli"), "was: {agent}");
+}
+
+/// The plan is asked for at the profile endpoint beside the quota one, as the
+/// owning client, and read into the same vocabulary `accounts` renders.
+#[tokio::test]
+async fn the_profile_endpoint_is_asked_for_the_plan() {
+    let endpoint = QuotaEndpoint::start(
+        r#"{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}"#,
+    )
+    .await;
+
+    let plan = proxenos::usage::fetch_anthropic_plan(
+        &reqwest::Client::new(),
+        &endpoint.url,
+        &authorization(proxenos::auth::store::Provider::Anthropic),
+        std::path::Path::new("claude"),
+    )
+    .await;
+
+    assert_eq!(plan.as_deref(), Some("max 20x"));
+    let agent = endpoint
+        .header("user-agent")
+        .expect("a user agent was sent");
+    assert!(agent.starts_with("claude-cli"), "was: {agent}");
+}
+
+/// An endpoint that declines to say yields no plan, never a fabricated one.
+#[tokio::test]
+async fn a_profile_the_endpoint_declines_to_state_is_no_plan() {
+    let endpoint = QuotaEndpoint::start("{}").await;
+
+    let plan = proxenos::usage::fetch_anthropic_plan(
+        &reqwest::Client::new(),
+        &endpoint.url,
+        &authorization(proxenos::auth::store::Provider::Anthropic),
+        std::path::Path::new("claude"),
+    )
+    .await;
+
+    assert_eq!(plan, None);
+}
+
+/// The profile is asked for at most hourly. Within the hour the recorded plan
+/// answers; past it the cache declines, which is what makes the next refresh
+/// ask again.
+#[test]
+fn a_profile_plan_is_remembered_for_an_hour() {
+    let usage = proxenos::usage::UsageStore::default();
+
+    assert_eq!(usage.cached_profile_plan("claude", 1_000_000), None);
+    usage.record_profile_plan("claude", "max 20x", 1_000_000);
+    assert_eq!(
+        usage
+            .cached_profile_plan("claude", 1_000_000 + 3_599)
+            .as_deref(),
+        Some("max 20x")
+    );
+    assert_eq!(usage.cached_profile_plan("claude", 1_000_000 + 3_601), None);
+    // Another account's cache answers nothing for this one.
+    assert_eq!(usage.cached_profile_plan("other", 1_000_000 + 10), None);
 }
 
 /// One provider's body through the other's parser yields nothing rather than

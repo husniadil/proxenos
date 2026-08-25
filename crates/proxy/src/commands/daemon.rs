@@ -438,6 +438,7 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
         tokens: Some(Arc::clone(&tokens)),
         usage_endpoint: config.upstream.usage.clone(),
         anthropic_usage_endpoint: config.upstream.anthropic.usage.clone(),
+        anthropic_profile_endpoint: config.upstream.anthropic.profile.clone(),
         sessions: Arc::clone(&sessions),
         config_path: Some(proxenos::config::config_path()),
     };

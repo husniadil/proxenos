@@ -1908,9 +1908,87 @@ fn state_over(accounts: Arc<Accounts>) -> proxenos::control::handler::ControlSta
         // refuses before a request is built. No test may reach the network.
         usage_endpoint: String::new(),
         anthropic_usage_endpoint: String::new(),
+        anthropic_profile_endpoint: String::new(),
         sessions: Arc::new(proxenos::session::SessionStore::new()),
         config_path: None,
     }
+}
+
+/// The refresh row for a borrowed grant carries the plan its profile endpoint
+/// states, multiplier included — and within the hour the answer is remembered
+/// rather than asked for again.
+#[tokio::test]
+async fn a_refresh_carries_the_plan_the_profile_endpoint_states() {
+    let profile_hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&profile_hits);
+    let router = axum::Router::new()
+        .route(
+            "/usage",
+            axum::routing::get(|| async {
+                r#"{"five_hour":{"utilization":7.0,"resets_at":"2026-08-23T09:00:00.383476+00:00"}}"#
+            }),
+        )
+        .route(
+            "/profile",
+            axum::routing::get(move || {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async {
+                    r#"{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}"#
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback listener");
+    let base = format!("http://{}", listener.local_addr().expect("an address"));
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let personal = profile("personal", Provider::Anthropic, Some("/profiles/personal"));
+    let accounts = Arc::new(accounts_over(
+        dir.path(),
+        vec![personal.clone()],
+        &[(&personal, claude_blob(4_000_000_000, 4_000_000_000))],
+        Arc::new(FakeClient::default()),
+    ));
+    let state = proxenos::control::handler::ControlState {
+        anthropic_usage_endpoint: format!("{base}/usage"),
+        anthropic_profile_endpoint: format!("{base}/profile"),
+        ..state_over(accounts)
+    };
+
+    let plan_of = |answer: &serde_json::Value| {
+        answer["accounts"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .find(|row| row["account"] == serde_json::json!("personal"))
+            .expect("a row for the profile")["plan"]
+            .clone()
+    };
+
+    let first = proxenos::control::handler::refresh_usage_within(
+        &state,
+        proxenos::control::handler::REFRESH_BUDGET,
+    )
+    .await
+    .expect("the sweep answers");
+    assert_eq!(plan_of(&first), serde_json::json!("max 20x"), "{first}");
+
+    let second = proxenos::control::handler::refresh_usage_within(
+        &state,
+        proxenos::control::handler::REFRESH_BUDGET,
+    )
+    .await
+    .expect("the sweep answers again");
+    assert_eq!(plan_of(&second), serde_json::json!("max 20x"), "{second}");
+    assert_eq!(
+        profile_hits.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the profile endpoint is asked at most hourly"
+    );
 }
 
 /// Two lapsed profiles, so the sweep has something to spend its budget on.
@@ -2439,6 +2517,7 @@ fn daemon_over(
         tokens: None,
         usage_endpoint: String::new(),
         anthropic_usage_endpoint: String::new(),
+        anthropic_profile_endpoint: String::new(),
         sessions: Arc::new(proxenos::session::SessionStore::new()),
         config_path: Some(dir.join("config.toml")),
     }

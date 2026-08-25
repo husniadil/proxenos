@@ -454,6 +454,13 @@ pub struct AnthropicEndpoints {
     /// for want of a scope — which is the gap borrowing closed (§8.4).
     #[serde(default = "default_anthropic_usage_endpoint")]
     pub usage: String,
+    /// Where a borrowed grant's plan is asked for, beside its quota.
+    ///
+    /// The quota body states no plan; this one states it with its multiplier
+    /// (`max 20x`). Asked at most hourly, and only where quota was already
+    /// being asked for.
+    #[serde(default = "default_anthropic_profile_endpoint")]
+    pub profile: String,
 }
 
 impl Default for AnthropicEndpoints {
@@ -461,6 +468,7 @@ impl Default for AnthropicEndpoints {
         Self {
             endpoint: default_anthropic_endpoint(),
             usage: default_anthropic_usage_endpoint(),
+            profile: default_anthropic_profile_endpoint(),
         }
     }
 }
@@ -471,6 +479,10 @@ fn default_anthropic_endpoint() -> String {
 
 fn default_anthropic_usage_endpoint() -> String {
     "https://api.anthropic.com/api/oauth/usage".to_owned()
+}
+
+fn default_anthropic_profile_endpoint() -> String {
+    "https://api.anthropic.com/api/oauth/profile".to_owned()
 }
 
 /// The endpoints an API key is spent against.

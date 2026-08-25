@@ -1738,6 +1738,13 @@ own severity, read rather than inferred from the percentage: an account can sit
 high on a window the provider is still calling normal. Nothing in that body
 states that a turn would be refused, so nothing derived from it claims one would.
 
+The plan is not in that body. It is asked for at the profile endpoint beside
+it, which states the organization's type and, for a max org, the multiplier as
+a rate-limit tier (`default_claude_max_20x` renders `max 20x`). A refresh asks
+there at most hourly — a plan changes on the scale of billing — and an
+organization type this proxy does not recognize yields no plan rather than a
+guessed one.
+
 A `limits` entry whose `scope` names a model is that one model's figure, not the
 account's, and it is kept as its own window rather than dropped: labeled with
 the model's display name, carrying the entry's own percentage, severity, and

@@ -157,6 +157,7 @@ fn state(dir: &std::path::Path) -> (ControlState, Arc<Counting>) {
         tokens: None,
         usage_endpoint: String::new(),
         anthropic_usage_endpoint: String::new(),
+        anthropic_profile_endpoint: String::new(),
         sessions: Arc::new(proxenos::session::SessionStore::new()),
         config_path: None,
     };

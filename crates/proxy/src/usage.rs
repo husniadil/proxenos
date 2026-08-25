@@ -341,6 +341,41 @@ impl Snapshot {
         })
     }
 
+    /// The plan a profile body states, with its multiplier where one exists.
+    ///
+    /// The quota body states no plan; the profile endpoint beside it does, as
+    /// `organization.organization_type` — and for a max org the multiplier
+    /// rides separately in `rate_limit_tier` (`default_claude_max_20x`). An
+    /// organization type this does not recognize yields no plan rather than a
+    /// guessed one.
+    pub fn plan_from_anthropic_profile(payload: &str) -> Option<String> {
+        let body: Value = serde_json::from_str(payload).ok()?;
+        let organization = body.get("organization")?;
+        let kind = organization.get("organization_type")?.as_str()?;
+
+        match kind {
+            "claude_max" => {
+                let multiplier = organization
+                    .get("rate_limit_tier")
+                    .and_then(Value::as_str)
+                    .and_then(|tier| tier.rsplit('_').next())
+                    .filter(|last| {
+                        last.strip_suffix('x')
+                            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                    });
+                Some(match multiplier {
+                    Some(multiplier) => format!("max {multiplier}"),
+                    None => "max".to_owned(),
+                })
+            }
+            "claude_pro" => Some("pro".to_owned()),
+            "claude_team" | "claude_teams" => Some("team".to_owned()),
+            "claude_enterprise" => Some("enterprise".to_owned()),
+            "claude_free" | "free" => Some("free".to_owned()),
+            _ => None,
+        }
+    }
+
     /// Read a snapshot out of a relayed response's own headers.
     ///
     /// The second provider states quota in the response headers of every turn,
@@ -730,6 +765,12 @@ pub struct UsageStore {
     served: Mutex<std::collections::BTreeSet<String>>,
     /// Tokens served per account, as upstream counted them.
     spent: Mutex<std::collections::BTreeMap<String, Spent>>,
+    /// The plan the profile endpoint last stated per account, and when.
+    ///
+    /// The profile is asked for at most hourly: a plan changes on the scale of
+    /// billing, and asking beside every quota refresh would spend a request to
+    /// be told the same word.
+    profile_plans: Mutex<std::collections::BTreeMap<String, (u64, String)>>,
     /// Where the tally is written, if it is written anywhere.
     ///
     /// `None` in a test harness and in `doctor`, which have no daemon state
@@ -1100,6 +1141,25 @@ impl UsageStore {
             .unwrap_or_default()
     }
 
+    /// The plan the profile endpoint stated within the last hour, if it did.
+    #[must_use]
+    pub fn cached_profile_plan(&self, account: &str, now: u64) -> Option<String> {
+        const HOUR: u64 = 3_600;
+        self.profile_plans
+            .lock()
+            .ok()?
+            .get(account)
+            .filter(|(asked, _)| now.saturating_sub(*asked) <= HOUR)
+            .map(|(_, plan)| plan.clone())
+    }
+
+    /// Remember what the profile endpoint stated, and when it was asked.
+    pub fn record_profile_plan(&self, account: &str, plan: &str, now: u64) {
+        if let Ok(mut plans) = self.profile_plans.lock() {
+            plans.insert(account.to_owned(), (now, plan.to_owned()));
+        }
+    }
+
     pub fn record_model(&self, model: &str) {
         if let Ok(mut served) = self.served.lock()
             && !served.contains(model)
@@ -1184,6 +1244,42 @@ pub async fn fetch(
             "the quota endpoint answered with a shape this proxy does not recognize",
         )
     })
+}
+
+/// Ask the second provider's profile endpoint what plan an account is on.
+///
+/// The quota body states no plan, and the stored grant's word is as old as the
+/// last login; this endpoint beside the quota one is where the provider states
+/// it now, multiplier included. `None` for anything short of a recognized
+/// answer — a plan is decoration on a figure, not the figure, and no request
+/// fails for want of one.
+pub async fn fetch_anthropic_plan(
+    client: &reqwest::Client,
+    endpoint: &str,
+    authorization: &crate::auth::authorize::Authorization,
+    claude_program: &std::path::Path,
+) -> Option<String> {
+    let authorization = authorization
+        .clone()
+        .for_endpoint(crate::auth::authorize::Kind::Subscription)
+        .ok()?;
+
+    let request = authorization.apply(
+        client
+            .get(endpoint)
+            .header(
+                axum::http::header::USER_AGENT,
+                claude_user_agent(claude_program),
+            )
+            .header(axum::http::header::ACCEPT, "application/json"),
+    );
+
+    let response = request.send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body = response.text().await.ok()?;
+    Snapshot::plan_from_anthropic_profile(&body)
 }
 
 /// What the second provider's quota endpoint is asked as.
