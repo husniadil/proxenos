@@ -6,6 +6,16 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- `usage` says when a borrowed Anthropic subscription is no longer active. The
+  profile endpoint already asked for the plan also states
+  `subscription_status`, and a subscription the provider has stopped calling
+  active keeps reporting quota that looks untouched while every turn is
+  refused — so the account's row now reads `subscription canceled`, in the
+  provider's own word rather than a vocabulary invented here, and the same
+  word travels under `subscription_status` in `usage --json`. An active
+  subscription is silence. The hourly profile cache keeps the status beside
+  the plan, so a cached answer states as much as a fresh one.
+
 - `usage` reports the extra-usage credit a borrowed Anthropic grant states.
   Once an account's plan windows are full, further turns come out of a money
   balance no percentage in the table describes — measured live, 6% of a

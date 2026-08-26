@@ -148,6 +148,7 @@ fn account_rows(account: &Value, now: u64) -> Vec<Vec<String>> {
             source.to_owned(),
             age,
         ]];
+        rows.extend(subscription_row(account));
         rows.extend(credit_row(account));
         return rows;
     }
@@ -178,8 +179,29 @@ fn account_rows(account: &Value, now: u64) -> Vec<Vec<String>> {
             ]
         })
         .collect();
+    rows.extend(subscription_row(account));
     rows.extend(credit_row(account));
     rows
+}
+
+/// What the subscription behind the account is doing, where the provider says
+/// it is anything other than active.
+///
+/// The one state a quota figure cannot show: a canceled subscription keeps
+/// stating windows that look untouched while every turn is refused, so a
+/// reader left with the figure alone reads an account that is fine. The
+/// provider's own word, passed through rather than translated into a sentence
+/// this proxy wrote.
+fn subscription_row(account: &Value) -> Option<Vec<String>> {
+    let status = field(account, "subscription_status").and_then(Value::as_str)?;
+    Some(vec![
+        String::new(),
+        String::new(),
+        format!("subscription {status}"),
+        String::new(),
+        String::new(),
+        String::new(),
+    ])
 }
 
 /// The credit balance, on a row of its own under the account's windows.

@@ -1777,6 +1777,21 @@ there at most hourly — a plan changes on the scale of billing — and an
 organization type this proxy does not recognize yields no plan rather than a
 guessed one.
 
+**The same body says what the subscription is doing, and that is the one state
+quota cannot show.** `organization.subscription_status` is read from the answer
+already being fetched for the plan, and both are remembered together — a cached
+row that had kept only the plan would state less than a fresh one for the rest
+of the hour. A subscription the provider no longer calls active is reported to
+keep serving quota that looks untouched while every turn is refused, so a
+reader left with the figure alone reads an account that is fine.
+
+`active` is silence, and so is a profile that states nothing: the ordinary
+state of every account, said on every row, is a word nobody reads. Any other
+value is surfaced **verbatim**, on the account's own row and in the JSON. Only
+`active` has been measured here, and sorting the rest into a vocabulary this
+proxy invented would put words in the provider's mouth — `canceled` renders as
+`subscription canceled` because that is the word the provider used.
+
 A `limits` entry whose `scope` names a model is that one model's figure, not the
 account's, and it is kept as its own window rather than dropped: labeled with
 the model's display name, carrying the entry's own percentage, severity, and

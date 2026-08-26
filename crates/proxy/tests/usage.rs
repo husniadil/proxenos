@@ -1049,6 +1049,7 @@ fn a_snapshot_file_holds_nothing_but_names_and_figures() {
                         "representative": false,
                     }],
                     "credit": null,
+                    "subscription_status": null,
                 },
                 "source": "turn",
                 "at": at,
@@ -1626,7 +1627,9 @@ fn a_credit_says_only_what_the_provider_said() {
 /// `rate_limit_tier: "default_claude_max_20x"`.
 #[test]
 fn the_profile_endpoint_names_the_plan_with_its_multiplier() {
-    let plan = |body: &str| Snapshot::plan_from_anthropic_profile(body);
+    let plan = |body: &str| {
+        Snapshot::anthropic_profile(body).and_then(|profile: proxenos::usage::Profile| profile.plan)
+    };
 
     assert_eq!(
         plan(
@@ -1662,6 +1665,103 @@ fn the_profile_endpoint_names_the_plan_with_its_multiplier() {
     );
     assert_eq!(plan("{}"), None);
     assert_eq!(plan("not json"), None);
+}
+
+/// The same profile body states what the subscription behind the account is
+/// doing. Captured live: `subscription_status: "active"`.
+///
+/// It is passed through verbatim rather than sorted into a vocabulary this
+/// proxy invented — the only word measured here is the one that means nothing
+/// is wrong.
+#[test]
+fn the_profile_endpoint_states_the_subscription_status() {
+    let status = |body: &str| {
+        Snapshot::anthropic_profile(body)
+            .and_then(|profile: proxenos::usage::Profile| profile.subscription_status)
+    };
+
+    assert_eq!(
+        status(
+            r#"{"organization":{"organization_type":"claude_max",
+                "subscription_status":"active"}}"#
+        )
+        .as_deref(),
+        Some("active")
+    );
+    // A word this proxy has never seen travels as it was stated.
+    assert_eq!(
+        status(r#"{"organization":{"subscription_status":"canceled"}}"#).as_deref(),
+        Some("canceled")
+    );
+    assert_eq!(status(r#"{"organization":{}}"#), None);
+    assert_eq!(status("{}"), None);
+}
+
+/// An active subscription is silence. It is the ordinary state of every
+/// account, and a word on every row is a word nobody reads — what has to be
+/// visible is the account that is still reporting quota while every turn is
+/// refused.
+#[test]
+fn only_a_subscription_the_provider_stopped_calling_active_is_stated() {
+    let stated = |body: &str| {
+        Snapshot::anthropic_profile(body).and_then(|profile: proxenos::usage::Profile| {
+            profile.stated_status().map(str::to_owned)
+        })
+    };
+
+    assert_eq!(
+        stated(r#"{"organization":{"subscription_status":"active"}}"#),
+        None
+    );
+    assert_eq!(stated(r#"{"organization":{}}"#), None);
+    assert_eq!(
+        stated(r#"{"organization":{"subscription_status":"canceled"}}"#).as_deref(),
+        Some("canceled")
+    );
+}
+
+/// A subscription the provider no longer calls active is said on the account's
+/// row. The quota beside it can look untouched while every turn is refused, so
+/// the figure alone cannot be what the reader is left with.
+#[test]
+fn a_subscription_that_is_not_active_is_said_on_the_row() {
+    let result = json!({
+        "known": true,
+        "accounts": [{
+            "known": true,
+            "account": "personal-claude",
+            "provider": "anthropic",
+            "serving": true,
+            "source": "fetch",
+            "measured_at": 1_787_337_760u64,
+            "windows": [{ "used_percent": 6.0, "window_minutes": 300, "resets_at": 1_787_349_520u64 }],
+            "subscription_status": "canceled",
+        }],
+    });
+
+    let rendered = proxenos::render::usage_at(&result, 1_787_338_000);
+    let line = row_for(&rendered, "subscription");
+    assert!(line.contains("subscription canceled"), "{rendered}");
+    // The provider's word, not a sentence this proxy wrote around it.
+    assert!(!line.contains("personal-claude"), "{rendered}");
+
+    // And an account that states nothing says nothing.
+    let quiet = json!({
+        "known": true,
+        "accounts": [{
+            "known": true,
+            "account": "personal-claude",
+            "provider": "anthropic",
+            "serving": true,
+            "source": "fetch",
+            "measured_at": 1_787_337_760u64,
+            "windows": [{ "used_percent": 6.0, "window_minutes": 300, "resets_at": 1_787_349_520u64 }],
+        }],
+    });
+    assert!(
+        !proxenos::render::usage_at(&quiet, 1_787_338_000).contains("subscription"),
+        "an account with nothing to report says nothing"
+    );
 }
 
 /// The stream shape and this one are different bodies. Reading either with the
@@ -1833,23 +1933,26 @@ async fn the_first_provider_is_unchanged() {
 }
 
 /// The plan is asked for at the profile endpoint beside the quota one, as the
-/// owning client, and read into the same vocabulary `accounts` renders.
+/// owning client, and read into the same vocabulary `accounts` renders. The
+/// subscription status rides the same answer, because it is the same request.
 #[tokio::test]
 async fn the_profile_endpoint_is_asked_for_the_plan() {
     let endpoint = QuotaEndpoint::start(
-        r#"{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}"#,
+        r#"{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x","subscription_status":"active"}}"#,
     )
     .await;
 
-    let plan = proxenos::usage::fetch_anthropic_plan(
+    let profile = proxenos::usage::fetch_anthropic_profile(
         &reqwest::Client::new(),
         &endpoint.url,
         &authorization(proxenos::auth::store::Provider::Anthropic),
         std::path::Path::new("claude"),
     )
-    .await;
+    .await
+    .expect("a profile");
 
-    assert_eq!(plan.as_deref(), Some("max 20x"));
+    assert_eq!(profile.plan.as_deref(), Some("max 20x"));
+    assert_eq!(profile.subscription_status.as_deref(), Some("active"));
     let agent = endpoint
         .header("user-agent")
         .expect("a user agent was sent");
@@ -1861,7 +1964,7 @@ async fn the_profile_endpoint_is_asked_for_the_plan() {
 async fn a_profile_the_endpoint_declines_to_state_is_no_plan() {
     let endpoint = QuotaEndpoint::start("{}").await;
 
-    let plan = proxenos::usage::fetch_anthropic_plan(
+    let profile = proxenos::usage::fetch_anthropic_profile(
         &reqwest::Client::new(),
         &endpoint.url,
         &authorization(proxenos::auth::store::Provider::Anthropic),
@@ -1869,27 +1972,33 @@ async fn a_profile_the_endpoint_declines_to_state_is_no_plan() {
     )
     .await;
 
-    assert_eq!(plan, None);
+    assert!(profile.is_none());
 }
 
-/// The profile is asked for at most hourly. Within the hour the recorded plan
-/// answers; past it the cache declines, which is what makes the next refresh
-/// ask again.
+/// The profile is asked for at most hourly. Within the hour the recorded
+/// answer stands; past it the cache declines, which is what makes the next
+/// refresh ask again.
+///
+/// What is remembered is the whole answer, plan and status together: a cached
+/// row that had dropped half of it would be less complete than a fresh one for
+/// the next hour.
 #[test]
-fn a_profile_plan_is_remembered_for_an_hour() {
+fn a_profile_is_remembered_for_an_hour() {
     let usage = proxenos::usage::UsageStore::default();
+    let held = proxenos::usage::Profile {
+        plan: Some("max 20x".to_owned()),
+        subscription_status: Some("canceled".to_owned()),
+    };
 
-    assert_eq!(usage.cached_profile_plan("claude", 1_000_000), None);
-    usage.record_profile_plan("claude", "max 20x", 1_000_000);
+    assert_eq!(usage.cached_profile("claude", 1_000_000), None);
+    usage.record_profile("claude", &held, 1_000_000);
     assert_eq!(
-        usage
-            .cached_profile_plan("claude", 1_000_000 + 3_599)
-            .as_deref(),
-        Some("max 20x")
+        usage.cached_profile("claude", 1_000_000 + 3_599),
+        Some(held)
     );
-    assert_eq!(usage.cached_profile_plan("claude", 1_000_000 + 3_601), None);
+    assert_eq!(usage.cached_profile("claude", 1_000_000 + 3_601), None);
     // Another account's cache answers nothing for this one.
-    assert_eq!(usage.cached_profile_plan("other", 1_000_000 + 10), None);
+    assert_eq!(usage.cached_profile("other", 1_000_000 + 10), None);
 }
 
 /// One provider's body through the other's parser yields nothing rather than

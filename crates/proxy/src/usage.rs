@@ -166,6 +166,42 @@ pub struct Snapshot {
     /// Additive: a snapshot written before this field existed parses back
     /// without it, and reports no credit rather than a zero balance.
     pub credit: Option<Credit>,
+    /// The provider's word on the subscription behind the account, where it is
+    /// anything other than active (§8.4).
+    ///
+    /// Additive, like `credit`: a snapshot written before this field existed
+    /// parses back without it and says nothing.
+    pub subscription_status: Option<String>,
+}
+
+/// What the profile endpoint states about the account behind a grant.
+///
+/// One request answers both, so they are read and remembered together: a
+/// cached row that had kept only the plan would be less complete than a fresh
+/// one for as long as the cache stands.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Profile {
+    /// The plan with its multiplier, in the vocabulary `accounts` renders. An
+    /// organization type this proxy does not recognize yields none rather than
+    /// a guessed one.
+    pub plan: Option<String>,
+    /// The provider's own word, verbatim — this proxy has measured `active`
+    /// and sorts nothing else into a vocabulary of its own.
+    pub subscription_status: Option<String>,
+}
+
+impl Profile {
+    /// The status worth saying out loud.
+    ///
+    /// `active` is the ordinary state of every account and is silence, as is a
+    /// profile that states nothing. What has to reach the operator is the
+    /// account still reporting quota while every turn is refused.
+    #[must_use]
+    pub fn stated_status(&self) -> Option<&str> {
+        self.subscription_status
+            .as_deref()
+            .filter(|status| *status != "active")
+    }
 }
 
 /// The header names this client reads a quota out of.
@@ -206,9 +242,10 @@ impl Snapshot {
             .collect();
 
         Some(Self {
-            // No credit is stated here. The first provider's stream event
-            // carries windows and nothing else.
+            // No credit and no subscription state here. The first provider's
+            // stream event carries windows and nothing else.
             credit: None,
+            subscription_status: None,
             plan: event
                 .get("plan_type")
                 .and_then(Value::as_str)
@@ -250,8 +287,10 @@ impl Snapshot {
         }
 
         Some(Self {
-            // The first provider's quota body states no credit balance.
+            // The first provider's quota body states neither a credit balance
+            // nor anything about the subscription behind the account.
             credit: None,
+            subscription_status: None,
             plan: body
                 .get("plan_type")
                 .and_then(Value::as_str)
@@ -367,6 +406,9 @@ impl Snapshot {
 
         Some(Self {
             credit: parse_credit(body.get("spend")),
+            // Stated at the profile endpoint rather than here, and filled in
+            // by whoever asked there (§8.4).
+            subscription_status: None,
             // The body states no plan. It is knowable from the stored grant
             // instead, and reporting it from here would be a second answer to
             // one question.
@@ -378,16 +420,34 @@ impl Snapshot {
         })
     }
 
-    /// The plan a profile body states, with its multiplier where one exists.
+    /// What a profile body states about the account: its plan, and what the
+    /// subscription behind it is doing.
     ///
-    /// The quota body states no plan; the profile endpoint beside it does, as
-    /// `organization.organization_type` — and for a max org the multiplier
-    /// rides separately in `rate_limit_tier` (`default_claude_max_20x`). An
-    /// organization type this does not recognize yields no plan rather than a
-    /// guessed one.
-    pub fn plan_from_anthropic_profile(payload: &str) -> Option<String> {
+    /// The quota body states neither. The profile endpoint beside it states
+    /// the plan as `organization.organization_type` — and for a max org the
+    /// multiplier rides separately in `rate_limit_tier`
+    /// (`default_claude_max_20x`) — and the subscription as
+    /// `organization.subscription_status`. An organization type this does not
+    /// recognize yields no plan rather than a guessed one; the status is
+    /// passed through as stated, because a canceled account is reported to
+    /// keep serving quota that looks untouched while every turn is refused,
+    /// and this proxy has measured only the word that means nothing is wrong.
+    ///
+    /// `None` where there is no organization to read at all.
+    pub fn anthropic_profile(payload: &str) -> Option<Profile> {
         let body: Value = serde_json::from_str(payload).ok()?;
         let organization = body.get("organization")?;
+
+        Some(Profile {
+            plan: Self::plan_of(organization),
+            subscription_status: organization
+                .get("subscription_status")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        })
+    }
+
+    fn plan_of(organization: &Value) -> Option<String> {
         let kind = organization.get("organization_type")?.as_str()?;
 
         match kind {
@@ -479,6 +539,8 @@ impl Snapshot {
             // it. The balance is money and is stated only at the usage
             // endpoint, so nothing here reports one.
             credit: None,
+            // No header states what the subscription is doing either.
+            subscription_status: None,
             plan: None,
             // Only an outright refusal is the limit being reached. The
             // provider also says `allowed_warning`, which is a turn that went
@@ -591,6 +653,17 @@ impl Snapshot {
                     "percent": credit.percent,
                     "severity": credit.severity,
                 }),
+            );
+        }
+        // Said only where there is something to say. An account whose
+        // subscription is active is the ordinary case, and a key stating
+        // `active` on every row is a word nobody reads.
+        if let Some(status) = &self.subscription_status
+            && let Some(object) = answer.as_object_mut()
+        {
+            object.insert(
+                "subscription_status".to_owned(),
+                Value::from(status.clone()),
             );
         }
         answer
@@ -891,12 +964,13 @@ pub struct UsageStore {
     served: Mutex<std::collections::BTreeSet<String>>,
     /// Tokens served per account, as upstream counted them.
     spent: Mutex<std::collections::BTreeMap<String, Spent>>,
-    /// The plan the profile endpoint last stated per account, and when.
+    /// What the profile endpoint last stated per account, and when.
     ///
     /// The profile is asked for at most hourly: a plan changes on the scale of
     /// billing, and asking beside every quota refresh would spend a request to
-    /// be told the same word.
-    profile_plans: Mutex<std::collections::BTreeMap<String, (u64, String)>>,
+    /// be told the same word. The whole answer is kept, so a cached row states
+    /// as much as a fresh one.
+    profiles: Mutex<std::collections::BTreeMap<String, (u64, Profile)>>,
     /// Where the tally is written, if it is written anywhere.
     ///
     /// `None` in a test harness and in `doctor`, which have no daemon state
@@ -1267,22 +1341,22 @@ impl UsageStore {
             .unwrap_or_default()
     }
 
-    /// The plan the profile endpoint stated within the last hour, if it did.
+    /// What the profile endpoint stated within the last hour, if it did.
     #[must_use]
-    pub fn cached_profile_plan(&self, account: &str, now: u64) -> Option<String> {
+    pub fn cached_profile(&self, account: &str, now: u64) -> Option<Profile> {
         const HOUR: u64 = 3_600;
-        self.profile_plans
+        self.profiles
             .lock()
             .ok()?
             .get(account)
             .filter(|(asked, _)| now.saturating_sub(*asked) <= HOUR)
-            .map(|(_, plan)| plan.clone())
+            .map(|(_, profile)| profile.clone())
     }
 
     /// Remember what the profile endpoint stated, and when it was asked.
-    pub fn record_profile_plan(&self, account: &str, plan: &str, now: u64) {
-        if let Ok(mut plans) = self.profile_plans.lock() {
-            plans.insert(account.to_owned(), (now, plan.to_owned()));
+    pub fn record_profile(&self, account: &str, profile: &Profile, now: u64) {
+        if let Ok(mut profiles) = self.profiles.lock() {
+            profiles.insert(account.to_owned(), (now, profile.clone()));
         }
     }
 
@@ -1372,19 +1446,20 @@ pub async fn fetch(
     })
 }
 
-/// Ask the second provider's profile endpoint what plan an account is on.
+/// Ask the second provider's profile endpoint about an account.
 ///
 /// The quota body states no plan, and the stored grant's word is as old as the
 /// last login; this endpoint beside the quota one is where the provider states
-/// it now, multiplier included. `None` for anything short of a recognized
-/// answer — a plan is decoration on a figure, not the figure, and no request
-/// fails for want of one.
-pub async fn fetch_anthropic_plan(
+/// it now, multiplier included, and where it says what the subscription behind
+/// the account is doing. `None` for anything short of an answer that can be
+/// read — both are decoration on a figure rather than the figure, and no
+/// request fails for want of them.
+pub async fn fetch_anthropic_profile(
     client: &reqwest::Client,
     endpoint: &str,
     authorization: &crate::auth::authorize::Authorization,
     claude_program: &std::path::Path,
-) -> Option<String> {
+) -> Option<Profile> {
     let authorization = authorization
         .clone()
         .for_endpoint(crate::auth::authorize::Kind::Subscription)
@@ -1405,7 +1480,7 @@ pub async fn fetch_anthropic_plan(
         return None;
     }
     let body = response.text().await.ok()?;
-    Snapshot::plan_from_anthropic_profile(&body)
+    Snapshot::anthropic_profile(&body)
 }
 
 /// What the second provider's quota endpoint is asked as.

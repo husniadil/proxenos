@@ -1989,6 +1989,82 @@ async fn a_refresh_carries_the_plan_the_profile_endpoint_states() {
         1,
         "the profile endpoint is asked at most hourly"
     );
+    // That profile states no subscription status, and an account with nothing
+    // to report reports nothing.
+    assert_eq!(
+        first["accounts"][0]["subscription_status"],
+        serde_json::Value::Null,
+        "{first}"
+    );
+}
+
+/// A subscription the provider has stopped calling active reaches the row.
+///
+/// It is the one failure quota cannot show: a canceled subscription keeps
+/// stating windows that look untouched while every turn is refused, so the
+/// figure alone reads as an account that is fine.
+#[tokio::test]
+async fn a_refresh_carries_a_subscription_the_provider_no_longer_calls_active() {
+    let router = axum::Router::new()
+        .route(
+            "/usage",
+            axum::routing::get(|| async {
+                r#"{"five_hour":{"utilization":7.0,"resets_at":"2026-08-23T09:00:00.383476+00:00"}}"#
+            }),
+        )
+        .route(
+            "/profile",
+            axum::routing::get(|| async {
+                r#"{"organization":{"organization_type":"claude_max","subscription_status":"canceled"}}"#
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback listener");
+    let base = format!("http://{}", listener.local_addr().expect("an address"));
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let personal = profile("personal", Provider::Anthropic, Some("/profiles/personal"));
+    let accounts = Arc::new(accounts_over(
+        dir.path(),
+        vec![personal.clone()],
+        &[(&personal, claude_blob(4_000_000_000, 4_000_000_000))],
+        Arc::new(FakeClient::default()),
+    ));
+    let state = proxenos::control::handler::ControlState {
+        anthropic_usage_endpoint: format!("{base}/usage"),
+        anthropic_profile_endpoint: format!("{base}/profile"),
+        ..state_over(accounts)
+    };
+
+    let answer = proxenos::control::handler::refresh_usage_within(
+        &state,
+        proxenos::control::handler::REFRESH_BUDGET,
+    )
+    .await
+    .expect("the sweep answers");
+
+    let row = answer["accounts"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row["account"] == serde_json::json!("personal"))
+        .expect("a row for the profile")
+        .clone();
+    // The provider's own word, passed through rather than sorted into a
+    // vocabulary this proxy invented.
+    assert_eq!(
+        row["subscription_status"],
+        serde_json::json!("canceled"),
+        "{answer}"
+    );
+    assert!(
+        proxenos::render::usage(&answer).contains("subscription canceled"),
+        "{answer}"
+    );
 }
 
 /// Two lapsed profiles, so the sweep has something to spend its budget on.

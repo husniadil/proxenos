@@ -2169,30 +2169,39 @@ async fn ask_for(
         .await
         .map_err(|error| error.message)?;
 
-    // The second provider's quota body states no plan; its profile endpoint
-    // beside it does, multiplier included. Asked at most hourly, and a
-    // declined answer leaves the plan absent rather than invented.
-    if anthropic && snapshot.plan.is_none() {
+    // The second provider's quota body states neither the plan nor what the
+    // subscription behind the account is doing; its profile endpoint beside it
+    // states both, multiplier included. One request answers both, asked at most
+    // hourly, and a declined answer leaves each absent rather than invented.
+    if anthropic {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|elapsed| elapsed.as_secs())
             .unwrap_or_default();
-        snapshot.plan = match state.usage.cached_profile_plan(&account.name, now) {
-            Some(plan) => Some(plan),
+        let profile = match state.usage.cached_profile(&account.name, now) {
+            Some(profile) => Some(profile),
             None => {
-                let plan = crate::usage::fetch_anthropic_plan(
+                let profile = crate::usage::fetch_anthropic_profile(
                     client,
                     &state.anthropic_profile_endpoint,
                     &authorization,
                     claude_program,
                 )
                 .await;
-                if let Some(plan) = &plan {
-                    state.usage.record_profile_plan(&account.name, plan, now);
+                if let Some(profile) = &profile {
+                    state.usage.record_profile(&account.name, profile, now);
                 }
-                plan
+                profile
             }
         };
+        if let Some(profile) = profile {
+            if snapshot.plan.is_none() {
+                snapshot.plan.clone_from(&profile.plan);
+            }
+            // An active subscription is silence (§8.4); anything else is the
+            // provider's own word, passed through.
+            snapshot.subscription_status = profile.stated_status().map(str::to_owned);
+        }
     }
 
     Ok(snapshot)
