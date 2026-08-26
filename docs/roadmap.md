@@ -831,6 +831,41 @@ a running daemon without a restart.
 
 **Done.**
 
+### v0.14.0 — shipped
+
+**The quota meter left the terminal.** A herdr plugin under `herdr-plugin/`
+puts quota bars on every claude pane in the sidebar — a pane routed through
+the daemon shows the serving account, a direct pane shows the keychain
+anthropic account, and a pane whose environment names a foreign proxy or a
+custom profile shows nothing, because no figure beats a wrong one. The full
+per-account table opens as a popup, reads its keys raw so a bare Esc closes
+it, and a detached per-pane watcher keeps the bars moving between herdr's own
+events. The one thing that contacts the providers, `usage --refresh`, runs
+from a single stamp-guarded place, at most every five minutes across every
+reporter and watcher.
+
+**The figures grew to match what the provider actually states.** A
+model-scoped limit is its own labeled window rather than a silently dropped
+array entry. A max plan carries its multiplier, asked of the profile endpoint
+at most hourly. The extra-usage credit — the money an account spends once its
+plan windows are full — renders as its own row and travels in `usage --json`,
+read from the provider's `spend` block only where it calls the facility
+enabled, with the provider's own percentage rather than a ratio of the
+amounts, and dropped entirely where an amount, its exponent, or the two
+currencies cannot be read. And a subscription the provider has stopped
+calling active is said on the account's row in the provider's own word,
+because a canceled account keeps reporting quota that looks untouched while
+every turn is refused.
+
+**One session can serve as a named account.** `exec --account <name>` is the
+per-session switch beside `accounts use`'s standing one: consumed by `exec`,
+never forwarded to the client's argv, carried as the otherwise-ignored
+`ANTHROPIC_AUTH_TOKEN` value, outranking a tier's pinned account on both
+paths, and refused — at launch and again at the turn, each time naming the
+name — when no stored account carries it.
+
+**Done.**
+
 ### Next
 
 Named rather than numbered. Twice now a section here has worn a version that

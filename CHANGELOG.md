@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.14.0]
 
 - `usage` says when a borrowed Anthropic subscription is no longer active. The
   profile endpoint already asked for the plan also states
