@@ -14,7 +14,9 @@ in [`docs/api.md`](docs/api.md) §6.
   provider's own word rather than a vocabulary invented here, and the same
   word travels under `subscription_status` in `usage --json`. An active
   subscription is silence. The hourly profile cache keeps the status beside
-  the plan, so a cached answer states as much as a fresh one.
+  the plan, so a cached answer states as much as a fresh one. The herdr
+  plugin's popup shows the same row, under the account header that already
+  names the plan.
 
 - `usage` reports the extra-usage credit a borrowed Anthropic grant states.
   Once an account's plan windows are full, further turns come out of a money

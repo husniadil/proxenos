@@ -78,6 +78,10 @@ render() {
             | ($mark + .account + " (" + .provider + ")"
                 + (if .plan then " — " + .plan else "" end)
                 + (if .measured_at then "   as of " + (.measured_at | age) else "" end)),
+              # Stated only when the provider stopped calling it active; an
+              # active subscription is silence, here as everywhere else.
+              (if .subscription_status then "    subscription " + .subscription_status
+               else empty end),
               (if (.windows // [] | length) > 0 then
                   (.windows[] | "    \(wname | pad5)  \(.used_percent // 0 | floor | bar)  \(.used_percent // 0 | floor | tostring | pct3)%"
                       + (if .resets_at then "   \(.resets_at | until)" else "" end))
