@@ -32,9 +32,9 @@ implementation is wrong in a way that does not fail loudly.
 
 ## Status
 
-**v0.4.0.** Everything here is verified against a local replay server built
-from the upstream protocol definitions, and the whole suite runs without
-credentials or quota. Every capability probe has since also been answered by a
+Everything here is verified against a local replay server built from the
+upstream protocol definitions, and the whole suite runs without credentials or
+quota. Every capability probe has since also been answered by a
 live backend — `doctor --live` runs the same probes against the real thing, and
 all of them pass.
 
@@ -127,8 +127,11 @@ just check          # formatting, lints, and the whole suite
 ```
 
 To use it for real, write a configuration first. It lives at
-`~/.config/proxenos/config.toml` (or `$XDG_CONFIG_HOME`), and `run` prints
-a commented version of this — `[transport]` included — if it is missing:
+`~/.config/proxenos/config.toml` (or `$XDG_CONFIG_HOME`), and a missing file is
+a first run rather than a failure: the daemon logs where it would go and starts
+on the defaults. The commented version of this — `[transport]` included — is
+what the first command that writes the file starts from, so `accounts login`,
+or any setter that persists a change, leaves it there:
 
 ```toml
 port = 8787
@@ -288,11 +291,14 @@ live key endpoint has answered and **has not settled everything**, and
 | `stop` | asks the running daemon to stop, and says what happened next |
 | `usage` | what quota is left; `--refresh` asks for a figure per account |
 | `statusline -- <script>` | wraps your own status-line script and merges that quota into what it reads |
-| `record ingress` / `record upstream` | capture exchanges as fixtures |
+| `record ingress` / `record upstream` / `record surface` | capture exchanges as fixtures |
+| `supervisor install` / `uninstall` / `status` | installs, removes, or inspects the supervisor that keeps the daemon alive |
 | `doctor` | capability probes; `--live` answers them from the real backend |
 
-Everything but `doctor` talks to the running daemon over a control socket, and
-the CLI holds no state of its own. `doctor` is the exception because `--live`
+Everything but `record`, `supervisor`, and `doctor` talks to the running daemon
+over a control socket, and the CLI holds no state of its own. `record` runs a
+daemon of its own or calls the endpoint directly, `supervisor` touches the
+machine rather than the daemon, and `doctor` is the exception because `--live`
 needs credentials whether or not a daemon is up. See
 [`docs/api.md`](docs/api.md).
 
@@ -317,7 +323,7 @@ session ───── per-conversation state
                         │
 transport ─── WebSocket (primary) │ HTTP + SSE (fallback)
                         │
-auth ──────── OAuth lifecycle, CredentialStore
+auth ──────── borrowed grants, stored keys, CredentialStore
 ```
 
 `proxenos-core` holds the middle layer and nothing else: no sockets, no

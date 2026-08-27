@@ -123,7 +123,7 @@ session ───── per-conversation state
                         │
 transport ─── WebSocket (primary) │ HTTP + SSE (fallback)
                         │
-auth ──────── OAuth lifecycle, CredentialStore
+auth ──────── borrowed grants, stored keys, CredentialStore
 ```
 
 `proxenos-core` holds the middle layer and nothing else: no sockets, no

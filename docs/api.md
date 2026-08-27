@@ -35,8 +35,10 @@ byte for byte and the reply is streamed back byte for byte, with the bearer
 replaced by that account's credential. `proxy-behavior.md` §9 states the rule
 and the header delta. Nothing about the endpoint changes — the same URL serves
 both paths, and which one a turn takes is decided from the model id it carries.
-This path is proven against fixtures and not yet confirmed against the second
-provider's live endpoint (`proxy-behavior.md` §9, `roadmap.md` §L).
+This path is **confirmed live**: relayed turns round-trip against the real
+endpoint of the second provider — plain and streaming, generation and refusal —
+with a subscription bearer the relay substituted (`proxy-behavior.md` §9,
+`roadmap.md` §L).
 
 `stream` decides the shape of the answer, and its default is the endpoint's:
 absent or `false` is **not** a stream, and is answered with a single
@@ -143,10 +145,20 @@ proxenos usage      what quota is left (--refresh asks, per account), as a
                     window (--json prints the socket's own payload)
 proxenos statusline wrap a status-line script, adding that quota
 proxenos record     capture exchanges as fixtures
+proxenos supervisor install|uninstall|status
+                    the supervisor that keeps the daemon alive; `install`
+                    writes the unit for this user and hands it over,
+                    `uninstall` removes it and the daemon it was supervising
+                    stops with it, `status` says whether it is installed and
+                    what the supervisor makes of it. Named for what supervises
+                    rather than for launchd, because a verb named after an
+                    implementation cannot grow a second one
 ```
 
-Every verb except `run`, `doctor`, and the two `accounts` verbs that add an
-account operates through the control socket (§3) against a running daemon.
+Every verb except `run`, `start`, `record`, `supervisor`, `doctor`, and the two
+`accounts` verbs that add an account operates through the control socket (§3)
+against a running daemon. Those bring a daemon up, run one of their own, touch
+the machine, or need credentials rather than a socket.
 
 **One sub-verb per thing an operator does, each naming its account
 positionally.** The surface before this used flags as actions — `--use`,
@@ -638,7 +650,13 @@ shared table's id is the first provider's, and the client's own id for the
 tier is the one the second provider accepts (`proxy-behavior.md` §7.2).
 
 The two window variables appear only when the catalog knows the window, and
-carry the smallest across the mapped tiers. The client will warn that its
+carry the smallest across the mapped tiers. `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+carries one further condition: it is emitted only where that figure falls
+within 100,000–1,000,000 tokens, the range the client will accept. Outside it
+the client's own parser answers `Expected 'auto' or 100k–1M tokens` and the
+settings key of the same meaning discards the value silently, so a figure out
+of range is no setting at all; the variable is left out and the reason is
+logged instead (`proxy-behavior.md` §7.2). The client will warn that its
 200,000 limit is not enforced; that is expected, because the real window is
 larger and using it is the point.
 
@@ -1349,8 +1367,14 @@ effort = "low"
 
 # Optional. Where the Claude CLI is, for the two things this daemon runs it
 # for itself. Unset, the bare name `claude` is resolved through the daemon's
-# PATH.
+# PATH, which is not the shell's — a daemon started by launchd inherits a
+# minimal one and the name does not resolve there.
 claude_program = "/opt/homebrew/bin/claude"
+
+# Optional. Where the Codex CLI is, for the cheap turn this daemon runs to
+# refresh a borrowed Codex grant it owns. Unset, the bare name `codex` is
+# resolved through the daemon's PATH, with the same launchd caveat.
+codex_program = "/opt/homebrew/bin/codex"
 
 [tiers]
 opus   = "..."
@@ -1386,6 +1410,7 @@ effective_window_percent = 95.0
 endpoint                 = "https://..."
 websocket                = "wss://..."
 catalog                  = "https://..."
+usage                    = "https://chatgpt.com/backend-api/wham/usage"
 
 [upstream.key]
 endpoint = "https://..."
@@ -1422,6 +1447,11 @@ name `claude`, resolved through the daemon's `PATH` — which is not the shell's
 A daemon started by launchd inherits a minimal one and resolves nothing, so
 write the path out where that is how it starts; `usage --refresh` otherwise
 refuses with `could not run \`claude\``.
+
+`codex_program` is the same thing for the Codex CLI: a cheap `codex exec` turn
+this daemon runs on its own behalf to refresh a borrowed Codex grant it owns.
+Unset, it is the bare name `codex`, resolved through the daemon's `PATH`, with
+the same launchd caveat.
 
 **Leaving `path` out means the stock profile**, the one that program uses when
 no variable designates a directory. That is a *different* profile from one
@@ -1463,6 +1493,11 @@ this crate's version. The backend filters the list by it, and a version below
 every model's minimum returns an **empty list rather than an error**, which reads
 exactly like an account with no models. Startup says so by name when the catalog
 comes back empty.
+
+`usage` is where a quota figure can be asked for rather than waited for: the
+backend volunteers a snapshot at the head of every stream (`proxy-behavior.md`
+§6), and this is the route for a front-end that has to show a figure before any
+turn has been made.
 
 `effective_window_percent` is the share of a context window left usable once
 instructions, tool overhead, and output are accounted for, applied where the
@@ -1664,9 +1699,9 @@ upgraded in step, only additions are safe. It is a statement about callers, not
 about a version number.
 
 **The bound method set is the whole of §3's table, named here so the freeze is
-a contract rather than folklore.** From v0.7.0 — the release that ships the
-graphical front-end, and with it the second caller the exception above is a
-statement about — these eighteen names are fixed: `status`, `shutdown`,
+a contract rather than folklore.** From the moment a second caller exists — the
+exception above is a statement about callers, not about a version number —
+these eighteen names are fixed: `status`, `shutdown`,
 `accounts`, `accounts.select`, `accounts.rename`,
 `accounts.remove`, `models`, `tiers`, `tiers.set`, `effort.set`,
 `cross_account_tiers.set`, `usage`, `usage.refresh`, `env`, `doctor`,
