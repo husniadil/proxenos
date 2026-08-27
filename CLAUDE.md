@@ -20,10 +20,13 @@ against a local replay server, so the suite is fully green without credentials
 and without quota. That is a design constraint, not a convenience: a test that
 needs a live backend is a test that stops running the moment quota runs out.
 
-`just doctor --live` and `just record upstream` are the only things here that
-spend quota, and neither is part of the gate. Plain `just doctor` answers the
-same probes from the fixture corpus and contacts nothing; `just record ingress`
-captures what the client sends and costs nothing.
+`just doctor --live`, `just record upstream`, and `just record surface` are the
+only things here that spend quota, and none of them is part of the gate. Plain
+`just doctor` answers the same probes from the fixture corpus and contacts
+nothing; `just record ingress` captures what the client sends and costs nothing.
+`record surface` spends one turn per exchange against the second provider, so a
+capture already on disk is quota already spent — `--only` exists for adding one
+shape without paying for the rest again.
 
 ## The specification comes first
 
@@ -43,7 +46,14 @@ the same commit as the code that proved it. A spec that drifts from the code is
 worse than no spec, because it is still believed.
 
 [`docs/roadmap.md`](docs/roadmap.md) has the ordered phases and what "done" means
-for each.
+for each. Its unshipped section is named (`### Next`), never numbered: twice a
+numbered intention shipped as something else, and a roadmap that misnames a
+released version is read as a record and is wrong as one.
+
+Two shipped surfaces are tracked here and quote the CLI back to their readers —
+[`skills/proxenos/SKILL.md`](skills/proxenos/SKILL.md), the agent skill, and
+[`herdr-plugin/`](herdr-plugin/). A verb, flag, or config key that moves has to
+move in both, in the same commit as the change that moved it.
 
 ## Non-negotiables
 
@@ -88,10 +98,16 @@ for each.
 6. **Loopback only, no authentication, no telemetry.** The daemon refuses to
    bind anything but `127.0.0.1`, so every caller is already a local process
    running as the user. `ANTHROPIC_AUTH_TOKEN` must be set for Claude Code's
-   sake and its value is ignored. Nothing is collected, nothing is transmitted.
+   sake and its value is ignored, with one carve-out: `proxenos-account:<name>`
+   is the launch tag `exec --account` travels as, and a tag is a name rather
+   than a secret — the credential it resolves to never leaves the daemon.
+   Nothing is collected, nothing is transmitted.
 
-7. **Credentials never reach argv or logs.** They live behind `CredentialStore`,
-   in files created `0600`. The configuration file is not one of those places.
+7. **Credentials never reach argv or logs.** A key arrives on stdin and lives
+   behind `CredentialStore`, in files created `0600`. A subscription grant is
+   borrowed rather than held: it stays in the profile directory of the program
+   that signed in, and this side reads it there. The configuration file is not
+   one of those places — `[profiles]` names a directory, never a secret.
 
 ## Working agreements
 
