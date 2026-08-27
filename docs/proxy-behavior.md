@@ -2209,10 +2209,7 @@ direction to be wrong in.
 
 ## 10. Testing
 
-Development is test-first. One path is knowingly not: `profile_login::run`,
-which starts the owning client on a terminal for `accounts login`. What it
-decides is covered — which program is pointed at which directory, and what the
-configuration document says afterwards — but the run itself has no harness.
+Development is test-first.
 
 ### 10.1 Translation
 

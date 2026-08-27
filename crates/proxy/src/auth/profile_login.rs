@@ -495,6 +495,8 @@ mod tests {
     struct Fake {
         interactive: bool,
         held: Vec<String>,
+        /// The directories the verb asked for, in the order it asked.
+        created: Vec<PathBuf>,
         /// What the client's run comes to, and which profiles hold a grant
         /// once it has.
         outcome: std::io::Result<Exit>,
@@ -511,6 +513,7 @@ mod tests {
             Self {
                 interactive: true,
                 held: Vec::new(),
+                created: Vec::new(),
                 outcome: Ok(Exit {
                     success: true,
                     description: "exit status: 0".to_owned(),
@@ -532,7 +535,8 @@ mod tests {
     }
 
     impl Environment for Fake {
-        fn create_directory(&mut self, _directory: &Path) -> std::io::Result<()> {
+        fn create_directory(&mut self, directory: &Path) -> std::io::Result<()> {
+            self.created.push(directory.to_path_buf());
             Ok(())
         }
 
@@ -659,6 +663,35 @@ mod tests {
 
         assert!(refusal.contains("`codex login` flag"), "{refusal}");
         assert!(refusal.contains("claude auth login"), "{refusal}");
+    }
+
+    /// The client is pointed at a directory that exists. It is made before
+    /// anything else happens, so the profile is created whether the client
+    /// makes one itself or expects to be handed one — and it is made on the
+    /// path that adopts an already signed-in directory too, where there is
+    /// nothing to create and nothing to lose by asking.
+    #[test]
+    fn the_profile_directory_is_created_before_the_client_is_pointed_at_it() {
+        let plan = plan_for("work", "port = 8787\n");
+        let mut fake = Fake {
+            held_after_run: vec!["work".to_owned()],
+            ..Fake::default()
+        };
+
+        run(&plan, &mut fake).expect("declared");
+
+        assert_eq!(fake.created, std::slice::from_ref(&plan.directory));
+        assert_eq!(fake.runs, 1);
+
+        let mut adopted = Fake {
+            held: vec!["work".to_owned()],
+            ..Fake::default()
+        };
+
+        run(&plan, &mut adopted).expect("declared");
+
+        assert_eq!(adopted.created, [plan.directory]);
+        assert_eq!(adopted.runs, 0);
     }
 
     /// A directory that already holds a grant is signed in, whoever signed it
