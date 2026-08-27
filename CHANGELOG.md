@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.15.1]
 
 - An incomplete turn reports upstream's own token usage. `response.incomplete`
   carries the same usage block `response.completed` does, and it was being
