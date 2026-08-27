@@ -4073,6 +4073,22 @@ async fn env_for_with(
     accounts: impl Fn(&FileStore),
     config: proxenos::config::Config,
 ) -> Value {
+    env_asking(dir, tiers, accounts, config, None)
+        .await
+        .result
+        .unwrap()
+}
+
+/// The same, asking `env` for the account a launch would be served as
+/// (`api.md` §2.2), and answering with the whole response so a refusal can be
+/// read as one.
+async fn env_asking(
+    dir: &tempfile::TempDir,
+    tiers: Vec<ResolvedTier>,
+    accounts: impl Fn(&FileStore),
+    config: proxenos::config::Config,
+    account: Option<&str>,
+) -> proxenos::control::protocol::Response {
     let store = Arc::new(FileStore::new(dir.path().join("credentials.json")));
     accounts(&store);
     let state = ControlState {
@@ -4106,13 +4122,12 @@ async fn env_for_with(
         config_path: None,
     };
 
+    let params = account.map(|account| json!({ "account": account }));
     control::answer(
         &state,
-        &json!({ "jsonrpc": "2.0", "id": 1, "method": "env" }).to_string(),
+        &json!({ "jsonrpc": "2.0", "id": 1, "method": "env", "params": params }).to_string(),
     )
     .await
-    .result
-    .unwrap()
 }
 
 fn relayed(name: &'static str) -> impl Fn(&FileStore) {
@@ -4240,6 +4255,301 @@ sonnet = "claude-sonnet-5"
     ] {
         assert!(!injected.contains_key(absent), "{absent} in {injected:?}");
     }
+}
+
+/// A selection on the first provider, with an account on the second stored
+/// beside it. The fork of §9.1 falls one way for the selection and the other
+/// way for the launch account, which is the whole of what the cases below turn
+/// on.
+fn a_translating_selection_beside_a_relay_account(store: &FileStore) {
+    store
+        .add(
+            &Credentials {
+                access_token: "serving".to_owned(),
+                refresh_token: "refresh".to_owned(),
+                id_token: None,
+                account_id: Some("acct_serving".to_owned()),
+                expires_at: Some(u64::MAX / 2),
+            },
+            None,
+        )
+        .unwrap();
+    store
+        .add_key("relay", "relay-key-value", Provider::Anthropic)
+        .unwrap();
+    store.select("acct_serving").unwrap();
+}
+
+/// The shared table, as an operator on the first provider would write it.
+fn a_first_provider_mapping() -> Vec<ResolvedTier> {
+    [
+        ("opus", "gpt-5.6-terra"),
+        ("sonnet", "gpt-5.6-terra"),
+        ("haiku", "gpt-5.4-mini"),
+        ("fable", "gpt-5.6-terra"),
+    ]
+    .into_iter()
+    .map(|(tier, model)| ResolvedTier {
+        defaulted: false,
+        account: None,
+        tier,
+        model: model.to_owned(),
+    })
+    .collect()
+}
+
+fn injected(result: &Value) -> std::collections::BTreeMap<String, String> {
+    render::variables(result).into_iter().collect()
+}
+
+/// §2.2 — `env` for a named account answers for that account's side of the
+/// fork, not the selection's.
+///
+/// `exec --account` decides who serves every turn of the session it starts
+/// (§2.3), and the launch it starts has to be handed the environment that
+/// decision produces. Handed the selection's instead, a session tagged with an
+/// account on the second provider is given the first provider's ids and sends
+/// them: seen live as the backend refusing `gpt-5.6-luna` as an unrecognized
+/// model, with `--model claude-sonnet-5` the only way past it.
+#[tokio::test]
+async fn the_environment_for_a_named_account_takes_that_accounts_side_of_the_fork() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Unasked, nothing moves: the selection translates, so every tier still
+    // hands its id over.
+    let selection = env_for(
+        &dir,
+        a_first_provider_mapping(),
+        a_translating_selection_beside_a_relay_account,
+    )
+    .await;
+    assert_eq!(
+        injected(&selection)
+            .get("ANTHROPIC_DEFAULT_SONNET_MODEL")
+            .map(String::as_str),
+        Some("gpt-5.6-terra")
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let launch = env_asking(
+        &dir,
+        a_first_provider_mapping(),
+        a_translating_selection_beside_a_relay_account,
+        proxenos::config::Config::default(),
+        Some("relay"),
+    )
+    .await
+    .result
+    .unwrap();
+    let injected = injected(&launch);
+
+    for absent in [
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+        "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+    ] {
+        assert!(!injected.contains_key(absent), "{absent} in {injected:?}");
+    }
+
+    // The policy half takes the same account: every tier of this session
+    // relays, so the skill documenting the second provider's API is the right
+    // reference rather than the wrong one.
+    assert_eq!(launch["settings"]["permissions"], Value::Null);
+}
+
+/// §2.2 — and it hands over the ids the operator stated for that account.
+///
+/// `[accounts.<name>.tiers]` is a statement about that account's own menu, and
+/// it is read for the account the launch names exactly as it is read for the
+/// account that is selected.
+#[tokio::test]
+async fn the_environment_for_a_named_account_states_the_ids_that_account_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let config: proxenos::config::Config = toml::from_str(
+        r#"
+[tiers]
+opus   = "gpt-5.6-terra"
+sonnet = "gpt-5.6-terra"
+haiku  = "gpt-5.4-mini"
+fable  = "gpt-5.6-terra"
+
+[accounts.relay.tiers]
+opus = "claude-opus-5"
+"#,
+    )
+    .unwrap();
+
+    let launch = env_asking(
+        &dir,
+        a_first_provider_mapping(),
+        a_translating_selection_beside_a_relay_account,
+        config,
+        Some("relay"),
+    )
+    .await
+    .result
+    .unwrap();
+    let injected = injected(&launch);
+
+    assert_eq!(
+        injected
+            .get("ANTHROPIC_DEFAULT_OPUS_MODEL")
+            .map(String::as_str),
+        Some("claude-opus-5")
+    );
+    for absent in [
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    ] {
+        assert!(!injected.contains_key(absent), "{absent} in {injected:?}");
+    }
+}
+
+/// The other direction: a launch named onto an account that translates gets
+/// that account's mapping, section and all.
+///
+/// The selection relays here, so the mapping in force states nothing. The
+/// account the launch names is on the first provider and its section replaces
+/// the tiers it names, exactly as a switch to it would resolve them.
+#[tokio::test]
+async fn the_environment_for_a_translating_account_resolves_its_own_section() {
+    let dir = tempfile::tempdir().unwrap();
+    let config: proxenos::config::Config = toml::from_str(
+        r#"
+[tiers]
+opus   = "gpt-5.6-terra"
+sonnet = "gpt-5.6-terra"
+haiku  = "gpt-5.6-terra"
+fable  = "gpt-5.6-terra"
+
+[accounts.spare.tiers]
+haiku = "gpt-5.4-mini"
+"#,
+    )
+    .unwrap();
+
+    let launch = env_asking(
+        &dir,
+        Vec::new(),
+        |store: &FileStore| {
+            store
+                .add_key("relay", "relay-key-value", Provider::Anthropic)
+                .unwrap();
+            store
+                .add_key("spare", "spare-key-value", Provider::Codex)
+                .unwrap();
+            store.select("relay").unwrap();
+        },
+        config,
+        Some("spare"),
+    )
+    .await
+    .result
+    .unwrap();
+    let injected = injected(&launch);
+
+    assert_eq!(
+        injected
+            .get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+            .map(String::as_str),
+        Some("gpt-5.4-mini")
+    );
+    assert_eq!(
+        injected
+            .get("ANTHROPIC_DEFAULT_OPUS_MODEL")
+            .map(String::as_str),
+        Some("gpt-5.6-terra")
+    );
+    // Every tier translates for this account, so the window the catalog knows
+    // is stated and the long-context flag comes back.
+    assert_eq!(
+        injected
+            .get("CLAUDE_CODE_DISABLE_1M_CONTEXT")
+            .map(String::as_str),
+        Some("1")
+    );
+}
+
+/// §2.3 — `exec --account` says which mapping the session was given.
+///
+/// The flag decides the payer, which `serving as` already prints, and the
+/// provider whose ids the client is handed, which nothing else does. Both
+/// readings are covered here: a mapping stated for the account, and one left
+/// to the client's own ids.
+#[tokio::test]
+async fn a_named_launch_reports_the_mapping_it_was_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let config: proxenos::config::Config = toml::from_str(
+        r#"
+[accounts.relay.tiers]
+opus = "claude-opus-5"
+"#,
+    )
+    .unwrap();
+
+    let stated = env_asking(
+        &dir,
+        a_first_provider_mapping(),
+        a_translating_selection_beside_a_relay_account,
+        config,
+        Some("relay"),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(
+        render::tier_mapping_line(&stated, "relay"),
+        "tier models for `relay`: opus=claude-opus-5; the client's own id for sonnet, haiku, \
+         fable"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let bare = env_asking(
+        &dir,
+        a_first_provider_mapping(),
+        a_translating_selection_beside_a_relay_account,
+        proxenos::config::Config::default(),
+        Some("relay"),
+    )
+    .await
+    .result
+    .unwrap();
+    assert_eq!(
+        render::tier_mapping_line(&bare, "relay"),
+        "tier models for `relay`: the client's own ids, sent as they are"
+    );
+}
+
+/// A name the store does not hold is refused by name.
+///
+/// The launch flag is checked against the store before anything starts
+/// (§2.3), and this is the other end of that check: falling back to whoever is
+/// selected would hand the caller an environment for an account they did not
+/// ask for.
+#[tokio::test]
+async fn the_environment_for_an_unknown_account_is_refused_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let refusal = env_asking(
+        &dir,
+        a_first_provider_mapping(),
+        a_translating_selection_beside_a_relay_account,
+        proxenos::config::Config::default(),
+        Some("no-such-account"),
+    )
+    .await
+    .error
+    .expect("an account the store does not hold has no environment to answer with");
+
+    assert!(
+        refusal.message.contains("no-such-account"),
+        "{}",
+        refusal.message
+    );
 }
 
 /// §7.2 — a mapping split across both providers states no window either, and

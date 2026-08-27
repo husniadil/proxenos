@@ -649,6 +649,17 @@ account — pinned in `[tiers]`, or named under `[accounts.<name>.tiers]`. The
 shared table's id is the first provider's, and the client's own id for the
 tier is the one the second provider accepts (`proxy-behavior.md` §7.2).
 
+**Whose environment this is.** The socket method takes an optional
+`{"account": name}`, and `exec --account` (§2.3) passes it: the flag decides
+who serves every turn of the session it starts, so the mapping, the window,
+and the client policy are all resolved for that account rather than for the
+selection. Without it the answer is the selection's, unchanged. A name the
+store does not hold is refused by name rather than answered about somebody
+else. The mapping in force is the selection's, so an account the call names
+instead is resolved from `config.toml` the way `accounts.select` would resolve
+it — the shared table with `[accounts.<name>.tiers]` over it — and a
+`tiers.set` that was never persisted is not carried across to it.
+
 The two window variables appear only when the catalog knows the window, and
 carry the smallest across the mapped tiers. `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
 carries one further condition: it is emitted only where that figure falls
@@ -774,6 +785,16 @@ translate as it otherwise, exactly the fork the selection would have decided.
 A name the store does not hold is refused twice, each time naming it: at
 launch, before anything starts, and at the turn, so an account removed
 mid-session fails loudly rather than falling back to whoever is selected.
+
+**The environment is rendered for that account too** (§2.2), and the mapping it
+produced is printed on stderr beside the account. The flag decides which
+provider serves the session, and a session served by one provider and handed
+the other's tier ids sends them: seen live as a launch tagged onto an account
+on the second provider being given `gpt-5.6-luna` from the shared table and
+refused by the backend as an unrecognized model, with an explicit `--model` the
+only way past it. The line names the ids the launch carries, and says where a
+tier carries none — the client's own id relays, which is the one known to work
+there.
 `accounts use` is the standing switch; this is the per-session one, the way a
 `kubectl` command can name a context without touching the current one. On Unix the child is
 `exec`d, so signals, job control, the terminal, and the exit status pass through
@@ -1017,7 +1038,7 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 | `tiers` | tier mapping | no — was `tiers.get` |
 | `usage` | the serving account's quota as of its last turn, or that no turn has been made, plus `models` — the ids this daemon serves — and `accounts`, one entry per stored account with its own figure, its freshness, and `unavailable` where it has none. Each account entry also carries `served_tokens`, the §6.1 tally, and an entry with no figure carries `reason` beside its `detail` — `no_turn`, `no_relayed_turn`, `metered`, `unknown_key_kind`, `not_reported` — the same fact in a word, so a renderer never matches on prose. Each window carries `used_percent`, `window_minutes`, `resets_at`, and — where the provider stated them — `status`, `surpassed_threshold`, `representative`, and `label` for a window no duration identifies. An entry whose provider states a credit balance also carries `credit` — `used_minor`, `limit_minor`, `exponent`, `currency`, `percent`, `severity` — money in the units the provider stated it in, present only where there is a balance to state. An entry whose provider states a subscription it no longer calls active also carries `subscription_status`, that provider's own word verbatim — absent where the subscription is active, which is silence | yes |
 | `usage.refresh` | asks the backend for a figure now, **per account** — every stored account whose credential can hold one, each on its own credential and each recorded under its own name. The answer is the serving account's outcome plus `accounts`, one entry per stored account carrying either its figure or the sentence saying why it has none. Nothing about which account serves turns is read or changed | yes |
-| `env` | the §2.2 block: `variables`, and `settings` always present | yes |
+| `env` | the §2.2 block: `variables`, and `settings` always present. `{"account": name}` answers for a session served as that account rather than as the selection — the mapping, the window, and the client policy all resolved for it, which is what `exec --account` launches with; a name the store does not hold is refused by name | yes — `{"account": name}` added after v0.15.1 |
 | `shutdown` | `{"stopping": true, "version": ...}`, then the process goes once the answer is written | yes |
 | `record.start` / `record.stop` | fixture capture | yes — `{"mode": "ingress"}` by default, `"upstream"` must be named because it bills every turn that follows |
 | `tiers.set` | tier mapping, validated against the catalog and in effect until the daemon stops; `{"account": name}` writes that account's section instead of the shared table. A tier's value takes the same two forms the file does — a model id, or `{"account": …, "model": …}` pinning the tier to another account. The pinned form needs `cross_account_tiers = true` and is refused by name without it, and its model is excluded from catalog validation: the catalog is the serving account's menu and cannot speak for the pinned one | yes |

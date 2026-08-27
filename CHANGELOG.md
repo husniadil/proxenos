@@ -4,6 +4,19 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- `exec --account` configures the session for the account it names. The flag
+  already decided who serves every turn, but the environment was still rendered
+  for whichever account was selected — so a session tagged onto a subscription
+  of the other provider was handed the shared table's tier ids and sent them,
+  and the backend refused `gpt-5.6-luna` as an unrecognized model with an
+  explicit `--model` the only way past it. The tier mapping, the window
+  variables, and the client policy now resolve for the named account, including
+  its own `[accounts.<name>.tiers]` section, and the mapping the launch carries
+  is printed beside the account it is served as. The `env` method takes the same
+  `{"account": name}` and refuses a name the store does not hold.
+
 ## [0.15.1]
 
 - An incomplete turn reports upstream's own token usage. `response.incomplete`

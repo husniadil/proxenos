@@ -1078,6 +1078,17 @@ shared table, or an entry in `[accounts.<name>.tiers]` — and is left unset
 otherwise, so the client's own id for the tier relays verbatim, which is the one
 id known to work there.
 
+**Which account that fork is asked about is the one that will serve the
+session's turns, not the one that is selected.** A launch tag names it per turn
+(§9.1, `api.md` §2.3) and the selection answers where nothing named one. The two
+were once asked separately — the turn asked the tag and the environment asked
+the selection — and a session tagged onto an account on the second provider was
+handed the first provider's ids and sent them. The backend refused them as
+unrecognized models, which is the failure this variable exists to avoid,
+arriving through the one path that was still deciding it by selection. The
+mapping resolves for that account as well, so an `[accounts.<name>.tiers]`
+entry reaches the session the launch names without it being selected first.
+
 Both are needed. Stating the window alone is worse than saying nothing: the
 client stops applying its own 200,000 assumption and, not recognizing the model,
 then enforces no limit at all — so the session grows until the backend refuses

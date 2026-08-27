@@ -275,6 +275,11 @@ Switching accounts re-resolves that mapping and refuses the switch if the
 account's catalog cannot serve it, so a turn is never dispatched to a model the
 backend will not answer for. Renaming an account moves its section with it.
 
+`proxenos exec --account NAME` serves one session as that account without
+moving the selection, and configures it from that account's mapping — so a
+session on a subscription of the other provider is handed that provider's ids
+rather than the shared table's. The mapping it applied is printed as it starts.
+
 A key is spent against a different endpoint with different billing, and one kind
 of credential is refused against the other kind's endpoint before anything
 leaves. It has no refresh, no expiry, and no plan, so `usage` has no quota to

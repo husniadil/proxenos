@@ -18,6 +18,18 @@ pub(crate) async fn print_env() -> Result<()> {
     Ok(())
 }
 
+/// What a launch says when the socket does not answer.
+///
+/// Launching regardless would hand the operator a connection refused from a
+/// client that cannot explain it, so every call `exec` makes before starting
+/// anything fails with this one sentence.
+fn daemon_silent(error: proxenos::error::ProxyError) -> anyhow::Error {
+    anyhow::anyhow!(
+        "the daemon is not answering ({error}), so there is no configuration to start \
+         this with. Start it with `proxenos run`."
+    )
+}
+
 /// Start a program with this proxy's configuration applied.
 ///
 /// The environment half is set on the child, which is the launcher's whole job.
@@ -30,14 +42,50 @@ pub(crate) async fn print_env() -> Result<()> {
 /// Launching regardless would hand the operator a connection refused from a
 /// client that cannot explain it.
 pub(crate) async fn exec(args: cli::ExecArgs) -> Result<()> {
-    let result = control::call(&control::default_path(), "env", None)
+    // `--account`: this session's turns are made as the named account, and
+    // the selection is neither read nor moved. The name is checked against
+    // the store before anything starts — a session that refuses its first
+    // turn is a worse place to learn about a typo than a launch that refuses
+    // to happen — and it travels as the auth token value, which the daemon
+    // reads and the backend never sees.
+    //
+    // Checked first because the environment is asked for *as* this account:
+    // the daemon refuses an unknown name there too, and that refusal would
+    // arrive wrapped in a sentence about a daemon that is answering fine.
+    if let Some(account) = &args.account {
+        let accounts = control::call(&control::default_path(), "accounts", None)
+            .await
+            .map_err(daemon_silent)?;
+        let stored: Vec<&str> = accounts
+            .get("accounts")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row.get("name").and_then(serde_json::Value::as_str))
+            .collect();
+        if !stored.contains(&account.as_str()) {
+            anyhow::bail!(
+                "`{account}` names no stored account; this daemon holds {}",
+                stored
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        eprintln!("serving this session as `{account}`");
+    }
+
+    // §2.2 — the environment for the account that will serve this session's
+    // turns. A launch tagged onto another account and configured from the
+    // selection is handed the wrong provider's tier ids, and sends them.
+    let params = args
+        .account
+        .as_ref()
+        .map(|account| serde_json::json!({ "account": account }));
+    let result = control::call(&control::default_path(), "env", params)
         .await
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "the daemon is not answering ({error}), so there is no configuration to start \
-                 this with. Start it with `proxenos run`."
-            )
-        })?;
+        .map_err(daemon_silent)?;
 
     // Same stop as `settings`, and for a sharper reason: a launch that quietly
     // omits the policy produces a working session with a rule missing from it,
@@ -90,32 +138,11 @@ pub(crate) async fn exec(args: cli::ExecArgs) -> Result<()> {
         );
     }
 
-    // `--account`: this session's turns are made as the named account, and
-    // the selection is neither read nor moved. The name is checked against
-    // the store before anything starts — a session that refuses its first
-    // turn is a worse place to learn about a typo than a launch that refuses
-    // to happen — and it travels as the auth token value, which the daemon
-    // reads and the backend never sees.
+    // Which provider's ids this session was handed, said where there is a
+    // choice to have got wrong: the flag decides the mapping as well as the
+    // payer, and nothing else on the way past prints it.
     if let Some(account) = &args.account {
-        let accounts = control::call(&control::default_path(), "accounts", None).await?;
-        let stored: Vec<&str> = accounts
-            .get("accounts")
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|row| row.get("name").and_then(serde_json::Value::as_str))
-            .collect();
-        if !stored.contains(&account.as_str()) {
-            anyhow::bail!(
-                "`{account}` names no stored account; this daemon holds {}",
-                stored
-                    .iter()
-                    .map(|name| format!("`{name}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
-        eprintln!("serving this session as `{account}`");
+        eprintln!("{}", render::tier_mapping_line(&result, account));
     }
 
     // Who pays for this session, said once, at the one moment there is a

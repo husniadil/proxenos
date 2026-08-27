@@ -102,9 +102,19 @@ pub async fn dispatch(
             // borrowed profile every listing is a keychain read, so a method
             // that asks twice pays twice (§8.4).
             let accounts = state.credentials.accounts().unwrap_or_default();
+            // §2.2 — whose environment this is. `exec --account` decides who
+            // serves every turn of the session it starts (§2.3), so the
+            // environment it hands the client has to be that account's, not
+            // the selection's.
+            let named = named_account(params, &accounts)?;
+            let tiers = launch_mapping(state, &accounts, named.as_deref())?;
+            let serving = named.or_else(|| serving_name_of(&accounts));
             Ok(json!({
-                "variables": environment(state, &accounts),
-                "settings": state.config.client.settings(any_tier_translates(state, &accounts)),
+                "variables": environment(state, &accounts, &tiers, serving.as_deref()),
+                "settings": state
+                    .config
+                    .client
+                    .settings(any_tier_translates(&tiers, &accounts, serving.as_deref())),
             }))
         }
         "usage" => Ok(usage(state)),
@@ -162,15 +172,87 @@ pub async fn dispatch(
 ///
 /// An empty mapping answers `true`, keeping a daemon with nothing mapped on
 /// the policy it had before the relay existed.
-fn any_tier_translates(state: &ControlState, accounts: &[crate::auth::store::Account]) -> bool {
-    let policy = state.policy.get();
-    let tiers = policy.tiers();
+///
+/// `serving` is the account the turns would be made as where a caller named
+/// one, and `None` is the selection — the fallback every unpinned tier has
+/// always taken.
+fn any_tier_translates(
+    tiers: &[crate::config::ResolvedTier],
+    accounts: &[crate::auth::store::Account],
+    serving: Option<&str>,
+) -> bool {
     if tiers.is_empty() {
         return true;
     }
     tiers
         .iter()
-        .any(|tier| !crate::upstream::relay::relays(accounts, tier.account.as_deref()))
+        .any(|tier| !crate::upstream::relay::relays(accounts, tier.account.as_deref().or(serving)))
+}
+
+/// The account a method was asked about, checked against the store.
+///
+/// A name with nothing behind it is refused rather than falling through to
+/// whoever is selected: the caller asked about one account, and answering
+/// about another is the failure `exec --account` already refuses at launch
+/// (§2.3).
+fn named_account(
+    params: Option<&Value>,
+    accounts: &[crate::auth::store::Account],
+) -> Result<Option<String>, ProxyError> {
+    let Some(name) = params
+        .and_then(|params| params.get("account"))
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    if !accounts.iter().any(|account| account.name == name) {
+        return Err(ProxyError::invalid_request(format!(
+            "`{name}` names no stored account; this daemon holds {}",
+            accounts
+                .iter()
+                .map(|account| format!("`{}`", account.name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+    Ok(Some(name.to_owned()))
+}
+
+/// The tier mapping a session served as this account would run on.
+///
+/// The mapping in force is the serving account's, resolved when it was
+/// selected and moved since by anything `tiers.set` did — so it is the answer
+/// for the selection and for a caller naming it. Any other account is resolved
+/// from the configuration instead, through the same two functions
+/// `accounts.select` resolves it with, because nothing has ever put that
+/// account's mapping in force to be read.
+fn launch_mapping(
+    state: &ControlState,
+    accounts: &[crate::auth::store::Account],
+    named: Option<&str>,
+) -> Result<Vec<crate::config::ResolvedTier>, ProxyError> {
+    let snapshot = state.policy.get();
+    let in_force = || snapshot.tiers().to_vec();
+    let Some(named) = named else {
+        return Ok(in_force());
+    };
+    if serving_name_of(accounts).as_deref() == Some(named) {
+        return Ok(in_force());
+    }
+    configuration(state)
+        .tiers_for(Some(named))
+        .resolve(snapshot.cross_account())
+}
+
+/// The name the store files the selected account under.
+///
+/// The name rather than the account id: an account section is keyed by it, and
+/// a key account has no id at all.
+fn serving_name_of(accounts: &[crate::auth::store::Account]) -> Option<String> {
+    accounts
+        .iter()
+        .find(|account| account.selected)
+        .map(|account| account.name.clone())
 }
 
 /// This binary's version, reported so a caller can see whether the daemon
@@ -346,7 +428,11 @@ fn status(state: &ControlState) -> Value {
             "deny_skills": state
                 .config
                 .client
-                .effective_deny_skills(any_tier_translates(state, &stored)),
+                .effective_deny_skills(any_tier_translates(
+                    state.policy.get().tiers(),
+                    &stored,
+                    None,
+                )),
             "disable_connectors": state.config.client.disable_connectors,
             "disable_remote_control": state.config.client.disable_remote_control,
         },
@@ -713,17 +799,17 @@ fn served_as(state: &ControlState, name: &str) -> String {
 /// All four tier variables are always emitted. `WebFetch` runs on the haiku
 /// tier, so an unmapped haiku breaks it in a way that looks unrelated to tier
 /// mapping.
+/// `serving` names the account this session's turns would be made as, where a
+/// caller named one. `None` is the selection.
 pub fn environment(
     state: &ControlState,
     accounts: &[crate::auth::store::Account],
+    tiers: &[crate::config::ResolvedTier],
+    serving: Option<&str>,
 ) -> Vec<(String, String)> {
     let config = configuration(state);
-    let serving = accounts
-        .iter()
-        .find(|account| account.selected)
-        .map(|account| account.name.clone());
     let stated = |tier: &crate::config::ResolvedTier| {
-        let account = tier.account.as_deref().or(serving.as_deref());
+        let account = tier.account.as_deref().or(serving);
         account
             .and_then(|name| config.accounts.get(name))
             .is_some_and(|section| section.tiers.states(tier.tier))
@@ -731,9 +817,10 @@ pub fn environment(
     environment_for(
         state.port,
         state.config.client.disable_connectors,
-        state.policy.get().tiers(),
+        tiers,
         &state.catalog.current(),
         accounts,
+        serving,
         &stated,
     )
 }
@@ -753,6 +840,7 @@ pub fn environment_for(
     tiers: &[crate::config::ResolvedTier],
     catalog: &crate::catalog::Catalog,
     accounts: &[crate::auth::store::Account],
+    serving: Option<&str>,
     stated: &dyn Fn(&crate::config::ResolvedTier) -> bool,
 ) -> Vec<(String, String)> {
     let mut variables = vec![
@@ -780,7 +868,7 @@ pub fn environment_for(
     // it: the two window variables and the long-context flag are global to the
     // client, so a mapping that is not entirely on one provider has to pick.
     let relaying = |tier: &&crate::config::ResolvedTier| {
-        crate::upstream::relay::relays(accounts, tier.account.as_deref())
+        crate::upstream::relay::relays(accounts, tier.account.as_deref().or(serving))
     };
 
     // A translated tier always hands its id over: the client bakes it in and

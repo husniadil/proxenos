@@ -108,6 +108,52 @@ pub fn variables(result: &Value) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// `docs/api.md` §2.3 — which tier mapping a named launch was given.
+///
+/// Said only where `--account` named one, and said because the mapping is the
+/// half of that flag nothing else shows. The account decides who pays, which
+/// `serving as` already prints; it also decides which provider's ids the
+/// client is handed, and a session given the other provider's ids fails on its
+/// first turn with a model id the operator never typed.
+///
+/// A tier with no variable is not a gap: the client's own id for it is what
+/// relays, and it is the one id known to work there (`proxy-behavior.md`
+/// §7.2).
+pub fn tier_mapping_line(result: &Value, account: &str) -> String {
+    let stated: std::collections::BTreeMap<String, String> = variables(result)
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let tier = name
+                .strip_prefix("ANTHROPIC_DEFAULT_")?
+                .strip_suffix("_MODEL")?
+                .to_lowercase();
+            Some((tier, value))
+        })
+        .collect();
+
+    // The ladder's own order, not the payload's: the payload is an object and
+    // an object has no order worth reading a mapping in.
+    let mut named = Vec::new();
+    let mut left = Vec::new();
+    for tier in crate::config::TIER_NAMES {
+        match stated.get(tier) {
+            Some(model) => named.push(format!("{tier}={model}")),
+            None => left.push(tier),
+        }
+    }
+
+    let mut line = format!("tier models for `{account}`: ");
+    if named.is_empty() {
+        line.push_str("the client's own ids, sent as they are");
+        return line;
+    }
+    line.push_str(&named.join(", "));
+    if !left.is_empty() {
+        line.push_str(&format!("; the client's own id for {}", left.join(", ")));
+    }
+    line
+}
+
 /// One line naming who pays for the session about to start.
 ///
 /// `None` where nothing is serving turns: a launch with no account is refused

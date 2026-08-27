@@ -709,7 +709,15 @@ fn run_environment(probe: &probe::Probe) -> Outcome {
     };
 
     let render = |accounts: &[crate::auth::store::Account]| {
-        crate::control::handler::environment_for(0, false, &tiers, &catalog, accounts, &|_| false)
+        crate::control::handler::environment_for(
+            0,
+            false,
+            &tiers,
+            &catalog,
+            accounts,
+            None,
+            &|_| false,
+        )
     };
 
     let translating = render(&account(crate::auth::store::Provider::Codex));
