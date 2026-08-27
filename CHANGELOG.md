@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.16.0]
 
 - `exec --account` configures the session for the account it names. The flag
   already decided who serves every turn, but the environment was still rendered
