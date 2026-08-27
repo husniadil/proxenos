@@ -20,15 +20,40 @@ use std::path::PathBuf;
 /// signed in and what is read cannot drift apart.
 #[test]
 fn each_provider_is_signed_in_by_its_own_program() {
-    let claude = Command::new(Provider::Anthropic, PathBuf::from("/profiles/work"), None);
+    let claude = Command::new(
+        Provider::Anthropic,
+        PathBuf::from("/profiles/work"),
+        None,
+        false,
+    );
     assert_eq!(claude.program, "claude");
     assert_eq!(claude.arguments, ["auth", "login"]);
     assert_eq!(claude.variable, "CLAUDE_CONFIG_DIR");
 
-    let codex = Command::new(Provider::Codex, PathBuf::from("/profiles/work"), None);
+    let codex = Command::new(
+        Provider::Codex,
+        PathBuf::from("/profiles/work"),
+        None,
+        false,
+    );
     assert_eq!(codex.program, "codex");
     assert_eq!(codex.arguments, ["login"]);
     assert_eq!(codex.variable, "CODEX_HOME");
+}
+
+/// `--device-auth` asks `codex login` to print a URL and a code rather than
+/// open a browser, which is the only way a login finishes on a machine that
+/// has no browser to open. It goes on the command that is run and, because
+/// that is the same command, on the line that is printed instead.
+#[test]
+fn device_auth_travels_on_the_codex_login_it_is_a_flag_of() {
+    let command = Command::new(Provider::Codex, PathBuf::from("/profiles/work"), None, true);
+
+    assert_eq!(command.arguments, ["login", "--device-auth"]);
+    assert_eq!(
+        command.line(),
+        "CODEX_HOME=/profiles/work codex login --device-auth"
+    );
 }
 
 /// The configured client path is used here too. An operator who had to write
@@ -40,6 +65,7 @@ fn the_configured_client_is_the_one_that_is_run() {
         Provider::Anthropic,
         PathBuf::from("/profiles/work"),
         Some(Path::new("/opt/homebrew/bin/claude")),
+        false,
     );
 
     assert_eq!(command.program, "/opt/homebrew/bin/claude");
@@ -54,6 +80,7 @@ fn the_printed_line_survives_a_path_with_a_space() {
         Provider::Anthropic,
         PathBuf::from("/Users/me/Application Support/px/work"),
         None,
+        false,
     );
 
     assert_eq!(

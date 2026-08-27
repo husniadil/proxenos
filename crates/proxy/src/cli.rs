@@ -162,6 +162,13 @@ pub struct AccountLoginArgs {
     /// one another tool made — is signed into and adopted.
     #[arg(long, value_name = "DIR")]
     pub path: Option<std::path::PathBuf>,
+    /// Have the client print a URL and a code instead of opening a browser.
+    ///
+    /// For a machine with no browser to open — a container, or a session over
+    /// ssh. It is `codex login --device-auth`, and `--provider anthropic`
+    /// refuses it: `claude auth login` has no equivalent.
+    #[arg(long)]
+    pub device_auth: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -503,6 +510,31 @@ mod tests {
             args.path.as_deref(),
             Some(std::path::Path::new("/profiles/work"))
         );
+        assert!(!args.device_auth);
+    }
+
+    /// `--device-auth` is how a login finishes where there is no browser to
+    /// open. It is off unless it is asked for, because the browser flow is
+    /// fewer steps everywhere it works.
+    #[test]
+    fn a_profile_login_can_ask_for_the_flow_that_needs_no_browser() {
+        let cli = Cli::try_parse_from([
+            "proxenos",
+            "accounts",
+            "login",
+            "work",
+            "--provider",
+            "codex",
+            "--device-auth",
+        ])
+        .unwrap();
+        let Command::Accounts(args) = cli.command else {
+            panic!("accounts should parse");
+        };
+        let Some(AccountsAction::Login(args)) = args.action else {
+            panic!("login should parse");
+        };
+        assert!(args.device_auth);
     }
 
     /// Top-level `login` is gone with the flag pair that told its two halves

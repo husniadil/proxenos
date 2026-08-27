@@ -115,9 +115,12 @@ proxenos accounts   stored accounts, and which one serves turns (also
                     is on every row, since with two stored an unnamed one is
                     a guess
   accounts login   NAME --provider codex|anthropic [--path DIR]
+                    [--device-auth]
                     sign in to a new profile of the owning program and
                     declare it; --path says where, absent it goes under this
-                    daemon's own directory
+                    daemon's own directory; --device-auth has the client print
+                    a URL and a code instead of opening a browser, and is
+                    `codex` only
   accounts add-key NAME --provider codex|anthropic
                     store an API key, read from stdin
   accounts use     NAME   serve every following turn as this account
@@ -177,6 +180,14 @@ Where there is no terminal to answer a login's prompts, the command is printed
 instead of run — with the environment variable already on it — along with the
 line that declares the profile afterwards. A client that wants a browser and a
 keyboard, started from something with neither, hangs with nothing said.
+
+`--device-auth` is the other half of that machine: a terminal there may be, but
+no browser to open. It puts `--device-auth` on the `codex login` that is run or
+printed, so the client prints a URL and a code to carry elsewhere, and it is on
+the printed way back too — a re-run that dropped it would start the client the
+way that hangs. `--provider anthropic` refuses it rather than passing it on,
+because `claude auth login` has no equivalent and would end in its own usage
+error about a spelling rather than about the choice.
 
 A declared profile reaches a running daemon at once: the verb calls
 `config.reload` (§3) after it writes, and says whether the daemon took it.

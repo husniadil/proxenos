@@ -45,7 +45,17 @@ impl Command {
     /// shell would usually resolve the bare name anyway, but an operator who
     /// had to write the path down once should not have to remember where it
     /// applies.
-    pub fn new(provider: Provider, directory: PathBuf, claude_program: Option<&Path>) -> Self {
+    ///
+    /// `device_auth` asks the client to print a URL and a code instead of
+    /// opening a browser. Only `codex login` has it; the Anthropic arm never
+    /// sees it set, because `plan` refuses the flag for that provider before
+    /// there is a command to put it on.
+    pub fn new(
+        provider: Provider,
+        directory: PathBuf,
+        claude_program: Option<&Path>,
+        device_auth: bool,
+    ) -> Self {
         match provider {
             Provider::Anthropic => Self {
                 program: claude_program.map_or_else(
@@ -56,12 +66,18 @@ impl Command {
                 variable: "CLAUDE_CONFIG_DIR",
                 directory,
             },
-            Provider::Codex => Self {
-                program: "codex".to_owned(),
-                arguments: vec!["login".to_owned()],
-                variable: "CODEX_HOME",
-                directory,
-            },
+            Provider::Codex => {
+                let mut arguments = vec!["login".to_owned()];
+                if device_auth {
+                    arguments.push("--device-auth".to_owned());
+                }
+                Self {
+                    program: "codex".to_owned(),
+                    arguments,
+                    variable: "CODEX_HOME",
+                    directory,
+                }
+            }
         }
     }
 
@@ -116,6 +132,10 @@ pub struct Plan {
     /// The directory the client is pointed at, and the one that is declared.
     pub directory: PathBuf,
     pub command: Command,
+    /// Whether the client was asked to print a URL and a code rather than open
+    /// a browser, which the way back has to carry for the same reason it
+    /// carries the provider.
+    pub device_auth: bool,
     /// How the grant is read back afterwards — the same read every turn
     /// makes, so a profile that passes here is one the daemon can serve.
     pub profile: crate::auth::borrowed::read::Profile,
@@ -135,14 +155,27 @@ pub struct Plan {
 /// `keys` are the names this daemon's own key store already holds. One name is
 /// one account: `add-key` refuses a name that is a profile, and this is the
 /// same rule from the other side.
+///
+/// `device_auth` is the other refusal, and it is here for the same reason: a
+/// flag only one of the two clients has cannot be found out later. Passing an
+/// argument `claude auth login` does not take ends as that client's own usage
+/// error, about a spelling rather than about the choice.
 pub fn plan(
     name: &str,
     provider: Provider,
     path: Option<PathBuf>,
+    device_auth: bool,
     config: &crate::config::Config,
     config_dir: &Path,
     keys: &[String],
 ) -> anyhow::Result<Plan> {
+    if device_auth && provider == Provider::Anthropic {
+        anyhow::bail!(
+            "`--device-auth` is a `codex login` flag, and `claude auth login` has no equivalent. \
+             Sign the anthropic profile in where a browser can open, then declare that directory \
+             here with `--path`."
+        );
+    }
     if config.profiles.contains_key(name) {
         anyhow::bail!(
             "`{name}` is already declared in `[profiles]`. Sign in to it with the command \
@@ -161,9 +194,11 @@ pub fn plan(
         provider,
         directory.clone(),
         config.claude_program.as_deref(),
+        device_auth,
     );
 
     Ok(Plan {
+        device_auth,
         name: name.to_owned(),
         provider,
         profile: crate::auth::borrowed::read::Profile {
@@ -242,15 +277,22 @@ pub fn run(plan: &Plan, environment: &mut dyn Environment) -> anyhow::Result<()>
         // the line is printed and the operator runs it themselves — the same
         // thing this would have done, in a place where it can work. The way
         // back is the whole command, because a re-run that dropped the
-        // provider would sign in to the other one.
+        // provider would sign in to the other one — and one that dropped
+        // `--device-auth` would, on a machine with a terminal but no browser,
+        // start the client the way that hangs.
         if !environment.is_interactive() {
             let said = format!(
                 "run this:\n\n  {}\n\nthen declare it with:\n\n  proxenos accounts login \
-                 {} --provider {} --path {}",
+                 {} --provider {} --path {}{}",
                 plan.command.line(),
                 plan.name,
                 plan.provider.as_str(),
-                plan.directory.display()
+                plan.directory.display(),
+                if plan.device_auth {
+                    " --device-auth"
+                } else {
+                    ""
+                }
             );
             environment.say(&said);
             return Ok(());
@@ -434,6 +476,7 @@ mod tests {
             name,
             Provider::Codex,
             None,
+            false,
             &config(document),
             Path::new("/config"),
             &[],
@@ -556,6 +599,7 @@ mod tests {
             "work",
             Provider::Codex,
             None,
+            false,
             &config("[profiles.work]\nprovider = \"codex\"\n"),
             Path::new("/config"),
             &[],
@@ -579,6 +623,7 @@ mod tests {
             "billing",
             Provider::Codex,
             None,
+            false,
             &config(""),
             Path::new("/config"),
             &["billing".to_owned()],
@@ -588,6 +633,27 @@ mod tests {
 
         assert!(refusal.contains("already a stored key"), "{refusal}");
         assert!(refusal.contains("accounts remove billing"), "{refusal}");
+    }
+
+    /// `--device-auth` is a flag only one of the two clients has. Refused here
+    /// rather than passed on, because `claude auth login` would end in its own
+    /// usage error about a spelling rather than about the choice.
+    #[test]
+    fn device_auth_against_the_client_that_has_no_such_flag_is_refused() {
+        let refusal = plan(
+            "work",
+            Provider::Anthropic,
+            None,
+            true,
+            &config(""),
+            Path::new("/config"),
+            &[],
+        )
+        .expect_err("no such flag")
+        .to_string();
+
+        assert!(refusal.contains("`codex login` flag"), "{refusal}");
+        assert!(refusal.contains("claude auth login"), "{refusal}");
     }
 
     /// A directory that already holds a grant is signed in, whoever signed it
@@ -641,6 +707,45 @@ mod tests {
         );
         assert_eq!(fake.runs, 0);
         assert_eq!(fake.written, None);
+    }
+
+    /// No terminal is one reason a login cannot run here; no browser is the
+    /// other, and it is the one `--device-auth` answers. The flag is on the
+    /// line to paste, and on the way back — a re-run that dropped it would,
+    /// on a machine with a terminal but no browser, start the client the way
+    /// that hangs.
+    #[test]
+    fn device_auth_is_on_both_lines_the_printed_run_gives_back() {
+        let plan = plan(
+            "work",
+            Provider::Codex,
+            None,
+            true,
+            &config("port = 8787\n"),
+            Path::new("/config"),
+            &[],
+        )
+        .expect("a plan");
+        let mut fake = Fake {
+            interactive: false,
+            ..Fake::default()
+        };
+
+        run(&plan, &mut fake).expect("printed");
+
+        let said = fake.said();
+        assert!(
+            said.contains("CODEX_HOME=/config/profiles/work codex login --device-auth"),
+            "{said}"
+        );
+        assert!(
+            said.contains(
+                "proxenos accounts login work --provider codex --path /config/profiles/work \
+                 --device-auth"
+            ),
+            "{said}"
+        );
+        assert_eq!(fake.runs, 0);
     }
 
     /// The client's exit status is not the answer. What settles it is whether

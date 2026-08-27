@@ -1853,6 +1853,14 @@ is how a profile made elsewhere is taken on. And where there is no terminal to
 answer the login's prompts, the command is printed with its variable already
 attached instead of being started somewhere it can only hang.
 
+A machine can have the terminal and still not the browser, which is a third
+case and the only one needing a flag: `--device-auth` asks the client to print
+a URL and a code to carry to a browser elsewhere. It is a flag of `codex login`
+alone, so the other provider refuses it here rather than handing an unknown
+argument to a client that would reject it as a misspelling. Where the command
+is printed instead of run, the flag is on both lines — the one to paste and the
+one that declares the result — for the same reason the provider is.
+
 **With nothing declared, the stock profile of each program is read.** A first
 run should not make an operator write down what the programs on the machine
 already know: `[profiles]` empty means look at the profile each client uses
