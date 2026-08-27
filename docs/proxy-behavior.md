@@ -133,7 +133,9 @@ list is how an image reaches the model — attached to the call that produced it
 with no synthetic message standing between them.
 
 The output collapses to a bare string when, and only when, it is a single piece
-of text. Every other case stays a list, including the empty one.
+of text. Every other case stays a list, including the empty one. A tool result
+carrying no `content` at all is the one exception: there are no parts to make a
+list of, so it becomes the empty string.
 
 Documents are the exception. No document part exists inside a tool output, so
 each is re-emitted as a `user` message placed immediately after the
@@ -224,6 +226,16 @@ meant it for the traffic that expresses no preference too, and that is most of
 it. With no ceiling and no request effort, the field is omitted and the
 backend's own default applies.
 
+**The model's own list then snaps both ways.** Whatever survives the two
+ceilings is moved to the nearest effort the model actually accepts: down to the
+highest listed level at or below it, and — where it sits below everything on
+offer — *up* to the model's lowest. Asking for less than a model can do is a
+request for its cheapest setting, not for one it would refuse, and an unlisted
+effort fails the turn in either direction. So the model's floor outranks the
+operator's ceiling: a ceiling set below what the model lists is raised to that
+floor, because there is nothing cheaper to send. A model whose efforts the
+catalog never listed snaps nothing, for the same reason it caps nothing.
+
 `reasoning.summary` is always `auto`.
 
 `prompt_cache_key` derives from session identity (§3.1) and is stable for the
@@ -239,7 +251,12 @@ forwarded. Anthropic `cache_control` blocks have no equivalent and are dropped;
 upstream caching is implicit.
 
 Server-assigned item ids from a previous response are stripped before an item is
-re-sent, and `previous_response_id` is set only by the incremental path (§4.3).
+re-sent. A retained reasoning item is the exception and keeps the id the server
+gave it: it is the only item shape carrying an id at all, and it goes back as
+the server's own item (§3.3) rather than as something the client replayed.
+Identity comparison ignores ids either way (§3.1), so this changes what is sent
+and not what matches. `previous_response_id` is set only by the incremental
+path (§4.3).
 
 ### 2.8 Upstream request headers
 
@@ -249,10 +266,10 @@ re-sent, and `previous_response_id` is set only by the incremental path (§4.3).
 | `chatgpt-account-id` | the account id carried in the access token |
 | `originator` | a single fixed first-party originator |
 | `user-agent` | matching that originator |
-| `openai-beta` | the Responses experimental opt-in |
+| `openai-beta` | the Responses experimental opt-in, on the WebSocket upgrade only |
 | `accept` | `text/event-stream` on the HTTP transport |
 
-All of these go on the WebSocket upgrade too. The upgrade is an HTTP request
+Every header with no transport named beside it goes on both. The upgrade is an HTTP request
 like any other, and `originator` and `user-agent` were once absent from it while
 every other path sent them — the socket did not enforce them, so nothing failed
 and nothing said so.
@@ -317,8 +334,19 @@ strict extension of the full baseline rather than a longest-common-prefix score.
 
 A session holds its input baseline and the output items the server added, its
 transport binding, its discovered tool names, its retained reasoning items
-(§3.3), and its estimator calibration ratio. Sessions expire on idle, and the
+(§3.3), and its estimator calibration fit. Sessions expire on idle, and the
 store is bounded — eviction is by least recent use, never by refusing a request.
+
+**Where several sessions match, the longest baseline wins.** A candidate that
+extends two of them extends the shorter only because the shorter is a prefix of
+the longer, and continuing it would drop everything between the two.
+
+**A new session is claimed before its first turn is confirmed.** The items just
+sent are seeded into its baseline, so a concurrent request cannot match an empty
+baseline and join a conversation it has nothing to do with. Only an unconfirmed
+baseline is seeded this way. Doing it to a confirmed one is what makes a
+*failed* turn corrupt the next delta: the backend never saw the items, the
+baseline says it did, and the next delta skips them.
 
 ### 3.3 Reasoning continuity
 
@@ -501,8 +529,12 @@ joined with newlines — not as independent JSON documents. Parsing each line
 separately corrupts any event large enough to be split, which is exactly the
 events that matter: long tool-call arguments and long text deltas.
 
-A `data:` payload of `[DONE]` is a terminator, not content. A payload that does
-not parse as JSON is ignored rather than treated as an error.
+A `data:` payload of `[DONE]` is a framing terminator, not content — but nothing
+on the live path treats it as one. It does not parse as JSON, so it is dropped
+by the same rule every unparseable payload is, and the stream ends when the body
+does. Only the vocabulary comparison of §9.2 filters it by name, so that it does
+not show up there as an event this proxy fails to emit. A payload that does not
+parse as JSON is ignored rather than treated as an error.
 
 On the WebSocket transport the same events arrive as discrete messages and need
 no reassembly. Both transports produce the same event stream before translation
@@ -516,12 +548,12 @@ Anthropic permits a single open content block at a time.
 | Responses event | Anthropic output |
 |---|---|
 | `response.created` | `message_start` |
-| `response.reasoning_summary_text.delta` | `thinking` block, `thinking_delta` |
+| `response.reasoning_summary_text.delta`, `response.reasoning_text.delta` | `thinking` block, `thinking_delta` |
 | `response.output_text.delta` | `text` block, `text_delta` |
 | `response.output_item.added` (function call) | `tool_use` block |
 | `response.function_call_arguments.delta` | `input_json_delta` |
 | `response.output_item.done` | `content_block_stop` |
-| `response.completed` / `.done` | `message_delta` + `message_stop` |
+| `response.completed` | `message_delta` + `message_stop` |
 | `response.incomplete` | `message_delta`, `stop_reason: max_tokens` |
 | `error`, `response.failed` | `error` frame |
 
@@ -571,7 +603,8 @@ spending quota on output nobody receives.
 ### 5.4 Empty streams
 
 A stream that completes having produced no content frames is recorded with its
-request and the raw upstream bytes. It is always a defect, and it is otherwise
+request and the upstream events it parsed — the values, not the raw bytes, so a
+payload that never parsed is not in the record. It is always a defect, and it is otherwise
 invisible.
 
 ### 5.5 A request that did not ask for a stream
@@ -632,13 +665,27 @@ no standing to make it.
 
 **The same counts are tallied per account, and never become a cost.** A
 completed turn's input and output counts are added to the account that served
-it — the pinned account where a tier pinned one, the serving account otherwise
-(§8.3) — so a metered account can be told how much has been spent through this
-daemon. Nothing here knows a price list, and none is inferred: the tally is a
-quantity of tokens and stays one. A turn upstream reported no usage for adds
-nothing rather than zero, and a turn no account can be named for is not counted
-at all, because filing it under whoever happens to be serving would put one
-account's spend under another's name.
+it — a launch tag's account first, then the pinned account where a tier pinned
+one, then the serving account (`api.md` §2.3, §8.3) — so a metered account can be
+told how much has been spent through this daemon. Nothing here knows a price
+list, and none is inferred: the tally is a quantity of tokens and stays one. A
+turn upstream reported no usage for adds nothing rather than zero, and a turn no
+account can be named for is not counted at all, because filing it under whoever
+happens to be serving would put one account's spend under another's name.
+
+**The tallied input count is the raw one.** It is upstream's `input_tokens`
+exactly as reported, cached tokens included — not the converted figure above,
+which subtracts them because that is what Anthropic's field means. The tally
+records what upstream billed; the client's figure describes the shape it is
+being reported in.
+
+**Only a translated turn is tallied.** The counts are read out of the upstream
+response's usage block, which this daemon has in hand because it is translating
+the stream. A turn relayed to the second provider is not parsed: what it leaves
+behind is the quota snapshot its response headers carry (§9.4), and no tally. So
+the count is a count of translated turns, and for an account of the second
+provider — whose every turn is relayed — it never moves off zero, however much
+the account is spent.
 
 **It is a floor, not the account's spend.** Turns made anywhere else are
 invisible to it. Everywhere it is reported it says so, because a figure that
@@ -682,7 +729,9 @@ The snapshot file is replaced rather than written into, by the same rule and
 the same sibling-and-rename as the tally below. What it does **not** share is
 the merge: a tally accumulates, so the higher of two counts is the truer one,
 while a snapshot replaces, so the **later** record of an account is the one
-that describes it. Where two daemons share a `PROXENOS_HOME`, each keeps
+that describes it. Nor does it share the tally's retry: the tally re-reads the
+file after building its body and starts over where it changed, and the snapshot
+write reads once, merges, and replaces. Where two daemons share a `PROXENOS_HOME`, each keeps
 whichever measurement was taken last. `usage --refresh` replaces a record the
 same way any turn does.
 
@@ -744,7 +793,10 @@ writing the true value there replaces the estimate rather than adding to it.
 
 The estimator corrects itself against upstream. Each completed request yields a
 true input count for a request that was also estimated, and the pair is folded
-into a fit retained on the session.
+into a fit retained on the session. The pair is the *raw* estimate and the true
+count: the correction in force is inverted off the reported estimate first, so
+every observation sits on the same axis and the fit does not chase its own
+output.
 
 **The fit is a line, not a multiplier.** Part of the unmodelled cost scales with
 the conversation and part does not: the instructions wrapper is charged once
@@ -756,7 +808,9 @@ and offset are fitted together instead, by incremental least squares.
 
 Where the fit is underdetermined it is not invented. One observation, or several
 at the same size, cannot separate scale from offset; the estimator falls back to
-a plain ratio and extrapolates nothing.
+a plain ratio and extrapolates nothing. A fitted slope that is not positive
+falls back the same way: a conversation does not get cheaper as it grows, so
+that is noise, and applying it would make longer sessions estimate lower.
 
 This absorbs what a tokenizer alone cannot. The upstream count includes framing
 the proxy does not model identically — the instructions blob, serialized tool
@@ -1170,18 +1224,24 @@ breakage — but a client that does not hold the current token is one refresh
 away from holding nothing. So the tool that owns a grant is the only one that
 may rotate it, and this side spends what it finds.
 
-The expiry is a claim inside the access token, and is read from there. That is
-the figure the backend validates against, so it is the one that decides.
-Nothing verifies the signature, and nothing should: the token arrived over TLS
-from the server that issued it, and the proxy is reading its own credentials to
-learn when they lapse — not deciding whether to trust them.
+**On Codex** the expiry is a claim inside the access token, and is read from
+there, because the profile records none of its own. That is the figure the
+backend validates against, so it is the one that decides. Nothing verifies the
+signature, and nothing should: the token arrived over TLS from the server that
+issued it, and the proxy is reading its own credentials to learn when they lapse
+— not deciding whether to trust them.
 
 Where the claim cannot be read the token counts as expired, because a turn
 refused early costs one message while a turn started on a dead token fails
 mid-request.
 
-The account id is likewise a claim, read from the id token and sent upstream as
-a header.
+The account id is likewise a Codex claim, read from the id token and sent
+upstream as a header.
+
+**A Claude profile states neither.** Its item carries an `expiresAt` of its own,
+in milliseconds, and that is what the expiry is read from — no token claim is
+consulted. It carries no id token and no account id at all, and none is invented
+here (§8.4).
 
 Nothing here refreshes, so there is no single-flight to arrange and no refused
 token to retire. A grant at or past its expiry is refused for the turn, and the
@@ -1189,11 +1249,23 @@ next turn reads the profile again — which is how a refresh performed by the
 owning program arrives without anything on this side noticing (§8.4).
 
 Credentials sit behind a `CredentialStore` trait. Keys are kept in a file
-created `0600`; grants are read through the same trait from wherever the owning
-program keeps them, which on macOS is a keychain item. Credentials never appear
+created `0600` on Unix — Windows has no mode bits, so there the file inherits
+the ACL of the configuration directory, which is per-user; grants are read
+through the same trait from wherever the owning program keeps them, which on
+macOS is a keychain item. Credentials never appear
 in process arguments, logs, or the configuration file.
 
 ### 8.1 More than one account
+
+Two stores implement this. The daemon's own store composes the borrowed
+profiles with the key file and is what serves turns. The `FileStore` behind the
+key file is the older whole-store contract: it still holds keys, and it holds
+grants written before profiles were borrowed. Where a rule below is about
+*writing* a grant — `add`, `save`, and the collision rules between them — it is
+the `FileStore` contract. The daemon's store refuses `add` outright, saying a
+subscription grant is read from the profile of the program that owns it, and
+leaves grants left in the key file out of what it lists, because it no longer
+reads them.
 
 One store holds several grants, and one of them is **selected**: the account
 every turn is made as, and the only one `CredentialStore` reports. A caller that
@@ -1247,7 +1319,10 @@ as it takes to read the file, change it, and replace it. Every write rewrites
 the whole file, so two overlapping writers would otherwise mean one discarding
 whatever the other had just done — a whole account, not a stale token — and the
 pair that overlaps in practice is real: `accounts add-key` in the CLI writes this file
-directly while the daemon may be persisting a refresh.
+directly while the daemon is writing it for a verb of its own — a key stored, an
+account removed, a selection moved over the control socket. What the daemon
+never writes into it is a refresh: it holds no grant of its own to rotate, and
+`save` is refused (§8.4).
 
 The lock is a file of its own beside the credentials, never read and never
 written. It cannot be the credential file, because a write replaces that one by
@@ -1271,7 +1346,10 @@ than replacing it. The lock reaches only writers that take it, and an older
 binary or a hand edit takes none; the comparison is what catches those. It
 cannot close the window on its own — the comparison and the replacement are two
 operations, and a writer landing between them is lost — which is what the lock
-is for.
+is for. Starting over is bounded at five attempts, after which the write errors
+rather than spinning: each attempt is a read, a change and a replacement with
+nothing slow in between, so losing five in a row is not contention but something
+rewriting the file in a loop.
 
 **Accounts do not interfere with each other.** Each holds its own
 refresh-token family, so rotating one leaves every other exactly where it was.
@@ -1282,13 +1360,10 @@ usable. What must be kept out of the design is the other arrangement — two
 holders of *one* account — because there the last refresh retires the token
 every other holder is still carrying.
 
-**A refusal is about one refresh token**, and is held as that token rather than
-as a flag. Held as a flag it becomes a fact about the process: the message a
-refusal produces tells the operator to log in again, they do, and the grant they
-produce lands in this store — where a flag would go on refusing it until the
-daemon restarted, and a login through the CLI never reaches the daemon at all.
-Held as the token, a grant that is not the refused one is tried and the refused
-one is still never retried, whether it comes back by a switch or by a login.
+What the backend said about a credential is remembered per **account** — a
+status, the sentence the backend wrote, and when it arrived — never the
+credential itself, and never a refresh token. It is not persisted, and the next
+turn that works clears it. §8.4.
 
 A quota belongs to the account that earned it, and is held under that account's
 name — §8.3.
@@ -1300,9 +1375,14 @@ still read from its absence. Clearing what is already gone is not an error.
 A credential file written before the store held more than one account is a bare
 grant, and is read as the single account it describes, named by its account id.
 It migrates on the next write rather than on read: reading credentials is not a
-reason to rewrite them. A `selected` naming an account that is not stored falls
-back to the first one, because the file still holds usable grants and answering
-"not authenticated" there sends an operator to re-authorize for nothing.
+reason to rewrite them. In the key file's own `FileStore`, a `selected` naming
+an account that is not stored falls back to the first one, because the file
+still holds usable credentials and answering "not authenticated" there sends an
+operator to re-authorize for nothing. The daemon's store does not fall back: a
+selection it cannot resolve is refused by name and the operator is told to
+choose one with `accounts use`, because the set it selects over spans borrowed
+profiles and keys, and picking the first of that is picking an identity nobody
+named.
 
 ### 8.2 A credential that is not a subscription
 
@@ -1362,7 +1442,9 @@ one rendered as having nothing to watch, beside a subscription showing a number.
 So the row states the absence of a ceiling rather than the absence of a figure,
 and carries the one quantity that can honestly stand beside it: the tokens this
 daemon has served as the account (§6.1), as a count, with no cost stated or
-estimated.
+estimated. That count is kept for translated turns only. A key of the second
+provider is relayed on every turn, so its count stays at zero and the row is the
+absence of a ceiling and nothing else.
 
 **On the second provider a key is two credentials wearing one word.** A
 subscription setup token and an API key are both stored as `key`, and they are
@@ -1439,11 +1521,19 @@ ctrl-d is wanted arrives after an empty read — once the operator has already
 guessed. The prompt goes to stderr and only where a person is typing, so a piped
 key is byte-for-byte what it was.
 
-Neither kind can be stored over the other. A key written where a grant is
-would retire that grant with nothing said, and a rotation whose account is no
-longer stored is refused rather than appended — appending it would create an
-account nobody asked for and make it the one serving turns, from a background
-refresh.
+Neither kind can be stored over the other, in either direction. A key written
+where a grant is would retire that grant with nothing said; a grant written
+where a key is would discard the key the same way, and a login carrying a label
+that already names a key is refused for that reason — a key entry carries no
+account id, so the collision rule for two grants cannot see it. A rotation whose
+account is no longer stored is refused rather than appended — appending it would
+create an account nobody asked for and make it the one serving turns, from a
+background refresh.
+
+A key stored over a key of a **different provider** is refused too. Same-provider
+re-storing is a rotation and stays silent and in place; across providers it
+discards a working credential and re-points the account at another backend,
+which is the same unrecoverable loss.
 
 An account with no kind recorded is a grant, the same read-the-old-shape rule
 §8.1 applies to the file as a whole.
@@ -1490,14 +1580,6 @@ request. Where an account is asked and the answer does not come, that is said on
 that account's own row and blanks, delays, or stands in for no other's. Nothing
 is invented for a row that could not be asked.
 
-**Asking does not refresh a grant the operator did not select.** An expired
-access token would have to be renewed before it could ask, and a refresh rotates
-a token family: a second holder of the same grant is left holding a token
-retired by a sweep it never asked for. So a spare with an expired grant reports
-that, rather than being renewed in the background. The serving account is the
-exception, because every turn it makes already refreshes it, and asking as it
-changes nothing that was not happening anyway.
-
 **The daemon-wide line answers for the account being asked about.** Where a
 single account is held, nothing is repeated under its own name, so that line is
 the whole answer — and a generic "no turn has been made yet" under a lone key
@@ -1508,9 +1590,11 @@ serving account's own, by the same rules as its row.
 than rendered as zero used, and an account with no figure at all reports that
 it has none — as a statement about this daemon's record (§6.1), because a turn
 made outside the daemon is invisible here and reporting it as unspent would be
-wrong about the account. That covers every account of the second provider, whose quota
-endpoint is an open question (`roadmap.md` §L) — until it is answered, those
-accounts report unavailable rather than a plausible figure.
+wrong about the account. That covers the second provider's **key** accounts,
+whose quota endpoint is an open question (`roadmap.md` §L) — until it is
+answered, they report unavailable rather than a plausible figure. A borrowed
+grant of that provider is not among them: it has an endpoint that answers, and
+the sweep asks it there (§8.4).
 
 **A window carries the provider's own words, not only its number.** Where the
 provider states a per-window status, the threshold it set for that status, or
@@ -1596,7 +1680,9 @@ profile whose `auth_mode` is anything other than `chatgpt` is refused rather
 than borrowed: it authenticates against a different endpoint with different
 billing, and such a profile can still carry a stale `tokens` block from a
 sign-in the operator has replaced, so the mode is checked before the tokens
-are.
+are. An absent or empty `auth_mode` is accepted: the field is not always
+written, and its absence is not a statement that the profile is in some other
+mode.
 
 **Claude.** On macOS the grant is a keychain item, and **which item is decided
 by whether `CLAUDE_CONFIG_DIR` was set at all, not by what it was set to**:
@@ -1633,7 +1719,8 @@ removing it. That is indistinguishable from a profile nobody signed into, and
 both want the same answer, so an empty half is refused by name rather than
 carried as a grant with an odd expiry.
 
-**A lapsed grant may be asked about, and only Claude is ever asked.** What asks
+**A lapsed grant may be asked about, and both providers are asked the same
+way.** What asks
 is a request for a quota figure (`usage --refresh`): the caller wants the figure
 that comes *after* a refresh, so it waits for one. A turn does not ask — it
 refuses on a lapsed grant and says whose program renews it — because a turn that
@@ -1642,8 +1729,9 @@ blocked while a client started up would spend a minute before its first byte.
 The one move available here is to run the program that owns the profile, wait
 for it to exit, and read the profile again: the rotation happens inside that program,
 which is the only process allowed to perform it. A cheap turn is that run —
-`claude -p ok` for an Anthropic profile, `codex exec ok` for a Codex one — with
-stdin closed (without which the client waits several seconds for input that
+`claude -p ok --model haiku` for an Anthropic profile, the cheapest tier there
+is, and `codex exec --skip-git-repo-check ok` for a Codex one, the flag because
+the daemon's working directory is not a repository — with stdin closed (without which the client waits several seconds for input that
 never comes) and a deadline, after which the process is killed and the profile
 is left alone. The Codex turn carries no model id: an id names one plan's
 catalog and would go stale, and the turn exists to authenticate, not to compute.
@@ -2121,7 +2209,10 @@ direction to be wrong in.
 
 ## 10. Testing
 
-Development is test-first.
+Development is test-first. One path is knowingly not: `profile_login::run`,
+which starts the owning client on a terminal for `accounts login`. What it
+decides is covered — which program is pointed at which directory, and what the
+configuration document says afterwards — but the run itself has no harness.
 
 ### 10.1 Translation
 
@@ -2168,7 +2259,8 @@ translation path still says so plainly.
 ### 10.4 Transport and sessions
 
 Transport tests run against a local server replaying recorded exchanges.
-WebSocket coverage includes reuse, prewarm, fallback latching, and cancellation.
+WebSocket coverage includes reuse, prewarm, and fallback latching. Cancellation
+(§5.3) is covered on the HTTP replay path only.
 
 Incremental upload is specified by its invariants:
 

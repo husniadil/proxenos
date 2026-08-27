@@ -4,6 +4,27 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- An incomplete turn reports upstream's own token usage. `response.incomplete`
+  carries the same usage block `response.completed` does, and it was being
+  discarded — so a turn the backend cut short for `max_tokens` closed on the
+  proxy's own input estimate, which is the one figure a completed turn is never
+  allowed to report. It now reads `/response/usage` the same way, and the
+  non-streaming fold, which takes its body from the same frames, reports it too.
+
+- `accounts login --provider codex` honours `codex_program`. The path was read
+  for the Anthropic client alone and the Codex arm ran the bare name, so a
+  daemon started by launchd — which resolves almost nothing from `PATH` — could
+  poke the configured Codex client for a refresh and still fail to find one to
+  log in with. Each provider's login now runs the program its own key names.
+
+- A login carrying a label that already names a stored key is refused rather
+  than written over it. `add_key` has always refused the reverse, but the
+  duplicate-label guard compared account ids, which a key entry does not have —
+  so the grant landed on top of the key and the key was gone with nothing said.
+  The refusal is now symmetric.
+
 ## [0.15.0]
 
 - `accounts login --device-auth` prints a URL and a code where the machine has

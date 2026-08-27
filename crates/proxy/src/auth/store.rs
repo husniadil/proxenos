@@ -1102,6 +1102,21 @@ impl AccountStore for FileStore {
 
     fn add(&self, credentials: &Credentials, label: Option<&str>) -> Result<String, ProxyError> {
         self.update(|file| {
+            // The collision `add_key` refuses from the other side (§8.2).
+            // Neither kind is stored over the other: a grant written over a
+            // key discards it with nothing said, and a key is not recoverable
+            // from anything this daemon holds. The guard below cannot catch
+            // this one, because a key entry carries no account id to compare.
+            if let Some(label) = label
+                && let Some(entry) = file.index_of(label).and_then(|i| file.accounts.get(i))
+                && entry.grant().is_none()
+            {
+                return Err(ProxyError::invalid_request(format!(
+                    "`{label}` already names an account holding a key; \
+                     remove it first, or log in again with another label"
+                )));
+            }
+
             // A label that already names a different account. Honouring it would
             // write this grant over that one, retiring a working grant with
             // nothing said — the failure the add/save split exists to prevent.

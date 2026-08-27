@@ -162,8 +162,8 @@ pub enum Role {
     User,
     Assistant,
     /// Anything else. The backend rejects system and developer roles inside
-    /// `input`, so these fold into `instructions` — see
-    /// `docs/proxy-behavior.md` §2.1.
+    /// `input`, so these are carried as a `user` item rather than folded into
+    /// `instructions` — see `docs/proxy-behavior.md` §2.1.
     #[serde(other)]
     Other,
 }

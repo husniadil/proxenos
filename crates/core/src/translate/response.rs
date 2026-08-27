@@ -168,6 +168,13 @@ impl ResponseTranslator {
             "response.incomplete" => {
                 self.start_message(frames);
                 self.stop_reason = StopReason::MaxTokens;
+                // §6.1 — an incomplete turn is still a turn upstream billed,
+                // and it carries the same usage block a completed one does.
+                // Leaving the estimate in place would report a figure the
+                // backend never agreed to.
+                if let Some(usage) = event.pointer("/response/usage") {
+                    self.usage = translate_usage(usage);
+                }
                 self.close_message(frames);
             }
             "response.failed" => {

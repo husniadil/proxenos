@@ -1274,18 +1274,18 @@ subscription. The operator asked for it, but a name does not state a provider,
 and only the daemon holds the answer.
 
 **`usage.refresh` can block while the owning client runs.** Where the account
-it is asked about is a borrowed Claude profile whose grant has lapsed, the
-client is run once before the figure is asked for, and the answer waits for it
+it is asked about is a borrowed profile of either provider whose grant has
+lapsed, the owning client is run once before the figure is asked for, and the
+answer waits for it
 (`proxy-behavior.md` §8.4) — the figure the caller wants is the one after the
 refresh. **The bound is one client run for the whole call**, not one per
 account: a sweep over four lapsed profiles would otherwise be four minutes of a
 caller that looks hung, and neither this socket nor the CLI times out. An
 account the budget ran out before is still asked for its figure, without the
 refresh, and its row says it was not asked and what to do about it. One run per
-profile is serialised by a lock, and the two cases that cannot be helped refuse
-instead: the other provider, which is never run, and a profile whose refresh
-token has lapsed too, where running the client would blank what is left of the
-grant.
+profile is serialised by a lock, and the one case that cannot be helped refuses
+instead: a profile whose refresh token has lapsed too, where running the client
+would blank what is left of the grant.
 
 **`usage.refresh` is not the primary path and does not replace it.** The backend
 volunteers a snapshot at the head of every stream; that one is free, rides a turn
@@ -1576,8 +1576,10 @@ launch, translate or relay.
 `effort` caps reasoning effort on every request, whatever the client asks for —
 one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`
 (`ultracode` is the client's name for `ultra` and is accepted as one). It is a
-ceiling, not a fixed value, and is capped again by what the model accepts. Omit
-it for no ceiling; omitting it does not mean zero effort, it means the backend's
+ceiling, not a fixed value, and is capped again by what the model accepts — and
+raised by it: an effort below the lowest one the model lists is snapped up to
+that floor, this ceiling included, because there is nothing cheaper the model
+would take (`proxy-behavior.md` §2.7). Omit it for no ceiling; omitting it does not mean zero effort, it means the backend's
 own default. An unrecognized value is refused at startup rather than ignored.
 
 It is a top-level key and must sit above the tables — see the note on

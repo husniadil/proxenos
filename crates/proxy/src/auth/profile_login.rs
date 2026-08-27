@@ -40,11 +40,12 @@ pub struct Command {
 impl Command {
     /// What to run for one provider.
     ///
-    /// `claude_program` is the configured path where there is one (§4). It is
-    /// the same key the daemon runs the client by; a login started from a
-    /// shell would usually resolve the bare name anyway, but an operator who
-    /// had to write the path down once should not have to remember where it
-    /// applies.
+    /// `program` is the configured path for this provider where there is one —
+    /// `claude_program` or `codex_program` (§4). It is the same key the daemon
+    /// runs that client by; a login started from a shell would usually resolve
+    /// the bare name anyway, but an operator who had to write the path down
+    /// once should not have to remember where it applies, and neither client
+    /// is more likely than the other to be off `PATH`.
     ///
     /// `device_auth` asks the client to print a URL and a code instead of
     /// opening a browser. Only `codex login` has it; the Anthropic arm never
@@ -53,12 +54,12 @@ impl Command {
     pub fn new(
         provider: Provider,
         directory: PathBuf,
-        claude_program: Option<&Path>,
+        program: Option<&Path>,
         device_auth: bool,
     ) -> Self {
         match provider {
             Provider::Anthropic => Self {
-                program: claude_program.map_or_else(
+                program: program.map_or_else(
                     || crate::auth::borrowed::poke::PROGRAM.to_owned(),
                     |path| path.display().to_string(),
                 ),
@@ -72,7 +73,10 @@ impl Command {
                     arguments.push("--device-auth".to_owned());
                 }
                 Self {
-                    program: "codex".to_owned(),
+                    program: program.map_or_else(
+                        || crate::auth::borrowed::poke::CODEX_PROGRAM.to_owned(),
+                        |path| path.display().to_string(),
+                    ),
                     arguments,
                     variable: "CODEX_HOME",
                     directory,
@@ -190,12 +194,13 @@ pub fn plan(
     }
 
     let directory = path.unwrap_or_else(|| directory(config_dir, name));
-    let command = Command::new(
-        provider,
-        directory.clone(),
-        config.claude_program.as_deref(),
-        device_auth,
-    );
+    // Each provider's own configured path: the same key the daemon pokes that
+    // client by (§8.4), so a login and a refresh cannot run different programs.
+    let program = match provider {
+        Provider::Anthropic => config.claude_program.as_deref(),
+        Provider::Codex => config.codex_program.as_deref(),
+    };
+    let command = Command::new(provider, directory.clone(), program, device_auth);
 
     Ok(Plan {
         device_auth,

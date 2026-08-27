@@ -537,6 +537,33 @@ fn a_label_already_naming_another_account_is_refused() {
     assert_eq!(store.accounts().unwrap().len(), 1);
 }
 
+/// And a label that already names a *key* is refused too — the same refusal
+/// `add_key` makes from the other side.
+///
+/// A key entry carries no account id, so the id comparison above cannot see
+/// this collision at all. Without its own guard a login under that label
+/// writes a grant over the key and the key is gone, while the reverse — a key
+/// under a name holding a grant — has always been refused. §8.2: neither kind
+/// is stored over the other.
+#[test]
+fn a_label_already_naming_a_key_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = FileStore::new(dir.path().join("credentials.json"));
+    store
+        .add_key("work", "key-secret-value", Provider::Codex)
+        .unwrap();
+
+    let error = store.add(&sample(), Some("work")).unwrap_err().to_string();
+    assert!(error.contains("work"), "{error}");
+    assert!(error.contains("key"), "{error}");
+
+    // The key is untouched, and no second entry was appended.
+    let accounts = store.accounts().unwrap();
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0].kind, "key");
+    assert_eq!(stored_key(&store, "work"), "key-secret-value");
+}
+
 /// Naming an account in an empty store says the store is empty.
 ///
 /// The refusal lists what is stored, and with nothing stored that list is a

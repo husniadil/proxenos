@@ -346,6 +346,36 @@ fn an_incomplete_response_stops_for_max_tokens() {
     assert_eq!(shape(&frames).last(), Some(&"message_stop"));
 }
 
+/// §6.1 — an incomplete turn reports upstream's own usage, not the estimate
+/// `message_start` opened with. The backend billed the turn it cut short.
+#[test]
+fn an_incomplete_response_reports_upstream_usage() {
+    let frames = run(&[
+        json!({ "type": "response.created", "response": { "id": "resp_1" } }),
+        json!({ "type": "response.output_text.delta", "delta": "partial" }),
+        json!({
+            "type": "response.incomplete",
+            "response": {
+                "id": "resp_1",
+                "incomplete_details": { "reason": "max_output_tokens" },
+                "usage": {
+                    "input_tokens": 400,
+                    "input_tokens_details": { "cached_tokens": 40 },
+                    "output_tokens": 7,
+                },
+            },
+        }),
+    ]);
+
+    let usage = &frames
+        .iter()
+        .find(|f| f["type"] == "message_delta")
+        .unwrap()["usage"];
+    assert_eq!(usage["input_tokens"], json!(360));
+    assert_eq!(usage["cache_read_input_tokens"], json!(40));
+    assert_eq!(usage["output_tokens"], json!(7));
+}
+
 /// §5.0 — a payload that is not JSON is ignored rather than treated as an
 /// error. Keep-alives and sentinels arrive this way.
 #[test]

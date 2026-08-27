@@ -71,6 +71,33 @@ fn the_configured_client_is_the_one_that_is_run() {
     assert_eq!(command.program, "/opt/homebrew/bin/claude");
 }
 
+/// The Codex client is configured by its own key, and a login has to honour it
+/// for the same reason the Anthropic one does: a daemon started by launchd
+/// resolves nothing from `PATH`, and `codex_program` is the only thing that
+/// says where the client is (§8.4).
+#[test]
+fn the_configured_codex_client_is_the_one_that_is_run() {
+    let config: Config = toml::from_str("codex_program = \"/opt/homebrew/bin/codex\"\n")
+        .expect("the document parses");
+
+    let plan = proxenos::auth::profile_login::plan(
+        "work",
+        Provider::Codex,
+        Some(PathBuf::from("/profiles/work")),
+        false,
+        &config,
+        Path::new("/config"),
+        &[],
+    )
+    .expect("planned");
+
+    assert_eq!(plan.command.program, "/opt/homebrew/bin/codex");
+    assert_eq!(
+        plan.command.line(),
+        "CODEX_HOME=/profiles/work /opt/homebrew/bin/codex login"
+    );
+}
+
 /// The printed line is what a person pastes, so a profile under a path with a
 /// space in it has to survive being pasted. Both clients' stock locations are
 /// under such a path on macOS.
