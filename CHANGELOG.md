@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.16.1]
 
 - The two decisions `exec --account` left behind follow the account the session
   is served as. A plain `--model` id was upgraded to its `[1m]` variant from
