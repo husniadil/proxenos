@@ -4,6 +4,25 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.15.0]
+
+- `accounts login --device-auth` prints a URL and a code where the machine has
+  a terminal and no browser. A container, or a session over ssh, gives
+  `codex login` somewhere to run and nothing to open, and the login it starts
+  there hangs with nothing said. The flag goes onto the command that is run,
+  onto the line that is printed where there is no terminal to answer the
+  prompts, and onto the printed line that declares the profile afterwards — a
+  re-run that dropped it would hang the same way. It is a flag of `codex login`
+  alone, so `--provider anthropic` refuses it rather than handing
+  `claude auth login` an argument it would reject as a misspelling.
+
+- The herdr plugin's popup acts on a piped key without waiting out the redraw
+  interval. Its non-tty read slept the whole interval when a `q` arrived
+  without a trailing newline, so input that had already been delivered took
+  thirty seconds to act on. A partial line is handed over as soon as it is
+  read; a true EOF still sleeps, which is what keeps a closed stdin a redraw
+  loop rather than a spin.
+
 ## [0.14.0]
 
 - `usage` says when a borrowed Anthropic subscription is no longer active. The

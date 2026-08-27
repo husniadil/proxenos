@@ -866,6 +866,26 @@ name — when no stored account carries it.
 
 **Done.**
 
+### v0.15.0 — shipped
+
+**A login where there is no browser to open.** `accounts login --device-auth`
+puts `codex login`'s own flag on the command that is run, on the command that
+is printed where no terminal can answer the prompts, and on the printed line
+that declares the profile afterwards, so the client prints a URL and a code to
+carry to a browser elsewhere. A container has the terminal and not the browser,
+which the two existing cases did not cover: the login started there hung with
+nothing said. The flag belongs to one client, so `--provider anthropic` refuses
+it rather than handing `claude auth login` an argument it would reject as a
+misspelling.
+
+**A piped key acts at once.** The herdr plugin's popup slept its whole redraw
+interval when a key arrived on a non-tty stdin without a trailing newline, so a
+`q` already delivered took thirty seconds to reach the loop. A partial line is
+handed over as soon as it is read; a true EOF still sleeps, which is what keeps
+a closed stdin a redraw loop rather than a spin.
+
+**Done.**
+
 ### Next
 
 Named rather than numbered. Twice now a section here has worn a version that
