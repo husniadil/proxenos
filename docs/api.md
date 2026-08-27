@@ -800,9 +800,13 @@ there.
 `exec`d, so signals, job control, the terminal, and the exit status pass through
 untouched.
 
-**One argument is rewritten, and only for a relay-serving daemon**: a plain
-`--model` id whose `[1m]` variant the curated list offers (§3) is upgraded to
-that variant, and the rewrite is named on stderr. The suffix is the client's
+**One argument is rewritten, and only where the session's own account
+relays**: a plain `--model` id whose `[1m]` variant the curated list offers
+(§3) is upgraded to that variant, and the rewrite is named on stderr. The list
+is asked for the account the session is served as, the same one the
+environment is rendered for — a menu is one account's (§7.0), so the
+selection's answers whether *its* ids have a long-context variant rather than
+whether this session's do. The suffix is the client's
 own long-context selector, so the session starts on the million-token window
 instead of silently assuming the standard one. An id already carrying the
 marker, an alias the list does not name, and another program's `--model` are
@@ -1034,7 +1038,7 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 | `accounts` | every stored account, what kind of credential each holds, whether the operator wrote it down (`declared`, true only for a profile named in `[profiles]`), and which one serves turns, plus `discovered` — whether these are the operator's own `[profiles]` entries or the stock profile of each program, read because none were declared; each borrowed row also carries the profile it was read from and, for a Claude profile, `login_expires_at` — the date the operator has to sign in again. No tokens | no — v0.3 |
 | `accounts.select` | `{"account": name}`, the account every following turn is made as, the provider now serving and the one serving a moment ago (absent where nothing was) — one select moves every unpinned turn onto that provider's subscription — whether the catalog was refetched for it, and the tier mapping now in force; refuses, and moves nothing, where that account's mapping names a model its catalog does not have, naming whose menu refused and how to give that account its own mapping | no — v0.3 |
 | `accounts.rename` | `{"account": from, "name": to}`, the name this daemon calls an account by, and whether an account section moved with it; the grant and the account id are untouched | no — v0.3 |
-| `models` | catalog, whether it is the fallback list, and whether it was fetched for an account other than the one serving turns | yes |
+| `models` | catalog, whether it is the fallback list, and whether it was fetched for an account other than the one it was asked about. `{"account": name}` answers for that account's menu rather than the selection's — which is the curated list where that account relays (§9.1), and is what `exec --account` measures a `--model` id against; a name the store does not hold is refused by name | yes — `{"account": name}` added after v0.16.0 |
 | `tiers` | tier mapping | no — was `tiers.get` |
 | `usage` | the serving account's quota as of its last turn, or that no turn has been made, plus `models` — the ids this daemon serves — and `accounts`, one entry per stored account with its own figure, its freshness, and `unavailable` where it has none. Each account entry also carries `served_tokens`, the §6.1 tally, and an entry with no figure carries `reason` beside its `detail` — `no_turn`, `no_relayed_turn`, `metered`, `unknown_key_kind`, `not_reported` — the same fact in a word, so a renderer never matches on prose. Each window carries `used_percent`, `window_minutes`, `resets_at`, and — where the provider stated them — `status`, `surpassed_threshold`, `representative`, and `label` for a window no duration identifies. An entry whose provider states a credit balance also carries `credit` — `used_minor`, `limit_minor`, `exponent`, `currency`, `percent`, `severity` — money in the units the provider stated it in, present only where there is a balance to state. An entry whose provider states a subscription it no longer calls active also carries `subscription_status`, that provider's own word verbatim — absent where the subscription is active, which is silence | yes |
 | `usage.refresh` | asks the backend for a figure now, **per account** — every stored account whose credential can hold one, each on its own credential and each recorded under its own name. The answer is the serving account's outcome plus `accounts`, one entry per stored account carrying either its figure or the sentence saying why it has none. Nothing about which account serves turns is read or changed | yes |
@@ -1206,11 +1210,14 @@ refreshes it.
 
 **An account on the second provider answers from a curated list.** The fetched
 catalog was never these models' menu (`proxy-behavior.md` §9.1), and the second
-provider's own list endpoint names ids but states no windows — so `models` for
-a relay-serving daemon answers from a list built into the binary, windows
-included, and says `curated: true` rather than presenting it as a fetch. The
-same answer carries `provider`, the stored id of the account serving turns, so
-a renderer can name whose list it is instead of describing it by role. It is
+provider's own list endpoint names ids but states no windows — so `models`
+answers from a list built into the binary, windows included, and says
+`curated: true` rather than presenting it as a fetch. Which account decides
+that is the one the call named, or the selection where it named none, so a
+launch onto an account on the second provider is measured against that
+account's menu rather than the selection's. The same answer carries
+`provider`, that account's stored id, so a renderer can name whose list it is
+instead of describing it by role. It is
 a menu for reading, never a list to refuse by: no mapping is validated against
 it, and `status` reports the catalog as curated instead of unvalidated.
 

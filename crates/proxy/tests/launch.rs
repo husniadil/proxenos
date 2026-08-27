@@ -8,6 +8,7 @@
 
 use pretty_assertions::assert_eq;
 use proxenos::launch;
+use serde_json::json;
 
 const POLICY: &str = r#"{"permissions":{"deny":["Skill(claude-api)"]}}"#;
 
@@ -835,5 +836,109 @@ fn a_store_under_the_old_default_home_is_refused_with_the_move() {
         stderr.contains(old.to_string_lossy().as_ref())
             && stderr.contains(dir.path().join("proxenos").to_string_lossy().as_ref()),
         "the refusal names where the store is and where it moved: {stderr}"
+    );
+}
+
+/// §2.3 — a named launch asks for the menu of the account it names.
+///
+/// The upgrade is decided from the curated list, and the curated list is one
+/// account's (§9.1). Asked about the selection while the session is served as
+/// somebody else, a launch onto an account on the second provider finds no
+/// long-context variant for the id it was given and runs the session on the
+/// standard window — the one case the flag exists to get right.
+///
+/// The socket here is a stand-in, so the assertion is the wiring: what the
+/// launcher asked for, and what it handed the child.
+#[cfg(unix)]
+#[test]
+fn a_named_launch_reads_the_model_list_of_the_account_it_names() {
+    use std::io::BufRead;
+    use std::io::BufReader;
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+
+    let stub = bin.join("claude");
+    let mut file = std::fs::File::create(&stub).unwrap();
+    file.write_all(b"#!/bin/sh\necho \"ARGV: $*\"\n").unwrap();
+    drop(file);
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let socket = dir.path().join("proxenos.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+
+    let server = std::thread::spawn(move || {
+        // Three callers: `accounts`, `env`, and `models`.
+        for stream in listener.incoming().take(3) {
+            let Ok(mut stream) = stream else { continue };
+            let mut line = String::new();
+            let _ = BufReader::new(stream.try_clone().unwrap()).read_line(&mut line);
+            let request: serde_json::Value =
+                serde_json::from_str(&line).unwrap_or(serde_json::Value::Null);
+            let named = request["params"]["account"].as_str();
+            let result = match request["method"].as_str().unwrap_or_default() {
+                "accounts" => json!({ "accounts": [{ "name": "relay" }] }),
+                "env" => json!({
+                    "variables": [["ANTHROPIC_BASE_URL", "http://127.0.0.1:8787"]],
+                    "settings": {},
+                }),
+                // The curated list, and only for the account that has one.
+                // Answering it for every caller would let a launch that never
+                // named the account pass this test.
+                "models" if named == Some("relay") => json!({
+                    "models": [
+                        { "id": "claude-sonnet-5", "context_window": 200_000 },
+                        { "id": "claude-sonnet-5[1m]", "context_window": 1_000_000 },
+                    ],
+                    "authoritative": false,
+                    "curated": true,
+                    "provider": "anthropic",
+                    "stale": false,
+                }),
+                _ => json!({ "models": [], "authoritative": true, "stale": false }),
+            };
+            let _ = writeln!(
+                stream,
+                "{}",
+                json!({ "jsonrpc": "2.0", "id": 1, "result": result })
+            );
+            let _ = stream.flush();
+        }
+    });
+
+    let binary = env!("CARGO_BIN_EXE_proxenos");
+    let launched = std::process::Command::new(binary)
+        .args([
+            "exec",
+            "--account",
+            "relay",
+            "claude",
+            "--model",
+            "claude-sonnet-5",
+        ])
+        .env("PROXENOS_HOME", dir.path())
+        .env("TMPDIR", dir.path())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .output()
+        .expect("the launcher should run");
+
+    let _ = server.join();
+
+    let stdout = String::from_utf8_lossy(&launched.stdout);
+    let stderr = String::from_utf8_lossy(&launched.stderr);
+    assert!(
+        stdout.contains("--model claude-sonnet-5[1m]"),
+        "the session is served as an account whose menu has the long-context \
+         variant: {stdout}{stderr}"
     );
 }

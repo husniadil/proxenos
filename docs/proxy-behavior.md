@@ -2081,6 +2081,23 @@ consulted. The tag is the launch's word on who pays. A tag naming nothing
 stored is refused before the turn spends anything, naming the name — never
 served as whoever happens to be selected.
 
+**A tagged turn that translates is translated on the tagged account's tier
+mapping.** The mapping in force is the selection's, resolved when it was
+selected (§7.1), so a tagged turn read it and asked upstream for a model stated
+for somebody else — on the tagged account's own credential, where an id its
+menu does not carry is refused for a reason the mapping never mentions. The
+mapping is therefore resolved for the account the turn is served as, the way a
+switch to it would resolve it: the shared `[tiers]` table with
+`[accounts.<name>.tiers]` over it, so an account section reaches a tagged
+session without that account being selected first. A tag naming the account
+that *is* selected keeps the mapping in force, which is already that account's
+and carries anything `tiers.set` moved without persisting. The operator's
+effort ceiling is not re-resolved; the turn keeps the one it took.
+
+None of this touches the relay path. It is resolved only where the turn
+translates, so a relayed turn stays the bytes the client sent (§9.2) and cannot
+be refused over a mapping it never consults.
+
 The unpinned case matters on its own. An operator who stores a key for this
 provider and selects it has said where their turns go, and routing that ignored
 the selection would send every one of them to the other provider's endpoint —

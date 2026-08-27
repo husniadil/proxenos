@@ -4,6 +4,21 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- The two decisions `exec --account` left behind follow the account the session
+  is served as. A plain `--model` id was upgraded to its `[1m]` variant from
+  the *selection's* menu, so a session pinned onto an Anthropic account while a
+  Codex account was selected found no variant and ran on the standard window —
+  the `models` method now takes the same `{"account": name}` the environment
+  does, and the launch asks it for the account it names. And a turn tagged
+  `proxenos-account:<name>` was translated on the selection's tier mapping,
+  asking that account's own credential for a model stated for somebody else;
+  the mapping is now resolved for the tagged account, so
+  `[accounts.<name>.tiers]` applies to a tagged turn exactly as it would if
+  that account were selected. A tag naming the account that is selected keeps
+  the mapping in force, and a relayed turn is still the bytes the client sent.
+
 ## [0.16.0]
 
 - `exec --account` configures the session for the account it names. The flag

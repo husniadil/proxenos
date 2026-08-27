@@ -89,7 +89,11 @@ pub async fn dispatch(
 ) -> Result<Value, ProxyError> {
     match method {
         "status" => Ok(status(state)),
-        "models" => Ok(models(state)),
+        // §2.2 — the same `{"account": name}` the environment takes, and for
+        // the same reason: a launch reads this list to decide whether the id
+        // it was given has a long-context variant, and the menu that answers
+        // that is the serving account's (§9.1).
+        "models" => models(state, params),
         "tiers" => Ok(tiers(state)),
         // Two halves, because the client has two configuration surfaces and
         // only one of them is the environment. `variables` keeps the shape it
@@ -440,13 +444,16 @@ fn status(state: &ControlState) -> Value {
     })
 }
 
-fn models(state: &ControlState) -> Value {
+fn models(state: &ControlState, params: Option<&Value>) -> Result<Value, ProxyError> {
     let stored = state.credentials.accounts().unwrap_or_default();
+    // Whose menu this is. A name the store does not hold is refused rather
+    // than answered about the selection, the same as `env` (§2.2).
+    let named = named_account(params, &stored)?;
 
     // §9.1 — an account on the second provider is not on the fetched
     // catalog's menu at all. Its list is the curated one, and the payload
     // says curated so no renderer presents it as a fetch that failed.
-    if serving_account_relays(&stored) {
+    if crate::upstream::relay::relays(&stored, named.as_deref()) {
         let catalog = crate::catalog::Catalog::relay();
         let entries: Vec<Value> = catalog
             .selectable()
@@ -460,15 +467,15 @@ fn models(state: &ControlState) -> Value {
             })
             .collect();
 
-        return json!({
+        return Ok(json!({
             "models": entries,
             "authoritative": false,
             "curated": true,
             // Whose list this is. The renderer names it, and naming it from
             // the payload keeps the answer with the account it came from.
-            "provider": selected_provider(&stored),
+            "provider": provider_of(&stored, named.as_deref()),
             "stale": false,
-        });
+        }));
     }
 
     let catalog = state.catalog.current();
@@ -486,11 +493,14 @@ fn models(state: &ControlState) -> Value {
         })
         .collect();
 
-    json!({
+    Ok(json!({
         "models": entries,
         "authoritative": catalog.authoritative,
-        "stale": catalog.is_stale_for(serving_account(&stored).as_deref()),
-    })
+        // The catalog is one account's menu (§7.0), so a list fetched for
+        // somebody else is stale for whoever this was asked about — the
+        // account a launch names as readily as the selection.
+        "stale": catalog.is_stale_for(account_id_of(&stored, named.as_deref()).as_deref()),
+    }))
 }
 
 fn tiers(state: &ControlState) -> Value {
@@ -1440,10 +1450,34 @@ fn serving_provider(accounts: &[crate::auth::store::Account]) -> &'static str {
 /// carries the id the grant carries, and on a borrowed profile a second read
 /// is a second keychain spawn (§8.4).
 fn serving_account(accounts: &[crate::auth::store::Account]) -> Option<String> {
+    account_id_of(accounts, None)
+}
+
+/// The same id for whichever account a method was asked about: the one it
+/// names, or the selection where it named none.
+fn account_id_of(accounts: &[crate::auth::store::Account], named: Option<&str>) -> Option<String> {
     accounts
         .iter()
-        .find(|account| account.selected)
+        .find(|account| match named {
+            Some(named) => account.name == named,
+            None => account.selected,
+        })
         .and_then(|account| account.account_id.clone())
+}
+
+/// The provider of whichever account a method was asked about. `None` where
+/// the store holds nobody to answer for, which a renderer reads as silence.
+fn provider_of(
+    accounts: &[crate::auth::store::Account],
+    named: Option<&str>,
+) -> Option<&'static str> {
+    accounts
+        .iter()
+        .find(|account| match named {
+            Some(named) => account.name == named,
+            None => account.selected,
+        })
+        .map(|account| account.provider)
 }
 
 /// Each account as it is reported, plus what the backend last said about it.
@@ -1798,10 +1832,7 @@ fn serving_name(state: &ControlState) -> Option<String> {
 /// switch reports what the store actually says, and an absent answer is the
 /// first selection rather than a provider to name.
 fn selected_provider(accounts: &[crate::auth::store::Account]) -> Option<&'static str> {
-    accounts
-        .iter()
-        .find(|account| account.selected)
-        .map(|account| account.provider)
+    provider_of(accounts, None)
 }
 
 /// Fetch the catalog again for the account now serving turns.

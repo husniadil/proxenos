@@ -4089,6 +4089,37 @@ async fn env_asking(
     config: proxenos::config::Config,
     account: Option<&str>,
 ) -> proxenos::control::protocol::Response {
+    asking(dir, "env", tiers, accounts, config, account).await
+}
+
+/// The same for `models`: the list a launch reads to decide whether an id has
+/// a long-context variant to upgrade to (`api.md` §3).
+async fn models_asking(
+    dir: &tempfile::TempDir,
+    tiers: Vec<ResolvedTier>,
+    accounts: impl Fn(&FileStore),
+    account: Option<&str>,
+) -> proxenos::control::protocol::Response {
+    asking(
+        dir,
+        "models",
+        tiers,
+        accounts,
+        proxenos::config::Config::default(),
+        account,
+    )
+    .await
+}
+
+/// One method, asked of one daemon, optionally about one account.
+async fn asking(
+    dir: &tempfile::TempDir,
+    method: &str,
+    tiers: Vec<ResolvedTier>,
+    accounts: impl Fn(&FileStore),
+    config: proxenos::config::Config,
+    account: Option<&str>,
+) -> proxenos::control::protocol::Response {
     let store = Arc::new(FileStore::new(dir.path().join("credentials.json")));
     accounts(&store);
     let state = ControlState {
@@ -4125,7 +4156,7 @@ async fn env_asking(
     let params = account.map(|account| json!({ "account": account }));
     control::answer(
         &state,
-        &json!({ "jsonrpc": "2.0", "id": 1, "method": "env", "params": params }).to_string(),
+        &json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string(),
     )
     .await
 }
@@ -4544,6 +4575,82 @@ async fn the_environment_for_an_unknown_account_is_refused_by_name() {
     .await
     .error
     .expect("an account the store does not hold has no environment to answer with");
+
+    assert!(
+        refusal.message.contains("no-such-account"),
+        "{}",
+        refusal.message
+    );
+}
+
+/// §3 — `models` for a named account lists that account's menu.
+///
+/// The list is what decides whether a plain `--model` id has a long-context
+/// variant to be upgraded to, and only a relayed account has one at all
+/// (§9.1). Answered for the selection while the session is served as somebody
+/// else, a launch tagged onto an account on the second provider is measured
+/// against the first provider's menu: no `[1m]` variant is found, and the
+/// session runs on the standard window the flag was asked to leave behind.
+#[tokio::test]
+async fn the_model_list_for_a_named_account_is_that_accounts_menu() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Unasked, nothing moves: the selection translates, so the list is the
+    // catalog's and carries no curated ids.
+    let selection = models_asking(
+        &dir,
+        a_first_provider_mapping(),
+        a_translating_selection_beside_a_relay_account,
+        None,
+    )
+    .await
+    .result
+    .unwrap();
+    assert_ne!(selection["curated"], json!(true));
+
+    let dir = tempfile::tempdir().unwrap();
+    let named = models_asking(
+        &dir,
+        a_first_provider_mapping(),
+        a_translating_selection_beside_a_relay_account,
+        Some("relay"),
+    )
+    .await
+    .result
+    .unwrap();
+
+    assert_eq!(named["curated"], json!(true));
+    assert_eq!(named["provider"], json!("anthropic"));
+
+    let ids: Vec<&str> = named["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|model| model["id"].as_str())
+        .collect();
+    assert!(
+        ids.contains(&"claude-sonnet-5[1m]"),
+        "the long-context variant is what a launch upgrades to: {ids:?}"
+    );
+}
+
+/// A name the store does not hold is refused by name here too.
+///
+/// The launch checks the flag against the store before anything starts
+/// (§2.3); answering about the selection instead would measure the session's
+/// `--model` against a menu belonging to somebody else.
+#[tokio::test]
+async fn the_model_list_for_an_unknown_account_is_refused_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let refusal = models_asking(
+        &dir,
+        a_first_provider_mapping(),
+        a_translating_selection_beside_a_relay_account,
+        Some("no-such-account"),
+    )
+    .await
+    .error
+    .expect("an account the store does not hold has no menu to answer with");
 
     assert!(
         refusal.message.contains("no-such-account"),

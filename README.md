@@ -278,7 +278,12 @@ backend will not answer for. Renaming an account moves its section with it.
 `proxenos exec --account NAME` serves one session as that account without
 moving the selection, and configures it from that account's mapping — so a
 session on a subscription of the other provider is handed that provider's ids
-rather than the shared table's. The mapping it applied is printed as it starts.
+rather than the shared table's, with no `--model` needed to get there. The
+mapping it applied is printed as it starts, and it is the mapping every turn of
+that session is served on: `[accounts.NAME.tiers]` applies to a tagged session
+exactly as it would if the account were selected. A plain `--model` id is
+upgraded to its `[1m]` long-context variant where that account's own menu
+offers one.
 
 A key is spent against a different endpoint with different billing, and one kind
 of credential is refused against the other kind's endpoint before anything

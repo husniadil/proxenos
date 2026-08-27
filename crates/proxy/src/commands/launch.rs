@@ -83,7 +83,7 @@ pub(crate) async fn exec(args: cli::ExecArgs) -> Result<()> {
         .account
         .as_ref()
         .map(|account| serde_json::json!({ "account": account }));
-    let result = control::call(&control::default_path(), "env", params)
+    let result = control::call(&control::default_path(), "env", params.clone())
         .await
         .map_err(daemon_silent)?;
 
@@ -102,12 +102,18 @@ pub(crate) async fn exec(args: cli::ExecArgs) -> Result<()> {
 
     // A plain `--model` id is upgraded to its long-context variant where the
     // serving account offers one. Eligibility comes from the curated list and
-    // only from it — `curated` is true only when the serving account relays,
-    // so a daemon translating to the first provider launches exactly as
-    // before. A failed read skips the upgrade rather than the launch: the
-    // session it starts is correct either way, just on the standard window.
+    // only from it — `curated` is true only when the account that serves this
+    // session relays, so a daemon translating to the first provider launches
+    // exactly as before. A failed read skips the upgrade rather than the
+    // launch: the session it starts is correct either way, just on the
+    // standard window.
+    //
+    // Asked for the same account the environment was, and for the same reason
+    // (§2.2): the list is one account's menu, and the selection's answers
+    // whether *its* ids have a long-context variant rather than whether this
+    // session's do.
     let mut command = args.command.clone();
-    if let Ok(models) = control::call(&control::default_path(), "models", None).await
+    if let Ok(models) = control::call(&control::default_path(), "models", params).await
         && models.get("curated").and_then(serde_json::Value::as_bool) == Some(true)
     {
         let eligible: Vec<String> = models

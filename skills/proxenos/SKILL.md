@@ -22,6 +22,11 @@ proxenos exec --account work-codex claude --model gpt-5.6-sol --effort high
   parent shell.
 - `--account NAME` picks which stored account serves this session's turns without
   changing the daemon's default. An unknown name is refused before anything starts.
+  The session is configured for that account too: its `[accounts.NAME.tiers]`
+  mapping is what every turn is served on, the tier ids handed to the client are
+  that account's, and the mapping applied is printed as the session starts. So an
+  Anthropic account needs no `--model` to be usable, and a plain `--model` id is
+  upgraded to its `[1m]` long-context variant where that account offers one.
 - Everything after the program name is handed to it unchanged. `--model` accepts any
   id the backend knows (`proxenos models` lists them) or a tier name (`fable`,
   `opus`, `sonnet`, `haiku`) which the daemon maps via `[tiers]` in its config.

@@ -348,6 +348,19 @@ async fn messages(
         }
     }
 
+    // §2.3 — from here on, the mapping is the tagged account's.
+    //
+    // The tag decides who serves the session, and a tier mapping is a
+    // statement about one account's menu (§7.0): translated on the selection's
+    // instead, a tagged turn asks that account's own credential for a model
+    // stated for somebody else. Resolved after the relay block rather than
+    // before it, so a relayed turn stays the bytes the client sent (§9) and
+    // cannot be refused over a mapping it never consults.
+    let policy = match state.policy.snapshot_for(&policy, tagged.as_deref()) {
+        Ok(policy) => policy,
+        Err(error) => return error.into_response(),
+    };
+
     let Json(request) = match Json::<MessagesRequest>::from_bytes(&body) {
         Ok(body) => body,
         Err(rejection) => {

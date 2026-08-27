@@ -108,17 +108,100 @@ impl Snapshot {
     }
 }
 
+/// Where the mapping of an account other than the one in force is resolved
+/// from.
+///
+/// The mapping in force is the selection's, so nothing has ever put another
+/// account's in force to be read: it is resolved from the configuration
+/// instead, through the same two calls `accounts.select` would resolve it
+/// with.
+struct Accounts {
+    config: Arc<crate::config::Config>,
+    /// Read per call rather than captured, so a switch reaches the next turn:
+    /// which account is selected is what decides whether the mapping in force
+    /// is already the answer.
+    store: Arc<dyn crate::auth::store::AccountStore>,
+}
+
+impl std::fmt::Debug for Accounts {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("Accounts").finish_non_exhaustive()
+    }
+}
+
 /// The live policy, shared by the ingress and the control socket.
 #[derive(Debug)]
 pub struct Policy {
     current: RwLock<Arc<Snapshot>>,
+    /// `None` where nothing can resolve another account's mapping — the
+    /// probes and the tests, which route a fixed pair of ids. A turn tagged
+    /// with an account then keeps the mapping in force, which is what it did
+    /// before any of this existed.
+    accounts: Option<Accounts>,
 }
 
 impl Policy {
     pub fn new(snapshot: Snapshot) -> Self {
         Self {
             current: RwLock::new(Arc::new(snapshot)),
+            accounts: None,
         }
+    }
+
+    /// Give this policy what it needs to answer for an account that is not the
+    /// one whose mapping is in force (`api.md` §2.3).
+    #[must_use]
+    pub fn resolving_accounts_from(
+        mut self,
+        config: Arc<crate::config::Config>,
+        store: Arc<dyn crate::auth::store::AccountStore>,
+    ) -> Self {
+        self.accounts = Some(Accounts { config, store });
+        self
+    }
+
+    /// The mapping a turn served as this account is translated on.
+    ///
+    /// `current` is the snapshot the turn already took, and it is the answer
+    /// for an untagged turn and for a tag naming the account that is selected
+    /// — the mapping in force is that account's, moved since by anything
+    /// `tiers.set` did, and re-resolving it from the file would drop a change
+    /// that was never persisted. Any other account is resolved from the
+    /// configuration, so `[accounts.<name>.tiers]` applies to a tagged turn
+    /// exactly as it would if that account were selected.
+    ///
+    /// **The effort ceiling is not re-resolved.** It is the operator's cap on
+    /// the daemon and the turn keeps the one it took, so the pair this returns
+    /// is still one snapshot rather than two halves from different reads.
+    ///
+    /// Taking the snapshot rather than reading it again is what keeps a turn
+    /// on one mapping for its whole length: a `tiers.set` landing in between
+    /// must not move the model a request is already being translated for.
+    pub fn snapshot_for(
+        &self,
+        current: &Arc<Snapshot>,
+        account: Option<&str>,
+    ) -> Result<Arc<Snapshot>, crate::error::ProxyError> {
+        let (Some(name), Some(accounts)) = (account, self.accounts.as_ref()) else {
+            return Ok(Arc::clone(current));
+        };
+        if accounts
+            .store
+            .accounts()?
+            .iter()
+            .any(|stored| stored.selected && stored.name == name)
+        {
+            return Ok(Arc::clone(current));
+        }
+        let tiers = accounts
+            .config
+            .tiers_for(Some(name))
+            .resolve(current.cross_account())?;
+        Ok(Arc::new(Snapshot::new(
+            tiers,
+            current.effort_ceiling(),
+            current.cross_account(),
+        )))
     }
 
     /// What policy is, right now.

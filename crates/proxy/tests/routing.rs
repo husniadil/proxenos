@@ -27,6 +27,12 @@ use std::sync::Mutex;
 /// Every `authorization` header the upstream was sent, in order.
 type Seen = Arc<Mutex<Vec<String>>>;
 
+/// Every model id the upstream was asked for, in order. Which mapping a turn
+/// was translated on is invisible anywhere else: a turn translated on the
+/// wrong account's tiers succeeds and reads exactly like one translated on the
+/// right ones.
+type Asked = Arc<Mutex<Vec<String>>>;
+
 fn grant(access: &str, refresh: &str, account_id: &str) -> Credentials {
     Credentials {
         access_token: access.to_owned(),
@@ -48,14 +54,17 @@ fn tier(name: &'static str, model: &str, account: Option<&str>) -> ResolvedTier 
     }
 }
 
-/// An upstream that answers every turn identically and records who asked.
-async fn upstream() -> (String, Seen) {
+/// An upstream that answers every turn identically and records who asked, and
+/// for which model.
+async fn upstream() -> (String, Seen, Asked) {
     let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+    let asked: Asked = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&seen);
+    let models = Arc::clone(&asked);
 
     let app = axum::Router::new().route(
         "/responses",
-        axum::routing::post(move |headers: axum::http::HeaderMap, _body: String| {
+        axum::routing::post(move |headers: axum::http::HeaderMap, body: String| {
             if let Ok(mut seen) = sink.lock() {
                 seen.push(
                     headers
@@ -63,6 +72,18 @@ async fn upstream() -> (String, Seen) {
                         .and_then(|value| value.to_str().ok())
                         .unwrap_or("<absent>")
                         .to_owned(),
+                );
+            }
+            if let Ok(mut models) = models.lock() {
+                models.push(
+                    serde_json::from_str::<Value>(&body)
+                        .ok()
+                        .and_then(|request| {
+                            request["model"]
+                                .as_str()
+                                .map(std::borrow::ToOwned::to_owned)
+                        })
+                        .unwrap_or_else(|| "<absent>".to_owned()),
                 );
             }
             // A quota snapshot at the head of the stream, as the backend
@@ -124,7 +145,7 @@ async fn upstream() -> (String, Seen) {
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    (format!("http://{addr}/responses"), seen)
+    (format!("http://{addr}/responses"), seen, asked)
 }
 
 /// The daemon's own wiring, minus the parts a turn does not touch.
@@ -136,7 +157,23 @@ async fn daemon(
     store: Arc<FileStore>,
     tiers: Vec<ResolvedTier>,
 ) -> (String, Seen, Arc<proxenos::usage::UsageStore>) {
-    let (endpoint, seen) = upstream().await;
+    let (base, seen, usage, _asked) =
+        daemon_with(store, tiers, proxenos::config::Config::default()).await;
+    (base, seen, usage)
+}
+
+/// The same, over a stated configuration.
+///
+/// The mapping handed in is the one in force — the selection's, resolved when
+/// it was selected (§7.1). The configuration is what any *other* account's
+/// mapping is resolved from, which is the whole subject of a tagged turn
+/// (`api.md` §2.3).
+async fn daemon_with(
+    store: Arc<FileStore>,
+    tiers: Vec<ResolvedTier>,
+    config: proxenos::config::Config,
+) -> (String, Seen, Arc<proxenos::usage::UsageStore>, Asked) {
+    let (endpoint, seen, asked) = upstream().await;
 
     let authorizer: Arc<dyn proxenos::auth::authorize::Authorizer> =
         Arc::new(proxenos::auth::authorize::AccountAuthorizer::new(
@@ -168,13 +205,17 @@ async fn daemon(
     ));
 
     let state = AppState {
-        policy: Arc::new(proxenos::policy::Policy::new(
-            proxenos::policy::Snapshot::new(
+        policy: Arc::new(
+            proxenos::policy::Policy::new(proxenos::policy::Snapshot::new(
                 tiers,
                 None,
                 proxenos::config::CrossAccountTiers::Permitted,
+            ))
+            .resolving_accounts_from(
+                Arc::new(config),
+                Arc::clone(&store) as Arc<dyn AccountStore>,
             ),
-        )),
+        ),
         catalog: Arc::new(proxenos::catalog::CatalogSource::fixed(
             proxenos::catalog::Catalog::fallback(),
         )),
@@ -198,7 +239,7 @@ async fn daemon(
     tokio::spawn(async move {
         let _ = axum::serve(listener, router(state)).await;
     });
-    (format!("http://{addr}"), seen, usage)
+    (format!("http://{addr}"), seen, usage, asked)
 }
 
 /// One turn on one tier, with a body distinct enough to be its own
@@ -206,6 +247,26 @@ async fn daemon(
 async fn turn(base: &str, model: &str, text: &str) -> reqwest::Response {
     reqwest::Client::new()
         .post(format!("{base}/v1/messages"))
+        .json(&json!({
+            "model": model,
+            "max_tokens": 64,
+            "stream": true,
+            "messages": [{ "role": "user", "content": text }],
+        }))
+        .send()
+        .await
+        .expect("the ingress should answer")
+}
+
+/// The same turn, launched with an account tag riding the bearer the client
+/// was told to send (`exec --account`, api.md §2.3).
+async fn tagged_turn(base: &str, model: &str, text: &str, account: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("{base}/v1/messages"))
+        .header(
+            "authorization",
+            format!("Bearer {}{account}", proxenos::ingress::ACCOUNT_TAG),
+        )
         .json(&json!({
             "model": model,
             "max_tokens": 64,
@@ -435,5 +496,98 @@ async fn what_a_turn_cost_is_tallied_under_the_account_that_served_it() {
         (spare.input, spare.output),
         (900, 90),
         "the pinned tier's turn was tallied under someone else"
+    );
+}
+
+/// §2.3 — a tagged turn is translated on the mapping of the account it is
+/// served as.
+///
+/// The tag already decided who pays. The mapping it was translated on was the
+/// selection's, so `[accounts.<name>.tiers]` reached a session that named the
+/// account and was ignored, and the turn went upstream asking for a model
+/// stated for somebody else — on the tagged account's own credential, where an
+/// id its subscription does not serve is refused for a reason the mapping
+/// never mentions.
+#[tokio::test]
+async fn a_tagged_turn_translates_on_the_tagged_accounts_mapping() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store_with_two_accounts(&dir);
+    let config: proxenos::config::Config = toml::from_str(
+        r#"
+[tiers]
+sonnet = "gpt-5.6-terra"
+
+[accounts.spare.tiers]
+sonnet = "gpt-5.4-mini"
+"#,
+    )
+    .unwrap();
+
+    let (base, seen, _usage, asked) = daemon_with(
+        Arc::clone(&store),
+        vec![tier("sonnet", "gpt-5.6-terra", None)],
+        config,
+    )
+    .await;
+
+    assert_eq!(
+        tagged_turn(&base, "sonnet", "the tagged turn", "spare")
+            .await
+            .status(),
+        200
+    );
+
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        vec!["Bearer spare-token".to_owned()],
+        "the tag decides who pays"
+    );
+    assert_eq!(
+        asked.lock().unwrap().clone(),
+        vec!["gpt-5.4-mini".to_owned()],
+        "and the mapping the turn is translated on is that account's"
+    );
+}
+
+/// A tag naming the account that is selected keeps the mapping in force.
+///
+/// The mapping in force is the selection's, resolved when it was selected and
+/// moved since by anything `tiers.set` did — so it is the answer for the
+/// selection, and re-resolving it from the file would drop a change that was
+/// never persisted. The configuration here states something else for the same
+/// tier, and the turn must not take it.
+#[tokio::test]
+async fn a_tag_naming_the_selected_account_keeps_the_mapping_in_force() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store_with_two_accounts(&dir);
+    let config: proxenos::config::Config = toml::from_str(
+        r#"
+[tiers]
+sonnet = "gpt-5.4-mini"
+"#,
+    )
+    .unwrap();
+
+    let (base, seen, _usage, asked) = daemon_with(
+        Arc::clone(&store),
+        vec![tier("sonnet", "gpt-5.6-terra", None)],
+        config,
+    )
+    .await;
+
+    assert_eq!(
+        tagged_turn(&base, "sonnet", "the tagged turn", "acct_serving")
+            .await
+            .status(),
+        200
+    );
+
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        vec!["Bearer serving-token".to_owned()]
+    );
+    assert_eq!(
+        asked.lock().unwrap().clone(),
+        vec!["gpt-5.6-terra".to_owned()]
     );
 }

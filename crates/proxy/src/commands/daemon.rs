@@ -409,13 +409,21 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
     // effort ceiling on a running daemon, and the ingress routes turns from the
     // same value — so a change moves what actually happens rather than only
     // what `status` reports.
-    let policy = Arc::new(proxenos::policy::Policy::new(
-        proxenos::policy::Snapshot::new(
+    let policy = Arc::new(
+        proxenos::policy::Policy::new(proxenos::policy::Snapshot::new(
             tiers.clone(),
             effort_ceiling,
             config.cross_account_policy(),
+        ))
+        // §2.3 — a turn tagged with an account that is not the selection is
+        // translated on that account's mapping, which nothing has ever put in
+        // force to be read: it is resolved from the configuration here, the
+        // way a switch to that account would resolve it.
+        .resolving_accounts_from(
+            Arc::new(config.clone()),
+            Arc::clone(&credentials) as Arc<dyn proxenos::auth::store::AccountStore>,
         ),
-    ));
+    );
 
     // One signal, shared: asking over the socket has to move this process, not
     // merely answer about it.
