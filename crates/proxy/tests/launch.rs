@@ -8,6 +8,7 @@
 
 use pretty_assertions::assert_eq;
 use proxenos::launch;
+#[cfg(unix)]
 use serde_json::json;
 
 const POLICY: &str = r#"{"permissions":{"deny":["Skill(claude-api)"]}}"#;
