@@ -481,6 +481,7 @@ fn tier(name: &'static str, model: &str, defaulted: bool) -> ResolvedTier {
         tier: name,
         model: model.to_owned(),
         defaulted,
+        missing: None,
         account: None,
     }
 }
@@ -593,4 +594,121 @@ async fn a_catalog_is_fetched_from_the_endpoint_its_credential_belongs_to() {
         1,
         "the key was sent to the subscription endpoint"
     );
+}
+
+// ---------------------------------------------------------------------------
+// §7.1 — a stated model the catalog lacks marks its tier rather than stopping
+// the daemon. One tier's model going away used to take every worker on the box
+// with it.
+// ---------------------------------------------------------------------------
+
+/// The four tier names, as a mapping resolves them.
+const ALL_TIERS: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
+
+/// A stated model the catalog does not carry marks its tier and leaves the
+/// rest alone.
+///
+/// The stated id is kept: the operator's decision is never overruled, and a
+/// mark that replaced it would hide which model they asked for.
+#[test]
+fn a_stated_model_the_catalog_lacks_marks_its_tier_rather_than_refusing() {
+    let catalog = Catalog::parse(SAMPLE, SHIPPING).unwrap();
+    let mut tiers = vec![
+        tier("opus", "gpt-5.6-terra", false),
+        tier("fable", "gpt-5.6-absent", false),
+    ];
+
+    let summary = catalog.mark_missing(&mut tiers, &ALL_TIERS);
+
+    assert!(tiers[0].missing.is_none(), "a model the catalog has serves");
+    assert_eq!(
+        tiers[1].model, "gpt-5.6-absent",
+        "the stated id is kept, not replaced"
+    );
+    let reason = tiers[1].missing.as_deref().expect("fable should be marked");
+    assert!(reason.contains("fable"), "{reason}");
+    assert!(reason.contains("gpt-5.6-absent"), "{reason}");
+    assert!(
+        reason.contains("gpt-5.6-terra"),
+        "the reason names what is available: {reason}"
+    );
+
+    let summary = summary.expect("the caller needs one sentence to log");
+    assert!(summary.message.contains("gpt-5.6-absent"), "{summary}");
+}
+
+/// Every tier missing is still not a refusal — the daemon starts, and the
+/// operator can reload once the file is fixed.
+#[test]
+fn every_tier_missing_is_reported_without_refusing() {
+    let catalog = Catalog::parse(SAMPLE, SHIPPING).unwrap();
+    let mut tiers: Vec<_> = ALL_TIERS
+        .iter()
+        .map(|name| tier(name, "gpt-5.6-absent", false))
+        .collect();
+
+    let summary = catalog
+        .mark_missing(&mut tiers, &ALL_TIERS)
+        .expect("something to say");
+
+    assert!(tiers.iter().all(|tier| tier.missing.is_some()));
+    // Deduplicated, the way the refusal always was: four tiers pointing at one
+    // missing model is one problem.
+    assert_eq!(summary.message.matches("gpt-5.6-absent").count(), 1);
+}
+
+/// A tier this catalog is not a menu for is never marked. A pinned entry
+/// belongs to another account's list and a relayed one to another provider's,
+/// and refusing its turns over this list would name a menu it was never
+/// offered on.
+#[test]
+fn a_tier_this_catalog_does_not_speak_for_is_not_marked() {
+    let catalog = Catalog::parse(SAMPLE, SHIPPING).unwrap();
+    let mut tiers = vec![tier("fable", "claude-opus-5", false)];
+
+    assert!(catalog.mark_missing(&mut tiers, &["opus"]).is_none());
+    assert!(tiers[0].missing.is_none());
+}
+
+/// An unreachable catalog marks nothing. Fetch failure is not evidence that a
+/// model went away, and marking on it would refuse every turn the moment the
+/// network blinked.
+#[test]
+fn an_unavailable_catalog_marks_nothing() {
+    let mut tiers = vec![tier("fable", "gpt-5.6-absent", false)];
+
+    assert!(
+        Catalog::fallback()
+            .mark_missing(&mut tiers, &ALL_TIERS)
+            .is_none()
+    );
+    assert!(tiers[0].missing.is_none());
+}
+
+/// Marking again clears a tier whose model came back. This is what a reload
+/// after fixing config.toml rests on.
+#[test]
+fn marking_again_clears_a_tier_the_catalog_now_carries() {
+    let catalog = Catalog::parse(SAMPLE, SHIPPING).unwrap();
+    let mut tiers = vec![tier("fable", "gpt-5.6-absent", false)];
+    catalog.mark_missing(&mut tiers, &ALL_TIERS);
+    assert!(tiers[0].missing.is_some());
+
+    tiers[0].model = "gpt-5.6-terra".to_owned();
+    assert!(catalog.mark_missing(&mut tiers, &ALL_TIERS).is_none());
+    assert!(tiers[0].missing.is_none());
+}
+
+/// An empty catalog still explains itself, marking rather than refusing. This
+/// is what a stale `client_version` looks like, and the reason has to say so
+/// on every tier it marks.
+#[test]
+fn an_empty_catalog_explains_itself_when_it_marks() {
+    let catalog = Catalog::parse(r#"{"data":[]}"#, SHIPPING).unwrap();
+    let mut tiers = vec![tier("fable", "gpt-5.6-luna", false)];
+
+    catalog.mark_missing(&mut tiers, &ALL_TIERS);
+
+    let reason = tiers[0].missing.as_deref().expect("marked");
+    assert!(reason.contains("client_version"), "{reason}");
 }

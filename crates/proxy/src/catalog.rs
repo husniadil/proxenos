@@ -376,30 +376,28 @@ impl Catalog {
         swapped
     }
 
-    /// Check a tier mapping against the catalog.
+    /// The refusal a set of mapped ids earns, or `None` where this catalog
+    /// carries every one of them.
     ///
-    /// An unreachable catalog skips validation rather than failing it. Fetch
-    /// failure is not evidence that a model went away, and refusing to start
-    /// because the network was briefly unavailable is a worse failure than
-    /// starting with an unvalidated mapping.
-    pub fn validate(&self, mapped: &[String]) -> Result<(), ProxyError> {
-        if !self.authoritative {
-            tracing::warn!("model catalog unavailable; tier mapping was not validated");
-            return Ok(());
-        }
-
+    /// One sentence, built in one place. Startup marks a tier with it, a turn
+    /// on a marked tier is refused with it, and `doctor` reports it — and three
+    /// copies of a sentence is three chances for them to drift apart.
+    ///
+    /// Says nothing about whether the catalog is authoritative: that is the
+    /// caller's decision, because skipping and marking log different things.
+    fn absent(&self, mapped: &[&str]) -> Option<ProxyError> {
         // Deduplicated: four tiers pointing at one missing model is one
         // problem, and naming it four times buries whatever else is wrong.
         let unknown: Vec<&str> = mapped
             .iter()
-            .map(String::as_str)
+            .copied()
             .filter(|id| !self.models.contains_key(*id))
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect();
 
         if unknown.is_empty() {
-            return Ok(());
+            return None;
         }
 
         // An authoritative catalog with nothing in it is not an account with no
@@ -407,7 +405,7 @@ impl Catalog {
         // too old to be told about any. It returns an empty list rather than an
         // error, so nothing upstream of here says so.
         if self.models.is_empty() {
-            return Err(ProxyError::invalid_request(format!(
+            return Some(ProxyError::invalid_request(format!(
                 "the backend returned an empty model catalog, so no mapping can be validated \
                  (asked for: {}).\n\nThis is usually `upstream.client_version` in config.toml \
                  being older than every model requires — the backend answers a version it \
@@ -416,11 +414,78 @@ impl Catalog {
             )));
         }
 
-        Err(ProxyError::invalid_request(format!(
+        Some(ProxyError::invalid_request(format!(
             "these mapped models are not in the catalog: {}. Available: {}",
             unknown.join(", "),
             self.ids().join(", ")
         )))
+    }
+
+    /// Check a tier mapping against the catalog.
+    ///
+    /// An unreachable catalog skips validation rather than failing it. Fetch
+    /// failure is not evidence that a model went away, and refusing to start
+    /// because the network was briefly unavailable is a worse failure than
+    /// starting with an unvalidated mapping.
+    ///
+    /// This is the door an operator holds open — `tiers.set` and
+    /// `accounts.select`, where a refusal is immediate feedback on something
+    /// they just typed and nothing that was serving stops serving. Startup and
+    /// `config.reload` take `mark_missing` instead.
+    pub fn validate(&self, mapped: &[String]) -> Result<(), ProxyError> {
+        if !self.authoritative {
+            tracing::warn!("model catalog unavailable; tier mapping was not validated");
+            return Ok(());
+        }
+
+        let ids: Vec<&str> = mapped.iter().map(String::as_str).collect();
+        match self.absent(&ids) {
+            Some(refusal) => Err(refusal),
+            None => Ok(()),
+        }
+    }
+
+    /// Mark the tiers this catalog cannot serve, instead of refusing them all.
+    ///
+    /// A stated model is the operator's decision and is never overruled, so a
+    /// tier naming one this account's catalog no longer carries cannot be
+    /// substituted — but it cannot take the daemon down either. One tier's
+    /// model being retired used to stop the process at startup, which stops
+    /// every tier that *does* resolve and every worker depending on them. The
+    /// tier keeps its stated id, carries the reason it cannot serve, and turns
+    /// asking for it are refused one at a time.
+    ///
+    /// `checked` names the tiers this catalog is a menu for (§7.0). A pinned
+    /// entry belongs to another account's list and a relayed one to another
+    /// provider's, and both are left alone.
+    ///
+    /// Every tier is re-marked, so a mapping whose model came back is cleared:
+    /// that is what a reload after fixing config.toml rests on.
+    ///
+    /// Returns one sentence naming everything missing, for the caller to log —
+    /// `None` where nothing is.
+    pub fn mark_missing(&self, tiers: &mut [ResolvedTier], checked: &[&str]) -> Option<ProxyError> {
+        if !self.authoritative {
+            tracing::warn!("model catalog unavailable; tier mapping was not validated");
+            return None;
+        }
+
+        for tier in tiers.iter_mut() {
+            tier.missing = None;
+            if !checked.contains(&tier.tier) {
+                continue;
+            }
+            tier.missing = self
+                .absent(&[tier.model.as_str()])
+                .map(|refusal| format!("tier `{}` cannot serve: {}", tier.tier, refusal.message));
+        }
+
+        let missing: Vec<&str> = tiers
+            .iter()
+            .filter(|tier| tier.missing.is_some())
+            .map(|tier| tier.model.as_str())
+            .collect();
+        self.absent(&missing)
     }
 }
 

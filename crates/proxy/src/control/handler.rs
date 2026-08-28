@@ -388,6 +388,12 @@ fn status(state: &ControlState) -> Value {
         // model the backend does not offer. Present and empty rather than
         // absent, so "nothing withheld" is distinguishable from "not reported".
         "unlisted_tiers": catalog.unlisted(&mapped_models(state, &stored)),
+        // Tiers whose stated model this account's catalog does not carry.
+        // These do not stop the daemon and are not substituted — the model is
+        // the operator's decision — so without this nothing would say that a
+        // tier is up but refusing every turn. Present and empty rather than
+        // absent, so "nothing missing" is distinguishable from "not reported".
+        "missing_tiers": missing_tiers(state),
         // Whether the catalog is the backend's or the fallback list. A caller
         // that cannot tell would report an unvalidated mapping as a validated
         // one.
@@ -504,7 +510,7 @@ fn models(state: &ControlState, params: Option<&Value>) -> Result<Value, ProxyEr
 }
 
 fn tiers(state: &ControlState) -> Value {
-    json!({ "tiers": tier_map(state) })
+    json!({ "tiers": tier_map(state), "missing_tiers": missing_tiers(state) })
 }
 
 /// Every model a tier points at, once each.
@@ -516,6 +522,22 @@ fn mapped_models(state: &ControlState, accounts: &[crate::auth::store::Account])
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
+        .collect()
+}
+
+/// The tiers the catalog in force cannot serve, by name.
+///
+/// Names rather than reasons: the reason is a whole sentence naming every
+/// model the account does have, and a table cell is not where an operator
+/// reads one. A turn on the tier is refused with the reason itself.
+fn missing_tiers(state: &ControlState) -> Vec<&'static str> {
+    state
+        .policy
+        .get()
+        .tiers()
+        .iter()
+        .filter(|tier| tier.missing.is_some())
+        .map(|tier| tier.tier)
         .collect()
 }
 
@@ -1643,7 +1665,9 @@ async fn select_account(state: &ControlState, params: Option<&Value>) -> Result<
     // the new account's menu that decides (§7.0).
     let catalog_refreshed = refresh_catalog(state).await;
 
-    if let Err(refusal) = put_mapping_in_force(state, &configuration(state), Some(name)) {
+    if let Err(refusal) =
+        put_mapping_in_force(state, &configuration(state), Some(name), Absent::Refuse)
+    {
         // Back where it was, catalog included. A daemon left serving an account
         // whose every turn is dispatched to a model the backend will not answer
         // for fails one turn later, upstream, saying nothing about tier mapping.
@@ -1761,12 +1785,29 @@ fn set_cross_account(state: &ControlState, params: Option<&Value>) -> Result<Val
 /// mapping over a menu belonging to somebody else. Where that happens the
 /// switch goes ahead and `catalog_stale` says the list is not this account's,
 /// which is the honest report and the documented one.
+///
+/// **What an absent model costs depends on who asked.** A switch is the
+/// operator naming an account a moment ago: refusing it is immediate feedback,
+/// nothing that was serving stops serving, and the daemon stays where it was.
+/// A reload has no such fallback — it is the one move an operator has left
+/// after a daemon came up with a tier marked, so it applies the file and marks
+/// what the catalog cannot serve rather than refusing the whole mapping over
+/// one tier.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Absent {
+    /// Refuse the whole mapping, naming the model and the list.
+    Refuse,
+    /// Apply it, marking the tiers that cannot serve.
+    Mark,
+}
+
 fn put_mapping_in_force(
     state: &ControlState,
     config: &crate::config::Config,
     account: Option<&str>,
+    absent: Absent,
 ) -> Result<(), ProxyError> {
-    let tiers = config
+    let mut tiers = config
         .tiers_for(account)
         .resolve(config.cross_account_policy())?;
     let ceiling = config.effort_ceiling_for(account)?;
@@ -1774,17 +1815,38 @@ fn put_mapping_in_force(
     let catalog = state.catalog.current();
     let stored = state.credentials.accounts().unwrap_or_default();
     if !catalog.is_stale_for(serving_account(&stored).as_deref()) {
+        // A shipped default naming a model this account cannot see is replaced
+        // rather than carried, the same way the daemon's start replaces it: a
+        // default is this proxy's guess and the catalog may overrule it. The
+        // start did this and this path did not, so a mapping that started
+        // cleanly was refused when the same file was reloaded.
+        let substituted = catalog.substitute_unavailable_defaults(&mut tiers);
+        if !substituted.is_empty() {
+            tracing::info!(
+                tiers = substituted.join(", "),
+                "some default tier mappings were substituted for models this account has"
+            );
+        }
+
         // The third door onto the rule the daemon's start and `tiers.set` use,
         // through the same function: this list is the account being switched
         // to, and a pinned or relayed tier names another menu entirely.
-        catalog
-            .validate(&crate::upstream::relay::validated_models(&stored, &tiers))
-            .map_err(|refusal| match account {
-                // The advice is an account section, so it is only advice where
-                // there is an account to write one for.
-                Some(account) => refused_switch(&refusal, account),
-                None => refusal,
-            })?;
+        match absent {
+            Absent::Refuse => catalog
+                .validate(&crate::upstream::relay::validated_models(&stored, &tiers))
+                .map_err(|refusal| match account {
+                    // The advice is an account section, so it is only advice
+                    // where there is an account to write one for.
+                    Some(account) => refused_switch(&refusal, account),
+                    None => refusal,
+                })?,
+            Absent::Mark => {
+                let checked = crate::upstream::relay::validated_tiers(&stored, &tiers);
+                if let Some(refusal) = catalog.mark_missing(&mut tiers, &checked) {
+                    tracing::warn!("{}", refusal.message);
+                }
+            }
+        }
     }
 
     state.policy.set_tiers(tiers);
@@ -2016,7 +2078,7 @@ fn reload_config(state: &ControlState) -> Result<Value, ProxyError> {
     // takes. With nobody serving there is no account section to resolve
     // against, and the shared tables are the whole answer.
     let serving = serving_name(state);
-    put_mapping_in_force(state, &config, serving.as_deref())?;
+    put_mapping_in_force(state, &config, serving.as_deref(), Absent::Mark)?;
     reloaded.push("tiers");
     reloaded.push("effort");
 

@@ -98,6 +98,14 @@ pub struct ModelMapping {
     /// it reaches the transport as no account at all, and the turn is served
     /// by whoever happens to be selected.
     pub account: Option<String>,
+    /// Why a turn on this tier cannot be served, where the catalog says it
+    /// cannot (`proxy-behavior.md` §7.1).
+    ///
+    /// Carried on the routing table rather than looked up beside it for the
+    /// same reason the account is: this table is the only thing a turn
+    /// resolves against, and a refusal that needed a second lookup could
+    /// disagree with the model the turn was already being prepared for.
+    pub missing: Option<String>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -372,6 +380,16 @@ async fn messages(
         .models()
         .iter()
         .find(|mapping| mapping.requested == request.model);
+
+    // §7.1 — a tier the catalog cannot serve is refused here, one turn at a
+    // time, rather than at the daemon's start. Starting is what the other
+    // three tiers and every worker on the box depend on; this turn is the only
+    // thing that actually needs the model that went away, and it is told so in
+    // the sentence the start used to refuse with.
+    if let Some(reason) = routed.and_then(|mapping| mapping.missing.as_deref()) {
+        return ProxyError::invalid_request(reason.to_owned()).into_response();
+    }
+
     let upstream_model = routed.map(|mapping| mapping.upstream.clone());
     // §7.1 — the account this tier's turns are made as, where the entry pinned
     // one. Taken from the same snapshot as the model, so a turn cannot be

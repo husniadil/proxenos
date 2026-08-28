@@ -97,10 +97,38 @@ pub fn validated_models(
     accounts: &[crate::auth::store::Account],
     tiers: &[crate::config::ResolvedTier],
 ) -> Vec<String> {
+    validated(accounts, tiers)
+        .into_iter()
+        .map(|tier| tier.model.clone())
+        .collect()
+}
+
+/// The same tiers, by name.
+///
+/// What `validated_models` measures, said as tiers rather than as ids — which
+/// is what marking needs, because a mark belongs to the tier and a list of ids
+/// has already lost which tier stated each one. Derived from the same filter so
+/// the two cannot come apart.
+///
+/// The names outlive the mapping they were read from — a tier name is one of
+/// four constants — so the caller can hold this list while it marks the tiers.
+pub fn validated_tiers(
+    accounts: &[crate::auth::store::Account],
+    tiers: &[crate::config::ResolvedTier],
+) -> Vec<&'static str> {
+    validated(accounts, tiers)
+        .into_iter()
+        .map(|tier| tier.tier)
+        .collect()
+}
+
+fn validated<'a>(
+    accounts: &[crate::auth::store::Account],
+    tiers: &'a [crate::config::ResolvedTier],
+) -> Vec<&'a crate::config::ResolvedTier> {
     tiers
         .iter()
         .filter(|tier| tier.account.is_none() && !relays(accounts, tier.account.as_deref()))
-        .map(|tier| tier.model.clone())
         .collect()
 }
 

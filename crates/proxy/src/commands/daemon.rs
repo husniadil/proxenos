@@ -391,19 +391,41 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
         );
     }
 
-    // An unknown model id is refused here, and the error names what the catalog
-    // does have — which is the fastest way to find the id you actually meant.
+    // A stated model this catalog does not carry marks its tier; it does not
+    // stop the daemon. The operator's decision stands — the id is kept — but
+    // one retired model used to take the whole process down, and with it every
+    // tier that resolves and every worker depending on them. Turns asking for
+    // a marked tier are refused one at a time, in the ingress, with this same
+    // sentence.
     //
     // Over the tiers this catalog is a menu for. A tier whose turns are relayed
     // names a model on the second provider (§9.1), absent from this list by
-    // construction, and refusing the daemon's start over it would name a menu
-    // the id was never offered on.
-    catalog
-        .current()
-        .validate(&proxenos::upstream::relay::validated_models(
-            &credentials.accounts().unwrap_or_default(),
-            &tiers,
-        ))?;
+    // construction, and marking it would name a menu the id was never offered
+    // on.
+    let checked = proxenos::upstream::relay::validated_tiers(
+        &credentials.accounts().unwrap_or_default(),
+        &tiers,
+    );
+    let missing = catalog.current().mark_missing(&mut tiers, &checked);
+
+    // Said once, at WARN, so the operator hears it here rather than from the
+    // first turn that fails. The startup log is where somebody looks after a
+    // daemon comes up wrong.
+    if let Some(refusal) = &missing {
+        tracing::warn!("{}", refusal.message);
+    }
+
+    // And the case where nothing at all can be served. It still starts —
+    // `config.reload` is how the operator recovers, and a process that exited
+    // could not be reloaded — but a daemon answering on a port while refusing
+    // every turn has to say so.
+    if !tiers.is_empty() && tiers.iter().all(|tier| tier.missing.is_some()) {
+        tracing::warn!(
+            "no tier can serve: every mapped model is absent from this account's catalog. \
+             This daemon is up so the mapping can be fixed — edit config.toml, then \
+             `proxenos reload`"
+        );
+    }
 
     // One policy, shared. The control socket can move the tier mapping and the
     // effort ceiling on a running daemon, and the ingress routes turns from the

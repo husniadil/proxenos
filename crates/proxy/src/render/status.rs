@@ -242,6 +242,14 @@ pub fn status_at(result: &Value, now: u64) -> String {
     // be in — inert, or pinned to another account — trailed off the end of the
     // model as a parenthesis. A column says the same thing where the eye is
     // already looking for it.
+    // Tiers whose stated model the catalog does not carry. Read before the
+    // table, because the row is where an operator is already looking and a
+    // marked tier is the reason their turns are being refused.
+    let missing: Vec<&str> = field(result, "missing_tiers")
+        .and_then(Value::as_array)
+        .map(|entries| entries.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+
     if let Some(tiers) = field(result, "tiers").and_then(Value::as_object) {
         // The ladder's own order, not the map's. The payload is an unordered
         // object and arrives sorted by name, so the four rows printed as
@@ -279,6 +287,15 @@ pub fn status_at(result: &Value, now: u64) -> String {
                     ),
                     _ => ("unmapped".to_owned(), String::new()),
                 };
+                // The mark outranks whatever else the row had to say. A tier
+                // the catalog cannot serve refuses every turn, and reporting
+                // it as pinned or inert would name the least important true
+                // thing about it.
+                let state = if missing.contains(&tier.as_str()) {
+                    "missing from the catalog".to_owned()
+                } else {
+                    state
+                };
                 (tier.clone(), model, state)
             })
             .collect();
@@ -304,6 +321,26 @@ pub fn status_at(result: &Value, now: u64) -> String {
             &["TIER", "MODEL"]
         };
         lines.push(super::table(header, &rows));
+    }
+
+    // What a marked row means, said once beneath the table. The cell has room
+    // for the state and not for the consequence, and the consequence — turns
+    // on that tier are refused, and the way out is the file — is the whole
+    // reason the daemon came up rather than exiting.
+    if !missing.is_empty() {
+        let mapped = field(result, "tiers")
+            .and_then(Value::as_object)
+            .is_some_and(|tiers| tiers.keys().all(|tier| missing.contains(&tier.as_str())));
+        let scope = if mapped {
+            "no tier can serve".to_owned()
+        } else {
+            format!("{} cannot serve", missing.join(", "))
+        };
+        lines.push(format!(
+            "catalog    {scope} — the model each names is absent from this account's \
+             catalog, and turns asking for it are refused. Edit `[tiers]` in config.toml, \
+             then `proxenos reload`"
+        ));
     }
 
     // And what the mapping's inert rows are inert in favour of, named rather
@@ -478,7 +515,43 @@ pub fn models(result: &Value, tiers: Option<&Value>) -> String {
         &["MODEL", "WINDOW"]
     };
     lines.push(super::table(header, &rows));
+
+    // A tier the catalog cannot serve has no row here at all — that is what
+    // being absent from the catalog means — so the one place it could be read
+    // off this list is a line beneath it. Without this, the model an operator
+    // came looking for is simply not there and the list says nothing about why.
+    let missing: Vec<String> = tiers
+        .and_then(|tiers| field(tiers, "missing_tiers"))
+        .and_then(Value::as_array)
+        .map(|entries| {
+            let mut named: Vec<&str> = entries.iter().filter_map(Value::as_str).collect();
+            named.sort_by_key(|tier| rung(tier));
+            named
+                .into_iter()
+                .map(|tier| match tier_model(mapping.as_ref(), tier) {
+                    Some(model) => format!("{tier} → {model}"),
+                    None => tier.to_owned(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if !missing.is_empty() {
+        lines.push(format!(
+            "({} mapped but not in this catalog; turns asking for it are refused)",
+            missing.join(", ")
+        ));
+    }
+
     lines.join("\n")
+}
+
+/// The model one tier maps to, as the `tiers` payload states it.
+fn tier_model(mapping: Option<&Value>, tier: &str) -> Option<String> {
+    let value = mapping?.get(tier)?;
+    value
+        .as_str()
+        .or_else(|| value.get("model").and_then(Value::as_str))
+        .map(str::to_owned)
 }
 
 /// The ladder, in the order these are spoken about everywhere else. A tier

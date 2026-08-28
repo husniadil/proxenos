@@ -4,6 +4,28 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- A tier mapped to a model the account's catalog no longer carries no longer
+  stops the daemon. One retired model — `fable = "gpt-5.6-sol"` against an
+  account that had lost it — refused the whole start, taking down every tier
+  that resolved and every process depending on them. The stated model is still
+  the operator's decision and is still never overruled: the tier keeps the id,
+  is marked `missing` with the reason, and only turns asking for *that* tier are
+  refused, in the sentence the start used to refuse with — naming the tier, the
+  model, and what the catalog does have. `status` marks the row and `models`
+  names it beneath the list; the startup log carries the same sentence once at
+  WARN, so it is heard before a turn fails; `doctor --live` reports it above the
+  matrix. Where every tier is marked the daemon still starts and says so —
+  `proxenos reload` is how the mapping is fixed, and a process that exited could
+  not be reloaded. `reload` re-derives the marks, so fixing config.toml and
+  reloading recovers. A `tiers.set` or an `accounts use` is still refused
+  outright rather than marked: those are typed a moment earlier, nothing that
+  was serving stops serving, and the refusal is the feedback.
+- A *defaulted* model the catalog lacks is now overruled on `reload` as well as
+  at startup. A default is this proxy's guess about an account it has not seen,
+  and the start replaced it while a reload of the same file refused it.
+
 ## [0.17.0]
 
 - `accounts login --relogin` signs a declared profile back in. A grant whose

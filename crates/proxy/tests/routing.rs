@@ -48,6 +48,7 @@ fn grant(access: &str, refresh: &str, account_id: &str) -> Credentials {
 fn tier(name: &'static str, model: &str, account: Option<&str>) -> ResolvedTier {
     ResolvedTier {
         defaulted: false,
+        missing: None,
         account: account.map(str::to_owned),
         tier: name,
         model: model.to_owned(),
@@ -586,6 +587,68 @@ sonnet = "gpt-5.4-mini"
         seen.lock().unwrap().clone(),
         vec!["Bearer serving-token".to_owned()]
     );
+    assert_eq!(
+        asked.lock().unwrap().clone(),
+        vec!["gpt-5.6-terra".to_owned()]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// §7.1 — a tier the catalog cannot serve refuses its own turns and nothing
+// else. One retired model used to stop the daemon at startup, taking every
+// tier that resolves and every worker on the box with it.
+// ---------------------------------------------------------------------------
+
+/// The same tier, marked as the catalog marks one it cannot serve.
+fn missing_tier(name: &'static str, model: &str, reason: &str) -> ResolvedTier {
+    ResolvedTier {
+        missing: Some(reason.to_owned()),
+        ..tier(name, model, None)
+    }
+}
+
+/// **The acceptance criterion.** A marked tier's turn is refused, in the
+/// sentence the daemon's start used to refuse with — and every other tier
+/// keeps serving, on the same daemon, in the same run.
+#[tokio::test]
+async fn a_turn_on_a_missing_tier_is_refused_while_the_others_serve() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store_with_two_accounts(&dir);
+    let reason = "tier `fable` cannot serve: these mapped models are not in the catalog: \
+                  gpt-5.6-sol. Available: gpt-5.4-mini, gpt-5.6-terra";
+    let (base, _seen, _usage, asked) = daemon_with(
+        Arc::clone(&store),
+        vec![
+            tier("sonnet", "gpt-5.6-terra", None),
+            missing_tier("fable", "gpt-5.6-sol", reason),
+        ],
+        proxenos::config::Config::default(),
+    )
+    .await;
+
+    let refused = turn(&base, "fable", "the turn nothing can serve").await;
+    assert_eq!(refused.status(), 400);
+    let body: Value = refused.json().await.unwrap();
+    assert_eq!(body["type"], "error", "{body}");
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("fable"), "{body}");
+    assert!(message.contains("gpt-5.6-sol"), "{body}");
+    assert!(
+        message.contains("gpt-5.6-terra"),
+        "the refusal names what is available: {body}"
+    );
+
+    assert_eq!(
+        turn(&base, "sonnet", "the turn that still works")
+            .await
+            .status(),
+        200,
+        "a resolving tier keeps serving"
+    );
+
+    // And the refused turn never reached the backend. A tier that cannot be
+    // served must cost nothing, or the refusal is only a nicer error on a
+    // request that was already billed.
     assert_eq!(
         asked.lock().unwrap().clone(),
         vec!["gpt-5.6-terra".to_owned()]

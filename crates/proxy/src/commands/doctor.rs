@@ -75,6 +75,7 @@ fn live_models() -> Result<Arc<Vec<ModelMapping>>> {
             requested: tier.tier.to_owned(),
             upstream: tier.model.clone(),
             account: None,
+            missing: None,
         })
         .collect();
 
@@ -89,11 +90,65 @@ fn live_models() -> Result<Arc<Vec<ModelMapping>>> {
                 requested: requested.to_owned(),
                 upstream,
                 account: None,
+                missing: None,
             });
         }
     }
 
     Ok(Arc::new(models))
+}
+
+/// The tiers this account's catalog cannot serve, as the sentence a startup
+/// marks them with.
+///
+/// **A live run is the only one that can answer this.** A catalog is one
+/// account's menu and has to be fetched from the backend, and a replay run
+/// contacts nothing — so it says nothing here rather than reporting a mapping
+/// as healthy on the strength of a fallback list it never checked. The fetch
+/// itself is a model list, not a turn: it costs no inference quota, so it adds
+/// nothing to what `--live` already spends.
+///
+/// Best effort. A catalog that could not be fetched is not evidence that a
+/// model went away, which is the same rule §7.1 applies everywhere else.
+async fn missing_tiers() -> Option<String> {
+    let config = Config::load().ok()?;
+    let credentials: Arc<dyn proxenos::auth::store::AccountStore> = Arc::new(account_store().ok()?);
+    let authorizer: Arc<dyn proxenos::auth::authorize::Authorizer> =
+        Arc::new(proxenos::auth::authorize::AccountAuthorizer::new(
+            Arc::clone(&credentials),
+            Arc::new(proxenos::auth::grants::Grants::new(
+                Arc::clone(&credentials) as Arc<dyn proxenos::auth::store::CredentialStore>,
+                Arc::new(proxenos::auth::grants::SystemClock),
+            )),
+        ));
+    let authorization = authorizer.authorize(None).await.ok()?;
+
+    // The endpoint the credential belongs to (§8.2). A key sent to the
+    // subscription host is a secret travelling somewhere it was never issued
+    // for, and the two lists are not interchangeable either.
+    let endpoint = match authorization.kind {
+        proxenos::auth::authorize::Kind::Key => config.upstream.key.catalog.clone(),
+        proxenos::auth::authorize::Kind::Subscription => config.upstream.catalog.clone(),
+    };
+    let catalog = proxenos::catalog::fetch(
+        &reqwest::Client::new(),
+        &endpoint,
+        &authorization,
+        &config.upstream.client_version,
+        config.upstream.effective_window_percent,
+    )
+    .await?;
+
+    let stored = credentials.accounts().unwrap_or_default();
+    let mut tiers = config
+        .tiers_for(serving_account(&credentials).as_deref())
+        .resolve(config.cross_account_policy())
+        .ok()?;
+    catalog.substitute_unavailable_defaults(&mut tiers);
+    let checked = proxenos::upstream::relay::validated_tiers(&stored, &tiers);
+    catalog
+        .mark_missing(&mut tiers, &checked)
+        .map(|refusal| refusal.message)
 }
 
 /// The authorizer a relayed probe turn is signed with.
@@ -169,6 +224,15 @@ pub(crate) async fn doctor(args: cli::DoctorArgs) -> Result<()> {
             },
         )
     };
+
+    // Before the matrix, because it is not a probe result: every row below can
+    // pass while the daemon refuses every turn on a tier whose model this
+    // account no longer has.
+    if args.live
+        && let Some(missing) = missing_tiers().await
+    {
+        println!("Tier mapping — {missing}\n");
+    }
 
     println!(
         "{}",

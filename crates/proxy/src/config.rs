@@ -1099,6 +1099,17 @@ pub struct ResolvedTier {
     /// stated model is the operator's decision. The catalog is allowed to
     /// overrule the first and never the second.
     pub defaulted: bool,
+    /// Why this tier cannot serve, where the catalog says it cannot.
+    ///
+    /// The model stays what the operator stated — the decision is theirs and
+    /// is never overruled — and this carries the reason beside it. `None` is a
+    /// tier that resolves, which includes every tier of a mapping nothing has
+    /// checked against a catalog yet.
+    ///
+    /// A tier rather than a daemon-wide flag because the blast radius is the
+    /// whole point: one retired model marks one tier, and the other three keep
+    /// serving.
+    pub missing: Option<String>,
 }
 
 /// What each tier maps to when the configuration says nothing.
@@ -1258,6 +1269,9 @@ impl Tiers {
             .map(|(tier, value)| ResolvedTier {
                 tier,
                 defaulted: value.is_none(),
+                // Nothing has met a catalog yet. Marking is what the catalog
+                // does to a resolved mapping, not something resolution knows.
+                missing: None,
                 account: value
                     .as_ref()
                     .and_then(|value| value.account())

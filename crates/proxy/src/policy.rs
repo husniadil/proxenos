@@ -65,6 +65,7 @@ impl Snapshot {
                 requested: tier.tier.to_owned(),
                 upstream: tier.model.clone(),
                 account: tier.account.clone(),
+                missing: tier.missing.clone(),
             })
             .collect();
         Self {

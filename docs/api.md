@@ -348,6 +348,11 @@ inference quota; it maps the corpus's model ids through the configured tiers,
 so what it reports is the mapping in the configuration file rather than a
 notional one.
 
+A live run also names any tier whose stated model this account's catalog does not
+carry, above the matrix. Only a live run can: a catalog is one account's menu and
+has to be fetched, and a replay run contacts nothing. The fetch is a model list
+rather than a turn, so it adds nothing to what `--live` already spends.
+
 A live run applies every check except the ones that only mean something against
 a recording. The corpus can assert the exact URL a search returned because the
 corpus wrote it; a backend answers with whatever it answers, and failing a
@@ -1044,14 +1049,14 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 
 | Method | Returns | v0.1 |
 |---|---|---|
-| `status` | connection state, the process serving the socket (`pid`) and whether the supervisor of §2.6 started it (`supervised` — `true`, `false`, or **null** where this side cannot tell, which is every platform with no supervisor here and any process launchd started under some other label), whether the grant has been **refused** — `dead` where this side cannot spend it and `refused` carrying the backend's own words where it was sent and turned away — when the serving account's login has to be renewed (`login_expires_at`, absent where no such date exists), plan and which source reported it, the tier mapping and the effort ceiling, any mapped model the catalog withholds, whether the catalog was authoritative, the client policy in effect, and the build and `instance` serving the socket | yes |
+| `status` | connection state, the process serving the socket (`pid`) and whether the supervisor of §2.6 started it (`supervised` — `true`, `false`, or **null** where this side cannot tell, which is every platform with no supervisor here and any process launchd started under some other label), whether the grant has been **refused** — `dead` where this side cannot spend it and `refused` carrying the backend's own words where it was sent and turned away — when the serving account's login has to be renewed (`login_expires_at`, absent where no such date exists), plan and which source reported it, the tier mapping and the effort ceiling, any mapped model the catalog withholds, `missing_tiers` — the tiers whose stated model this account's catalog does not carry at all, present and empty rather than absent — whether the catalog was authoritative, the client policy in effect, and the build and `instance` serving the socket | yes |
 | `accounts.select` (re-selection) | selecting the account already serving answers `{"selected", "provider", "previous_provider", "unchanged": true}` and does nothing else: no catalog fetch, no conversation ended, no figure dropped. A switch pays all three to arrive somewhere; this one is already there | no — `unchanged` added after v0.12 |
 | `accounts.remove` | removes one account — the selected one, or `{"account": name}` — and answers with the name it cleared and the one serving turns afterwards; the rest stay usable, and an idle account's removal leaves the serving grant's quota alone. A key is dropped from this daemon's store; a **declared** profile loses its `[profiles]` entry and nothing else — the grant belongs to the program that owns the directory — after which the file is re-read so the daemon stops answering for it. A profile that was found rather than declared is refused, saying so and that `[profiles]` is empty | no — was `disconnect`, then `accounts.forget` |
 | `accounts` | every stored account, what kind of credential each holds, whether the operator wrote it down (`declared`, true only for a profile named in `[profiles]`), and which one serves turns, plus `discovered` — whether these are the operator's own `[profiles]` entries or the stock profile of each program, read because none were declared; each borrowed row also carries the profile it was read from and, for a Claude profile, `login_expires_at` — the date the operator has to sign in again. No tokens | no — v0.3 |
 | `accounts.select` | `{"account": name}`, the account every following turn is made as, the provider now serving and the one serving a moment ago (absent where nothing was) — one select moves every unpinned turn onto that provider's subscription — whether the catalog was refetched for it, and the tier mapping now in force; refuses, and moves nothing, where that account's mapping names a model its catalog does not have, naming whose menu refused and how to give that account its own mapping | no — v0.3 |
 | `accounts.rename` | `{"account": from, "name": to}`, the name this daemon calls an account by, and whether an account section moved with it; the grant and the account id are untouched | no — v0.3 |
 | `models` | catalog, whether it is the fallback list, and whether it was fetched for an account other than the one it was asked about. `{"account": name}` answers for that account's menu rather than the selection's — which is the curated list where that account relays (§9.1), and is what `exec --account` measures a `--model` id against; a name the store does not hold is refused by name | yes — `{"account": name}` added after v0.16.0 |
-| `tiers` | tier mapping | no — was `tiers.get` |
+| `tiers` | tier mapping, plus `missing_tiers` — the tiers whose stated model this account's catalog does not carry | no — was `tiers.get`; `missing_tiers` added after v0.17.0 |
 | `usage` | the serving account's quota as of its last turn, or that no turn has been made, plus `models` — the ids this daemon serves — and `accounts`, one entry per stored account with its own figure, its freshness, and `unavailable` where it has none. Each account entry also carries `served_tokens`, the §6.1 tally, and an entry with no figure carries `reason` beside its `detail` — `no_turn`, `no_relayed_turn`, `metered`, `unknown_key_kind`, `not_reported` — the same fact in a word, so a renderer never matches on prose. Each window carries `used_percent`, `window_minutes`, `resets_at`, and — where the provider stated them — `status`, `surpassed_threshold`, `representative`, and `label` for a window no duration identifies. An entry whose provider states a credit balance also carries `credit` — `used_minor`, `limit_minor`, `exponent`, `currency`, `percent`, `severity` — money in the units the provider stated it in, present only where there is a balance to state. An entry whose provider states a subscription it no longer calls active also carries `subscription_status`, that provider's own word verbatim — absent where the subscription is active, which is silence | yes |
 | `usage.refresh` | asks the backend for a figure now, **per account** — every stored account whose credential can hold one, each on its own credential and each recorded under its own name. The answer is the serving account's outcome plus `accounts`, one entry per stored account carrying either its figure or the sentence saying why it has none. Nothing about which account serves turns is read or changed | yes |
 | `env` | the §2.2 block: `variables`, and `settings` always present. `{"account": name}` answers for a session served as that account rather than as the selection — the mapping, the window, and the client policy all resolved for it, which is what `exec --account` launches with; a name the store does not hold is refused by name | yes — `{"account": name}` added after v0.15.1 |
@@ -1060,7 +1065,7 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 | `tiers.set` | tier mapping, validated against the catalog and in effect until the daemon stops; `{"account": name}` writes that account's section instead of the shared table. A tier's value takes the same two forms the file does — a model id, or `{"account": …, "model": …}` pinning the tier to another account. The pinned form needs `cross_account_tiers = true` and is refused by name without it, and its model is excluded from catalog validation: the catalog is the serving account's menu and cannot speak for the pinned one | yes |
 | `effort.set` | the effort ceiling, or `null` to remove it; in effect until the daemon stops; `{"account": name}` as for `tiers.set` | yes |
 | `cross_account_tiers.set` | `{"enabled": bool}` — consent for pinned tiers. **Always persisted**, unlike the setters above: consent is the operator changing what the daemon is, and a grant that evaporated at restart would leave the file refusing a mapping the operator permitted. Granting applies to the next call, not the next restart; revoking is refused by name while any tier still pins an account, because the write would produce a file the daemon refuses to start from | yes |
-| `config.reload` | re-reads config.toml into the running daemon and answers `{"reloaded": [...], "needs_restart": [...]}`. It applies `[profiles]`, the tier mapping and the effort ceiling — the mapping through the same validated path a switch takes — and names what it did not: `instructions`, `client`, `transport`, `upstream`, `port`. Nothing is fetched. A file that does not parse is refused with the parse error and the daemon keeps what it was running on It also carries `serving` — who serves turns afterwards, `null` where the file took the serving profile away — and `remaining`, how many accounts are left, so that case is reported here rather than found out from a refused turn | no — added after v0.12 |
+| `config.reload` | re-reads config.toml into the running daemon and answers `{"reloaded": [...], "needs_restart": [...]}`. It applies `[profiles]`, the tier mapping and the effort ceiling — the mapping through the same checked path a switch takes, except that a tier naming a model the catalog does not carry is **marked rather than refused**, since a reload is the move an operator has left after a daemon came up with one marked — and names what it did not: `instructions`, `client`, `transport`, `upstream`, `port`. Nothing is fetched. A file that does not parse is refused with the parse error and the daemon keeps what it was running on It also carries `serving` — who serves turns afterwards, `null` where the file took the serving profile away — and `remaining`, how many accounts are left, so that case is reported here rather than found out from a refused turn | no — added after v0.12 |
 | `doctor` | probe results | no — `doctor` runs in the CLI, which is where `--live` can be given credentials without a daemon already holding them |
 
 **Where the socket lives.** `$PROXENOS_HOME/proxenos.sock` when that variable
@@ -1176,8 +1181,11 @@ startup is not overwritten to persist an unrelated one.
 `tiers.set` is **partial**: naming one tier changes that tier. Treating the
 argument as the whole mapping would let a caller that knows about one tier
 silently unset the three it did not mention. Every set is validated against the
-catalog exactly as startup validates it — that check is why this daemon owns the
-mapping rather than a front-end, since it is the side holding the catalog.
+catalog — that check is why this daemon owns the mapping rather than a
+front-end, since it is the side holding the catalog. It **refuses** a model the
+catalog does not carry rather than marking the tier, as a switch does and unlike
+a start or a reload: a set is something the caller typed a moment ago, so the
+refusal is immediate feedback and nothing that was serving stops serving.
 
 **A rename takes the account's configuration with it.** An account section is
 keyed by the name (§4), so a rename that left it behind would detach a mapping
@@ -1566,9 +1574,19 @@ selected uses.
 
 The four tiers default to the mapping above. An omitted tier takes its default; a
 tier written blank is refused, because an omission accepts the shipped answer
-while a blank is a mistake. Each mapped model is validated against the live
-catalog when one is reachable. That validation happens once, at startup: the
+while a blank is a mistake. Each mapped model is checked against the live
+catalog when one is reachable. That check happens once, at startup: the
 catalog is not refetched, so a mapping cannot go stale while the daemon runs.
+
+**A model the catalog does not carry does not stop the daemon.** A *defaulted*
+model is this proxy's guess and is replaced with one the account has; a *stated*
+model is the operator's decision, is never replaced, and instead marks its tier.
+A marked tier refuses its own turns — naming the tier, the model, and what the
+catalog does have — and the other three go on serving. The startup log carries
+that sentence once at WARN, `status` and `models` name the marked tier, and
+`reload` clears the mark once config.toml is fixed. Where every tier is marked
+the daemon still starts and says so, because a process that exited could not be
+reloaded (`proxy-behavior.md` §7.1).
 
 A tier entry is a model id, or a table pinning one to another account:
 `haiku = { account = "spare", model = "..." }` serves that tier's turns as

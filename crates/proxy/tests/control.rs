@@ -39,24 +39,28 @@ fn tiers() -> Vec<ResolvedTier> {
     vec![
         ResolvedTier {
             defaulted: false,
+            missing: None,
             account: None,
             tier: "opus",
             model: "gpt-5.6-terra".to_owned(),
         },
         ResolvedTier {
             defaulted: false,
+            missing: None,
             account: None,
             tier: "sonnet",
             model: "gpt-5.6-terra".to_owned(),
         },
         ResolvedTier {
             defaulted: false,
+            missing: None,
             account: None,
             tier: "haiku",
             model: "gpt-5.4-mini".to_owned(),
         },
         ResolvedTier {
             defaulted: false,
+            missing: None,
             account: None,
             tier: "fable",
             model: "gpt-5.4-mini".to_owned(),
@@ -348,6 +352,7 @@ impl Harness {
             .into_iter()
             .map(|tier| ResolvedTier {
                 defaulted: false,
+                missing: None,
                 account: None,
                 tier,
                 model: model.to_owned(),
@@ -4186,6 +4191,7 @@ async fn an_all_relay_mapping_states_no_window_and_no_long_context_flag() {
             .into_iter()
             .map(|tier| ResolvedTier {
                 defaulted: false,
+                missing: None,
                 account: None,
                 tier,
                 model: "claude-sonnet-5".to_owned(),
@@ -4264,6 +4270,7 @@ sonnet = "claude-sonnet-5"
     .into_iter()
     .map(|(tier, model)| ResolvedTier {
         defaulted: false,
+        missing: None,
         account: None,
         tier,
         model: model.to_owned(),
@@ -4322,6 +4329,7 @@ fn a_first_provider_mapping() -> Vec<ResolvedTier> {
     .into_iter()
     .map(|(tier, model)| ResolvedTier {
         defaulted: false,
+        missing: None,
         account: None,
         tier,
         model: model.to_owned(),
@@ -4677,24 +4685,28 @@ async fn a_mixed_mapping_states_no_window_and_keeps_the_long_context_flag() {
         vec![
             ResolvedTier {
                 defaulted: false,
+                missing: None,
                 account: None,
                 tier: "opus",
                 model: "gpt-5.6-terra".to_owned(),
             },
             ResolvedTier {
                 defaulted: false,
+                missing: None,
                 account: None,
                 tier: "sonnet",
                 model: "gpt-5.6-terra".to_owned(),
             },
             ResolvedTier {
                 defaulted: false,
+                missing: None,
                 account: None,
                 tier: "fable",
                 model: "gpt-5.4-mini".to_owned(),
             },
             ResolvedTier {
                 defaulted: false,
+                missing: None,
                 account: Some("relay".to_owned()),
                 tier: "haiku",
                 model: "claude-haiku-5".to_owned(),
@@ -6367,4 +6379,174 @@ fn the_reload_rendering_names_both_halves() {
         rendered.contains("still needs a restart: port"),
         "{rendered}"
     );
+}
+
+// --- a stated model the catalog no longer carries ---------------------------
+//
+// §7.1 — the operator's decision stands and the daemon stays up. A reload is
+// the move an operator has left after a daemon came up with a tier marked, so
+// it applies the file and marks what cannot serve rather than refusing the
+// whole mapping over one tier.
+
+/// Which tiers the policy in force says cannot serve.
+fn marked(state: &ControlState) -> Vec<&'static str> {
+    state
+        .policy
+        .get()
+        .tiers()
+        .iter()
+        .filter(|tier| tier.missing.is_some())
+        .map(|tier| tier.tier)
+        .collect()
+}
+
+/// A reload naming a model this catalog does not carry applies anyway, marks
+/// that tier, and leaves the other three serving.
+///
+/// Refusing the whole mapping over one tier is what the daemon's start used to
+/// do, and it is how one retired model took every worker on a box down with it.
+#[tokio::test]
+async fn reloading_a_mapping_with_an_absent_model_marks_the_tier_and_applies_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = reloadable(dir.path(), proxenos::config::Config::default());
+
+    std::fs::write(
+        dir.path().join("config.toml"),
+        "[tiers]\nopus = \"gpt-5.6-terra\"\nsonnet = \"gpt-5.6-terra\"\n\
+         haiku = \"gpt-5.4-mini\"\nfable = \"gpt-5.6-sol\"\n",
+    )
+    .unwrap();
+
+    proxenos::control::handler::dispatch(&state, "config.reload", None)
+        .await
+        .expect("a tier the catalog cannot serve does not refuse the reload");
+
+    assert_eq!(marked(&state), vec!["fable"]);
+
+    let snapshot = state.policy.get();
+    let fable = snapshot
+        .tiers()
+        .iter()
+        .find(|tier| tier.tier == "fable")
+        .unwrap();
+    assert_eq!(
+        fable.model, "gpt-5.6-sol",
+        "the stated id is kept, never substituted"
+    );
+    let reason = fable.missing.as_deref().unwrap();
+    assert!(reason.contains("fable"), "{reason}");
+    assert!(reason.contains("gpt-5.6-sol"), "{reason}");
+    assert!(reason.contains("gpt-5.4-mini"), "{reason}");
+
+    // And the rest of the mapping is what the file says, routing included.
+    assert!(
+        snapshot
+            .models()
+            .iter()
+            .any(|mapping| mapping.requested == "haiku" && mapping.upstream == "gpt-5.4-mini"),
+        "the tiers that resolve still moved with the file"
+    );
+}
+
+/// `status` names the marked tier, so a front-end can show it without parsing
+/// a sentence out of a log.
+#[tokio::test]
+async fn status_names_the_tiers_the_catalog_cannot_serve() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = reloadable(dir.path(), proxenos::config::Config::default());
+    std::fs::write(
+        dir.path().join("config.toml"),
+        "[tiers]\nopus = \"gpt-5.6-terra\"\nsonnet = \"gpt-5.6-terra\"\n\
+         haiku = \"gpt-5.6-terra\"\nfable = \"gpt-5.6-sol\"\n",
+    )
+    .unwrap();
+    proxenos::control::handler::dispatch(&state, "config.reload", None)
+        .await
+        .unwrap();
+
+    let answer = proxenos::control::handler::dispatch(&state, "status", None)
+        .await
+        .unwrap();
+    assert_eq!(answer["missing_tiers"], json!(["fable"]), "{answer}");
+
+    // And on the mapping's own method, which is what the model list reads.
+    let tiers = proxenos::control::handler::dispatch(&state, "tiers", None)
+        .await
+        .unwrap();
+    assert_eq!(tiers["missing_tiers"], json!(["fable"]), "{tiers}");
+}
+
+/// Fixing the file and reloading recovers. The mark is re-derived every time,
+/// so nothing has to remember to clear it.
+#[tokio::test]
+async fn reloading_a_fixed_mapping_clears_the_mark() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = reloadable(dir.path(), proxenos::config::Config::default());
+    let path = dir.path().join("config.toml");
+
+    std::fs::write(
+        &path,
+        "[tiers]\nopus = \"gpt-5.6-terra\"\nsonnet = \"gpt-5.6-terra\"\n\
+         haiku = \"gpt-5.6-terra\"\nfable = \"gpt-5.6-sol\"\n",
+    )
+    .unwrap();
+    proxenos::control::handler::dispatch(&state, "config.reload", None)
+        .await
+        .unwrap();
+    assert_eq!(marked(&state), vec!["fable"]);
+
+    std::fs::write(
+        &path,
+        "[tiers]\nopus = \"gpt-5.6-terra\"\nsonnet = \"gpt-5.6-terra\"\n\
+         haiku = \"gpt-5.6-terra\"\nfable = \"gpt-5.4-mini\"\n",
+    )
+    .unwrap();
+    proxenos::control::handler::dispatch(&state, "config.reload", None)
+        .await
+        .unwrap();
+
+    assert!(marked(&state).is_empty(), "the mark is gone");
+    let answer = proxenos::control::handler::dispatch(&state, "status", None)
+        .await
+        .unwrap();
+    assert_eq!(answer["missing_tiers"], json!([]), "{answer}");
+}
+
+/// A *defaulted* model the catalog lacks is overruled, not marked and not
+/// refused. A default is this proxy's guess about an account it has never
+/// seen, and the catalog is allowed to overrule a guess.
+///
+/// The daemon's start did this and a reload did not, so a mapping that started
+/// cleanly was refused when the same file was reloaded.
+#[tokio::test]
+async fn reloading_overrules_a_defaulted_model_the_catalog_lacks() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = reloadable(dir.path(), proxenos::config::Config::default());
+
+    // No `[tiers]` at all, so every tier takes DEFAULT_TIERS — and this
+    // catalog carries only one of the models those name.
+    std::fs::write(dir.path().join("config.toml"), "port = 8787\n").unwrap();
+
+    proxenos::control::handler::dispatch(&state, "config.reload", None)
+        .await
+        .expect("a defaulted model the catalog lacks is not a refusal");
+
+    assert!(
+        marked(&state).is_empty(),
+        "a guess is overruled, not marked"
+    );
+    let snapshot = state.policy.get();
+    for tier in snapshot.tiers() {
+        assert!(
+            tier.defaulted,
+            "every tier here came from the defaults: {}",
+            tier.tier
+        );
+        assert!(
+            ["gpt-5.6-terra", "gpt-5.4-mini"].contains(&tier.model.as_str()),
+            "`{}` took `{}`, which this catalog does not have",
+            tier.tier,
+            tier.model
+        );
+    }
 }

@@ -910,9 +910,33 @@ catalog is skipped when the catalog is unavailable, never failed.
 ### 7.1 Tier mapping
 
 All four tiers — `opus`, `sonnet`, `haiku`, `fable` — are mapped, by the
-operator or by the shipped defaults, and each is validated against the live
-catalog. The daemon refuses to start on an invalid mapping; an incomplete one is
-completed rather than refused.
+operator or by the shipped defaults, and each is checked against the live
+catalog. An incomplete mapping is completed rather than refused.
+
+**A stated model is the operator's decision and is never overruled.** They may
+know something the catalog does not, and serving a different model than the one
+asked for is worse than refusing. A **defaulted** model is this proxy's guess
+about an account it has never seen, so the catalog may overrule that one: a
+default naming a model this account cannot see is replaced with one it has, and
+the substitution is reported. Every door onto the mapping applies this — the
+daemon's start, a switch, and a reload.
+
+**A stated model the catalog does not carry marks its tier; it does not stop
+the daemon.** The tier keeps the id the operator stated, carries the reason it
+cannot serve, and every *other* tier goes on serving. A turn asking for a marked
+tier is refused, one turn at a time, in the sentence naming the tier, the model,
+and what the catalog does have. The daemon refusing to start on this was one
+retired model taking down every tier that resolved and every process depending
+on them; the blast radius belongs to the tier, not to the daemon.
+
+The mark is reported wherever the mapping is: `status` and the model list name
+it, `doctor` reports it on a live run, and the startup log carries the same
+sentence once at WARN so an operator hears it before a turn fails. Where *every*
+tier is marked the daemon still starts and says so — `reload` is how the mapping
+is fixed, and a process that exited could not be reloaded.
+
+The mark is derived from the catalog every time a mapping is put in force, so
+fixing config.toml and reloading clears it. Nothing has to remember to.
 
 The client routes different work to different tiers, and background and
 summarization traffic runs on the cheapest one. An earlier rule required all four
@@ -922,8 +946,17 @@ it was written down, which meets that concern without making a first run fail on
 a file nobody had written yet. A tier written blank is still refused: an omission
 accepts the default, a blank is a mistake.
 
-If the catalog cannot be fetched, validation is skipped rather than failed. An
-unreachable catalog is not evidence that a model went away.
+If the catalog cannot be fetched, the check is skipped rather than failed:
+nothing is marked and nothing is substituted. An unreachable catalog is not
+evidence that a model went away.
+
+**A switch is refused rather than marked, and that is deliberate.** The two
+differ in what the operator has left. A `tiers.set` or a `accounts.select` is
+something they typed a moment ago: refusing it is immediate feedback, nothing
+that was serving stops serving, and the daemon stays where it was. A start and a
+reload have no such fallback — the reload is the move an operator has *after* a
+daemon came up with a tier marked — so those apply the mapping and mark what
+cannot serve.
 
 **The mapping belongs to an account.** A catalog is one account's menu (§7.0),
 so a single mapping is only ever right for the models every stored account has,

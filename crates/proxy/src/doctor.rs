@@ -399,6 +399,7 @@ async fn run_one(probe: &probe::Probe, fixture: &Fixture, backend: &Backend) -> 
                 requested: "claude-sonnet-5".to_owned(),
                 upstream: "gpt-5.6-terra".to_owned(),
                 account: None,
+                missing: None,
             }]),
             None,
         ),
@@ -686,6 +687,7 @@ fn run_environment(probe: &probe::Probe) -> Outcome {
             model: model.to_owned(),
             account: None,
             defaulted: true,
+            missing: None,
         })
         .collect();
 
@@ -829,6 +831,7 @@ async fn run_relay_live(probe: &probe::Probe, relay: &LiveRelay) -> Outcome {
                     requested: LIVE_RELAY_MODEL.to_owned(),
                     upstream: LIVE_RELAY_MODEL.to_owned(),
                     account: Some(relay.account.clone()),
+                    missing: None,
                 }],
                 None,
             ),
@@ -996,6 +999,7 @@ async fn run_relay_replay(probe: &probe::Probe, fixture: &Fixture) -> Outcome {
                     requested: model.clone(),
                     upstream: model,
                     account: Some(PROBE_ACCOUNT.to_owned()),
+                    missing: None,
                 }],
                 None,
             ),

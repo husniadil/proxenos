@@ -133,6 +133,7 @@ fn state(dir: &std::path::Path) -> (ControlState, Arc<Counting>) {
                 // question the accounts are listed to answer.
                 vec![proxenos::config::ResolvedTier {
                     defaulted: false,
+                    missing: None,
                     account: None,
                     tier: "opus",
                     model: "gpt-5.6-terra".to_owned(),
@@ -842,4 +843,97 @@ fn the_tier_column_is_absent_where_the_mapping_could_not_be_read() {
         vec!["gpt-5.6-terra", "272000 tokens"],
         "{rendered}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// §7.1 — a tier whose stated model the catalog no longer carries. The daemon
+// is up, the other tiers serve, and this is the only place an operator can see
+// which one is not.
+// ---------------------------------------------------------------------------
+
+/// The marked tier says so on its own row, and the row keeps the stated id.
+///
+/// The state column is where the eye is already looking, and a model that
+/// silently vanished from the mapping would hide the operator's own decision.
+#[test]
+fn a_missing_tier_is_marked_on_its_row_and_keeps_its_model() {
+    let rendered = proxenos::render::status_at(
+        &serde_json::json!({
+            "auth": { "connected": true, "account": "work-codex", "provider": "codex" },
+            "tiers": { "opus": "gpt-5.6-terra", "fable": "gpt-5.6-sol" },
+            "missing_tiers": ["fable"],
+        }),
+        NOW,
+    );
+
+    assert_eq!(
+        row(&rendered, "fable"),
+        vec!["fable", "gpt-5.6-sol", "missing from the catalog"],
+        "{rendered}"
+    );
+    assert_eq!(
+        row(&rendered, "opus"),
+        vec!["opus", "gpt-5.6-terra"],
+        "a tier that resolves is unmarked: {rendered}"
+    );
+    assert!(
+        rendered.contains("fable cannot serve"),
+        "and the consequence is said once beneath the table: {rendered}"
+    );
+    assert!(
+        rendered.contains("proxenos reload"),
+        "with the way out: {rendered}"
+    );
+}
+
+/// Every tier missing is said as such rather than as a list of four. A daemon
+/// answering on its port while refusing every turn is a different situation
+/// from one tier being down, and reads as one.
+#[test]
+fn every_tier_missing_says_no_tier_can_serve() {
+    let rendered = proxenos::render::status_at(
+        &serde_json::json!({
+            "auth": { "connected": true, "account": "work-codex", "provider": "codex" },
+            "tiers": { "opus": "gone-a", "fable": "gone-b" },
+            "missing_tiers": ["opus", "fable"],
+        }),
+        NOW,
+    );
+
+    assert!(rendered.contains("no tier can serve"), "{rendered}");
+}
+
+/// A mapping with nothing missing gains no line and no column.
+#[test]
+fn a_mapping_with_nothing_missing_says_nothing_about_it() {
+    let rendered = proxenos::render::status_at(
+        &serde_json::json!({
+            "auth": { "connected": true, "account": "work-codex", "provider": "codex" },
+            "tiers": { "opus": "gpt-5.6-terra" },
+            "missing_tiers": [],
+        }),
+        NOW,
+    );
+
+    assert!(!rendered.contains("missing from the catalog"), "{rendered}");
+    assert!(!rendered.contains("cannot serve"), "{rendered}");
+}
+
+/// The model list names the missing tier too. Its model has no row here at all
+/// — that is what being absent from the catalog means — so an operator looking
+/// for it would otherwise find silence.
+#[test]
+fn the_model_list_names_a_tier_whose_model_is_not_in_the_catalog() {
+    let rendered = proxenos::render::models(
+        &serde_json::json!({
+            "models": [{ "id": "gpt-5.6-terra", "context_window": 272_000 }],
+        }),
+        Some(&serde_json::json!({
+            "tiers": { "opus": "gpt-5.6-terra", "fable": "gpt-5.6-sol" },
+            "missing_tiers": ["fable"],
+        })),
+    );
+
+    assert!(rendered.contains("fable → gpt-5.6-sol"), "{rendered}");
+    assert!(rendered.contains("not in this catalog"), "{rendered}");
 }
