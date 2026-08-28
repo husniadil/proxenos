@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.17.0]
 
 - `accounts login --relogin` signs a declared profile back in. A grant whose
   access token has expired still reads as a grant, so the two paths the verb
