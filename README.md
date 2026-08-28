@@ -245,7 +245,9 @@ account: it runs that program's own login against a fresh directory and writes
 the `[profiles]` entry for you. On a machine with no browser to open — a
 container, or a session over ssh — add `--device-auth` and the client prints a
 URL and a code instead; it is a `codex login` flag, and `--provider anthropic`
-refuses it. Either way, `proxenos accounts` lists what is
+refuses it. When that account's grant later lapses, `--relogin` signs the
+declared profile back in against the directory `[profiles]` already names, and
+writes nothing. Either way, `proxenos accounts` lists what is
 there, `accounts rename OLD NEW` changes what this daemon calls one, and
 `accounts remove NAME` drops one — a key from the store, a declared profile
 from `[profiles]`, leaving the grant in its directory alone.

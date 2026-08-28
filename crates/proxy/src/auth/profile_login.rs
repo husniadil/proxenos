@@ -34,7 +34,12 @@ pub struct Command {
     pub program: String,
     pub arguments: Vec<String>,
     pub variable: &'static str,
-    pub directory: PathBuf,
+    /// The profile directory, and `None` for the stock profile: the one that
+    /// program uses with no variable set. Absent is not the same as naming the
+    /// stock directory — for Claude on macOS the two are different keychain
+    /// items (§8.4) — so the variable is left off rather than filled in with
+    /// where the stock profile is believed to be.
+    pub directory: Option<PathBuf>,
 }
 
 impl Command {
@@ -53,7 +58,7 @@ impl Command {
     /// there is a command to put it on.
     pub fn new(
         provider: Provider,
-        directory: PathBuf,
+        directory: Option<PathBuf>,
         program: Option<&Path>,
         device_auth: bool,
     ) -> Self {
@@ -92,12 +97,14 @@ impl Command {
     /// alternative — starting a client that wants a browser and a keyboard
     /// from something with neither — hangs with nothing said.
     pub fn line(&self) -> String {
-        let mut line = format!(
-            "{}={} {}",
-            self.variable,
-            quote(&self.directory.display().to_string()),
-            quote(&self.program)
-        );
+        let mut line = String::new();
+        if let Some(directory) = &self.directory {
+            line.push_str(&quote(self.variable));
+            line.push('=');
+            line.push_str(&quote(&directory.display().to_string()));
+            line.push(' ');
+        }
+        line.push_str(&quote(&self.program));
         for argument in &self.arguments {
             line.push(' ');
             line.push_str(&quote(argument));
@@ -133,13 +140,21 @@ pub struct Plan {
     /// What the account is filed under, which is what `accounts use` takes.
     pub name: String,
     pub provider: Provider,
-    /// The directory the client is pointed at, and the one that is declared.
-    pub directory: PathBuf,
+    /// The directory the client is pointed at, and — where anything is
+    /// declared — the one that is declared. `None` is the stock profile of
+    /// that program, which only a `--relogin` of a declaration naming no path
+    /// can be.
+    pub directory: Option<PathBuf>,
     pub command: Command,
     /// Whether the client was asked to print a URL and a code rather than open
     /// a browser, which the way back has to carry for the same reason it
     /// carries the provider.
     pub device_auth: bool,
+    /// Whether this is a profile the file already declares, being signed in
+    /// again. It changes what the run does at both ends: the client is run
+    /// whatever the profile currently reads as, and nothing is written
+    /// afterwards.
+    pub relogin: bool,
     /// How the grant is read back afterwards — the same read every turn
     /// makes, so a profile that passes here is one the daemon can serve.
     pub profile: crate::auth::borrowed::read::Profile,
@@ -147,6 +162,20 @@ pub struct Plan {
     /// stops the daemon looking for the stock profiles (§8.4) and what was
     /// being read has to be written down first.
     pub preserve_discovered: bool,
+}
+
+impl Plan {
+    /// The profile as a line names it.
+    ///
+    /// The stock profile has no directory to name — it is wherever the client
+    /// keeps one with no variable set — so it is named as what it is rather
+    /// than as a path nothing here resolved.
+    pub fn location(&self) -> String {
+        self.directory.as_ref().map_or_else(
+            || format!("the stock {} profile", self.provider.as_str()),
+            |directory| directory.display().to_string(),
+        )
+    }
 }
 
 /// Decide what an `accounts login` would do.
@@ -164,11 +193,18 @@ pub struct Plan {
 /// flag only one of the two clients has cannot be found out later. Passing an
 /// argument `claude auth login` does not take ends as that client's own usage
 /// error, about a spelling rather than about the choice.
+///
+/// `relogin` turns every one of those the other way up. It is the operator
+/// saying the profile is one the file already declares, whose grant has
+/// lapsed — so an undeclared name is the refusal, the provider has to be the
+/// one declared rather than a new choice, the directory is the declaration's
+/// and not `--path`'s, and there is nothing to write down afterwards.
 pub fn plan(
     name: &str,
     provider: Provider,
     path: Option<PathBuf>,
     device_auth: bool,
+    relogin: bool,
     config: &crate::config::Config,
     config_dir: &Path,
     keys: &[String],
@@ -180,20 +216,52 @@ pub fn plan(
              here with `--path`."
         );
     }
-    if config.profiles.contains_key(name) {
-        anyhow::bail!(
-            "`{name}` is already declared in `[profiles]`. Sign in to it with the command \
-             that profile's own client takes, or choose another name."
-        );
-    }
-    if keys.iter().any(|key| key == name) {
-        anyhow::bail!(
-            "`{name}` is already a stored key. Choose another name for the profile, or \
-             remove the key first with `proxenos accounts remove {name}`."
-        );
-    }
 
-    let directory = path.unwrap_or_else(|| directory(config_dir, name));
+    let directory = if relogin {
+        // The declaration is the whole of what a re-login is about, so it is
+        // read before anything else is decided from the command line.
+        let Some(declared) = config.profiles.get(name) else {
+            anyhow::bail!(
+                "`{name}` is not declared in `[profiles]`; drop `--relogin` to sign in to a \
+                 new profile."
+            );
+        };
+        if declared.provider != provider {
+            anyhow::bail!(
+                "`{name}` is declared in `[profiles]` as {declared}, not {asked}. Sign it in \
+                 again with `--provider {declared}`, or choose the name of a {asked} profile.",
+                declared = declared.provider.as_str(),
+                asked = provider.as_str()
+            );
+        }
+        if path.is_some() {
+            anyhow::bail!(
+                "`--path` cannot be given with `--relogin`: `{name}` already names its \
+                 directory in `[profiles]`, and that is the one the daemon reads. Change the \
+                 declaration to move it."
+            );
+        }
+        // Exactly what the daemon reads it as, `None` included: absent is the
+        // stock profile of that program, which is a different profile from one
+        // naming the stock directory (§8.4).
+        declared.path.clone()
+    } else {
+        if config.profiles.contains_key(name) {
+            anyhow::bail!(
+                "`{name}` is already declared in `[profiles]`. Sign it in again with \
+                 `proxenos accounts login {name} --provider {} --relogin`, or choose another \
+                 name.",
+                provider.as_str()
+            );
+        }
+        if keys.iter().any(|key| key == name) {
+            anyhow::bail!(
+                "`{name}` is already a stored key. Choose another name for the profile, or \
+                 remove the key first with `proxenos accounts remove {name}`."
+            );
+        }
+        Some(path.unwrap_or_else(|| directory(config_dir, name)))
+    };
     // Each provider's own configured path: the same key the daemon pokes that
     // client by (§8.4), so a login and a refresh cannot run different programs.
     let program = match provider {
@@ -204,12 +272,13 @@ pub fn plan(
 
     Ok(Plan {
         device_auth,
+        relogin,
         name: name.to_owned(),
         provider,
         profile: crate::auth::borrowed::read::Profile {
             name: name.to_owned(),
             provider,
-            config_dir: Some(directory.clone()),
+            config_dir: directory.clone(),
         },
         directory,
         command,
@@ -264,17 +333,27 @@ pub trait Environment {
 pub fn run(plan: &Plan, environment: &mut dyn Environment) -> anyhow::Result<()> {
     use anyhow::Context as _;
 
-    environment
-        .create_directory(&plan.directory)
-        .with_context(|| format!("could not create {}", plan.directory.display()))?;
+    // The stock profile has no directory of this side's choosing to make: the
+    // client keeps one wherever it keeps one, and creating a path nothing here
+    // resolved would be a guess.
+    if let Some(directory) = plan.directory.as_deref() {
+        environment
+            .create_directory(directory)
+            .with_context(|| format!("could not create {}", directory.display()))?;
+    }
 
     // A directory that already holds a grant is signed in, whoever signed it
     // in. Running the client over it would ask the operator to authenticate
     // something that already is — and this is also the path that adopts a
     // profile another tool made, and the path a second run takes after the
     // operator ran the printed line themselves.
-    if environment.grant_held(&plan.profile).is_ok() {
-        let said = format!("{} is already signed in", plan.directory.display());
+    //
+    // `--relogin` is the operator saying that read is not the question. A
+    // grant whose access token has expired still parses as one, so the adopt
+    // path would answer a lapsed profile with "already signed in" and change
+    // nothing; asked to sign in again, this runs the client.
+    if !plan.relogin && environment.grant_held(&plan.profile).is_ok() {
+        let said = format!("{} is already signed in", plan.location());
         environment.say(&said);
     } else {
         // A login wants a browser and a keyboard. Started from something with
@@ -286,26 +365,44 @@ pub fn run(plan: &Plan, environment: &mut dyn Environment) -> anyhow::Result<()>
         // `--device-auth` would, on a machine with a terminal but no browser,
         // start the client the way that hangs.
         if !environment.is_interactive() {
-            let said = format!(
-                "run this:\n\n  {}\n\nthen declare it with:\n\n  proxenos accounts login \
-                 {} --provider {} --path {}{}",
-                plan.command.line(),
-                plan.name,
-                plan.provider.as_str(),
-                plan.directory.display(),
-                if plan.device_auth {
-                    " --device-auth"
-                } else {
-                    ""
-                }
-            );
+            let device_auth = if plan.device_auth {
+                " --device-auth"
+            } else {
+                ""
+            };
+            // The way back is the whole command for the same reason either
+            // way, and for a re-login it is this same command: the entry is
+            // already in the file, so there is nothing for `--path` to declare
+            // and naming one would be refused.
+            let said = if plan.relogin {
+                format!(
+                    "run this:\n\n  {}\n\nthen run this again:\n\n  proxenos accounts \
+                     login {} --provider {} --relogin{}",
+                    plan.command.line(),
+                    plan.name,
+                    plan.provider.as_str(),
+                    device_auth
+                )
+            } else {
+                format!(
+                    "run this:\n\n  {}\n\nthen declare it with:\n\n  proxenos accounts \
+                     login {} --provider {} --path {}{}",
+                    plan.command.line(),
+                    plan.name,
+                    plan.provider.as_str(),
+                    // Always a directory on this branch: the stock profile is
+                    // reached only by `--relogin`, which took the other one.
+                    plan.location(),
+                    device_auth
+                )
+            };
             environment.say(&said);
             return Ok(());
         }
 
         let said = format!(
             "signing in to {} — {}",
-            plan.directory.display(),
+            plan.location(),
             plan.command.line()
         );
         environment.say(&said);
@@ -331,9 +428,19 @@ pub fn run(plan: &Plan, environment: &mut dyn Environment) -> anyhow::Result<()>
         if let Err(message) = environment.grant_held(&plan.profile) {
             anyhow::bail!(
                 "{} holds no grant, so nothing was declared: {message}",
-                plan.directory.display()
+                plan.location()
             );
         }
+    }
+
+    // A re-login has nothing to add to the file: the entry is already there,
+    // and everything this run changed is inside the profile directory. So the
+    // file is not read and not rewritten — a verb with nothing to write cannot
+    // damage what it never opened.
+    if plan.relogin {
+        let said = format!("`{}` signed in again; nothing to declare.", plan.name);
+        environment.say(&said);
+        return Ok(());
     }
 
     let mut document = environment.read_document()?;
@@ -361,7 +468,7 @@ pub fn run(plan: &Plan, environment: &mut dyn Environment) -> anyhow::Result<()>
         &document,
         &plan.name,
         plan.provider,
-        Some(plan.directory.as_path()),
+        plan.directory.as_deref(),
     )?;
     environment.write_document(updated)?;
 
@@ -409,10 +516,14 @@ impl Environment for Stdio {
     }
 
     fn run(&mut self, command: &Command) -> std::io::Result<Exit> {
-        let status = std::process::Command::new(&command.program)
-            .args(&command.arguments)
-            .env(command.variable, &command.directory)
-            .status()?;
+        let mut process = std::process::Command::new(&command.program);
+        process.args(&command.arguments);
+        // No variable for the stock profile: setting it to where that profile
+        // is believed to be would sign in to a different one (§8.4).
+        if let Some(directory) = &command.directory {
+            process.env(command.variable, directory);
+        }
+        let status = process.status()?;
         Ok(Exit {
             success: status.success(),
             description: status.to_string(),
@@ -482,7 +593,24 @@ mod tests {
             Provider::Codex,
             None,
             false,
+            false,
             &config(document),
+            Path::new("/config"),
+            &[],
+        )
+        .expect("a plan")
+    }
+
+    fn relogin_plan(name: &str) -> Plan {
+        plan(
+            name,
+            Provider::Codex,
+            None,
+            false,
+            true,
+            &config(&format!(
+                "[profiles.{name}]\nprovider = \"codex\"\npath = \"/profiles/{name}\"\n"
+            )),
             Path::new("/config"),
             &[],
         )
@@ -591,12 +719,12 @@ mod tests {
     fn a_profile_with_no_path_goes_under_this_daemons_directory() {
         let plan = plan_for("work", "port = 8787\n");
 
-        assert_eq!(plan.directory, Path::new("/config/profiles/work"));
-        assert_eq!(plan.command.directory, plan.directory);
         assert_eq!(
-            plan.profile.config_dir.as_deref(),
-            Some(plan.directory.as_path())
+            plan.directory.as_deref(),
+            Some(Path::new("/config/profiles/work"))
         );
+        assert_eq!(plan.command.directory, plan.directory);
+        assert_eq!(plan.profile.config_dir, plan.directory);
     }
 
     /// A name the file already declares is refused before anything runs.
@@ -608,6 +736,7 @@ mod tests {
             "work",
             Provider::Codex,
             None,
+            false,
             false,
             &config("[profiles.work]\nprovider = \"codex\"\n"),
             Path::new("/config"),
@@ -633,6 +762,7 @@ mod tests {
             Provider::Codex,
             None,
             false,
+            false,
             &config(""),
             Path::new("/config"),
             &["billing".to_owned()],
@@ -654,6 +784,7 @@ mod tests {
             Provider::Anthropic,
             None,
             true,
+            false,
             &config(""),
             Path::new("/config"),
             &[],
@@ -680,7 +811,8 @@ mod tests {
 
         run(&plan, &mut fake).expect("declared");
 
-        assert_eq!(fake.created, std::slice::from_ref(&plan.directory));
+        let directory = plan.directory.clone().expect("a directory");
+        assert_eq!(fake.created, std::slice::from_ref(&directory));
         assert_eq!(fake.runs, 1);
 
         let mut adopted = Fake {
@@ -690,7 +822,7 @@ mod tests {
 
         run(&plan, &mut adopted).expect("declared");
 
-        assert_eq!(adopted.created, [plan.directory]);
+        assert_eq!(adopted.created, [directory]);
         assert_eq!(adopted.runs, 0);
     }
 
@@ -759,6 +891,7 @@ mod tests {
             Provider::Codex,
             None,
             true,
+            false,
             &config("port = 8787\n"),
             Path::new("/config"),
             &[],
@@ -867,6 +1000,230 @@ mod tests {
         // not written down as one.
         assert!(!written.contains("[profiles.claude]"), "{written}");
         assert!(written.contains("[profiles.work]"), "{written}");
+    }
+
+    /// `--relogin` is about a profile that is already declared, so a name the
+    /// file does not declare is the one thing it cannot mean. The refusal says
+    /// which flag to drop rather than which name to choose: the operator asked
+    /// for the profile they have, and either the name is misspelled or the
+    /// flag is.
+    #[test]
+    fn relogin_on_a_name_the_file_does_not_declare_is_refused() {
+        let refusal = plan(
+            "work",
+            Provider::Codex,
+            None,
+            false,
+            true,
+            &config("port = 8787\n"),
+            Path::new("/config"),
+            &[],
+        )
+        .expect_err("not declared")
+        .to_string();
+
+        assert!(
+            refusal.contains("`work` is not declared in `[profiles]`"),
+            "{refusal}"
+        );
+        assert!(refusal.contains("drop `--relogin`"), "{refusal}");
+    }
+
+    /// The provider on the command line is checked against the declaration
+    /// rather than replacing it. A profile is one program's, and signing it in
+    /// with the other one's login would write a grant this daemon then reads
+    /// with the wrong reader — an account that cannot serve, from a command
+    /// that succeeded.
+    #[test]
+    fn relogin_with_a_provider_the_declaration_does_not_name_is_refused() {
+        let refusal = plan(
+            "work",
+            Provider::Anthropic,
+            None,
+            false,
+            true,
+            &config("[profiles.work]\nprovider = \"codex\"\n"),
+            Path::new("/config"),
+            &[],
+        )
+        .expect_err("the other provider")
+        .to_string();
+
+        assert!(
+            refusal.contains("declared in `[profiles]` as codex"),
+            "{refusal}"
+        );
+        assert!(refusal.contains("--provider codex"), "{refusal}");
+    }
+
+    /// `--path` says where a new profile goes, and a declared one is already
+    /// somewhere. Refused rather than silently ignored or silently obeyed: one
+    /// of those signs in to a directory the declaration does not name, and the
+    /// daemon would read the other.
+    #[test]
+    fn relogin_with_a_path_is_refused() {
+        let refusal = plan(
+            "work",
+            Provider::Codex,
+            Some(PathBuf::from("/elsewhere")),
+            false,
+            true,
+            &config("[profiles.work]\nprovider = \"codex\"\npath = \"/profiles/work\"\n"),
+            Path::new("/config"),
+            &[],
+        )
+        .expect_err("path with relogin")
+        .to_string();
+
+        assert!(
+            refusal.contains("`--path` cannot be given with `--relogin`"),
+            "{refusal}"
+        );
+    }
+
+    /// The directory is the declaration's, resolved exactly as the daemon
+    /// reads it — including the declaration that names no directory at all,
+    /// which is the stock profile and is not the same as one naming the stock
+    /// path (§8.4). So the variable is left off the command rather than filled
+    /// in with a guess.
+    #[test]
+    fn relogin_is_pointed_at_the_directory_the_declaration_names() {
+        let declared = plan(
+            "work",
+            Provider::Codex,
+            None,
+            false,
+            true,
+            &config("[profiles.work]\nprovider = \"codex\"\npath = \"/profiles/work\"\n"),
+            Path::new("/config"),
+            &[],
+        )
+        .expect("a plan");
+
+        assert_eq!(
+            declared.directory.as_deref(),
+            Some(Path::new("/profiles/work"))
+        );
+        assert_eq!(
+            declared.profile.config_dir.as_deref(),
+            Some(Path::new("/profiles/work"))
+        );
+        assert_eq!(
+            declared.command.line(),
+            "CODEX_HOME=/profiles/work codex login"
+        );
+
+        let stock = plan(
+            "codex",
+            Provider::Codex,
+            None,
+            false,
+            true,
+            &config("[profiles.codex]\nprovider = \"codex\"\n"),
+            Path::new("/config"),
+            &[],
+        )
+        .expect("a plan");
+
+        assert_eq!(stock.directory, None);
+        assert_eq!(stock.profile.config_dir, None);
+        assert_eq!(stock.command.line(), "codex login");
+    }
+
+    /// A grant that is held is not a grant that can be spent: an expired one
+    /// still parses as held, which is the whole reason this flag exists. So
+    /// `--relogin` runs the client whatever the profile reads as, and the
+    /// adopt path is not taken.
+    #[test]
+    fn relogin_runs_the_client_over_a_profile_that_already_holds_a_grant() {
+        let plan = relogin_plan("work");
+        let mut fake = Fake {
+            held: vec!["work".to_owned()],
+            held_after_run: vec!["work".to_owned()],
+            ..Fake::default()
+        };
+
+        run(&plan, &mut fake).expect("signed in again");
+
+        assert_eq!(fake.runs, 1);
+        assert!(
+            !fake.said().contains("is already signed in"),
+            "{}",
+            fake.said()
+        );
+    }
+
+    /// Nothing is written. The entry is already there, and the whole of what
+    /// this run changed is inside the profile directory — so the configuration
+    /// file is not read, not rewritten, and cannot be damaged by a verb that
+    /// had nothing to add to it.
+    #[test]
+    fn relogin_declares_nothing_and_says_so() {
+        let plan = relogin_plan("work");
+        let mut fake = Fake {
+            held_after_run: vec!["work".to_owned()],
+            discovered: vec![read::Profile {
+                name: "codex".to_owned(),
+                provider: Provider::Codex,
+                config_dir: None,
+            }],
+            ..Fake::default()
+        };
+
+        run(&plan, &mut fake).expect("signed in again");
+
+        assert_eq!(fake.written, None);
+        assert!(
+            fake.said()
+                .contains("`work` signed in again; nothing to declare."),
+            "{}",
+            fake.said()
+        );
+    }
+
+    /// What settles a re-login is the same read that settles a first one: a
+    /// profile holding no grant afterwards is a failed login, whatever the
+    /// client exited with, and it is said in the words the first one uses.
+    #[test]
+    fn relogin_that_left_no_grant_behind_is_a_refusal() {
+        let plan = relogin_plan("work");
+        let mut fake = Fake::default();
+
+        let refusal = run(&plan, &mut fake).expect_err("no grant").to_string();
+
+        assert!(
+            refusal.contains("/profiles/work holds no grant"),
+            "{refusal}"
+        );
+        assert_eq!(fake.written, None);
+    }
+
+    /// No terminal means the line is printed rather than run, here as
+    /// anywhere. The way back is this same command again — there is nothing to
+    /// declare afterwards, so pointing at `--path` would name a directory the
+    /// file already names and refuse.
+    #[test]
+    fn a_relogin_with_no_terminal_prints_its_own_way_back() {
+        let plan = relogin_plan("work");
+        let mut fake = Fake {
+            interactive: false,
+            ..Fake::default()
+        };
+
+        run(&plan, &mut fake).expect("printed");
+
+        let said = fake.said();
+        assert!(
+            said.contains("CODEX_HOME=/profiles/work codex login"),
+            "{said}"
+        );
+        assert!(
+            said.contains("proxenos accounts login work --provider codex --relogin"),
+            "{said}"
+        );
+        assert!(!said.contains("--path"), "{said}");
+        assert_eq!(fake.runs, 0);
+        assert_eq!(fake.written, None);
     }
 
     /// A file that already declares something is not the first declaration:

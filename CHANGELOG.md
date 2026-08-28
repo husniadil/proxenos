@@ -4,6 +4,19 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- `accounts login --relogin` signs a declared profile back in. A grant whose
+  access token has expired still reads as a grant, so the two paths the verb
+  had both did the wrong thing with a lapsed subscription: without the flag the
+  name was refused as already declared in `[profiles]`, and any way past that
+  refusal led to the profile being adopted and no client being run. `--relogin`
+  takes the declaration as the whole answer — the name must be declared, the
+  provider must be the one it is declared as, and the directory is the one it
+  names, so `--path` is refused and a declaration naming no path is signed in
+  as the stock profile, with no variable set. The client runs whatever the
+  profile currently reads as, and nothing is written afterwards.
+
 ## [0.16.1]
 
 - The two decisions `exec --account` left behind follow the account the session

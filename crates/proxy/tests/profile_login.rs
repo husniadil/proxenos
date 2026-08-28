@@ -22,7 +22,7 @@ use std::path::PathBuf;
 fn each_provider_is_signed_in_by_its_own_program() {
     let claude = Command::new(
         Provider::Anthropic,
-        PathBuf::from("/profiles/work"),
+        Some(PathBuf::from("/profiles/work")),
         None,
         false,
     );
@@ -32,7 +32,7 @@ fn each_provider_is_signed_in_by_its_own_program() {
 
     let codex = Command::new(
         Provider::Codex,
-        PathBuf::from("/profiles/work"),
+        Some(PathBuf::from("/profiles/work")),
         None,
         false,
     );
@@ -47,7 +47,12 @@ fn each_provider_is_signed_in_by_its_own_program() {
 /// that is the same command, on the line that is printed instead.
 #[test]
 fn device_auth_travels_on_the_codex_login_it_is_a_flag_of() {
-    let command = Command::new(Provider::Codex, PathBuf::from("/profiles/work"), None, true);
+    let command = Command::new(
+        Provider::Codex,
+        Some(PathBuf::from("/profiles/work")),
+        None,
+        true,
+    );
 
     assert_eq!(command.arguments, ["login", "--device-auth"]);
     assert_eq!(
@@ -63,7 +68,7 @@ fn device_auth_travels_on_the_codex_login_it_is_a_flag_of() {
 fn the_configured_client_is_the_one_that_is_run() {
     let command = Command::new(
         Provider::Anthropic,
-        PathBuf::from("/profiles/work"),
+        Some(PathBuf::from("/profiles/work")),
         Some(Path::new("/opt/homebrew/bin/claude")),
         false,
     );
@@ -85,6 +90,7 @@ fn the_configured_codex_client_is_the_one_that_is_run() {
         Provider::Codex,
         Some(PathBuf::from("/profiles/work")),
         false,
+        false,
         &config,
         Path::new("/config"),
         &[],
@@ -105,7 +111,7 @@ fn the_configured_codex_client_is_the_one_that_is_run() {
 fn the_printed_line_survives_a_path_with_a_space() {
     let command = Command::new(
         Provider::Anthropic,
-        PathBuf::from("/Users/me/Application Support/px/work"),
+        Some(PathBuf::from("/Users/me/Application Support/px/work")),
         None,
         false,
     );
@@ -114,6 +120,58 @@ fn the_printed_line_survives_a_path_with_a_space() {
         command.line(),
         "CLAUDE_CONFIG_DIR='/Users/me/Application Support/px/work' claude auth login"
     );
+}
+
+/// A grant that has lapsed is signed in again against the profile the file
+/// already declares. The directory is the declaration's, not `--path`'s and
+/// not a fresh one under this daemon's directory — a re-login that signed in
+/// somewhere else would leave the daemon reading the lapsed profile still.
+#[test]
+fn a_relogin_is_pointed_at_the_declared_directory() {
+    let config: Config =
+        toml::from_str("[profiles.work]\nprovider = \"codex\"\npath = \"/profiles/work\"\n")
+            .expect("the document parses");
+
+    let plan = proxenos::auth::profile_login::plan(
+        "work",
+        Provider::Codex,
+        None,
+        false,
+        true,
+        &config,
+        Path::new("/config"),
+        &[],
+    )
+    .expect("planned");
+
+    assert!(plan.relogin);
+    assert_eq!(plan.directory.as_deref(), Some(Path::new("/profiles/work")));
+    assert_eq!(plan.command.line(), "CODEX_HOME=/profiles/work codex login");
+}
+
+/// A declaration naming no directory is the stock profile of that program,
+/// which is not the same profile as one naming the stock directory (§8.4). So
+/// the login is run the way the daemon reads it: with no variable set at all.
+#[test]
+fn a_relogin_of_a_stock_profile_sets_no_variable() {
+    let config: Config = toml::from_str("[profiles.claude]\nprovider = \"anthropic\"\n")
+        .expect("the document parses");
+
+    let plan = proxenos::auth::profile_login::plan(
+        "claude",
+        Provider::Anthropic,
+        None,
+        false,
+        true,
+        &config,
+        Path::new("/config"),
+        &[],
+    )
+    .expect("planned");
+
+    assert_eq!(plan.directory, None);
+    assert_eq!(plan.profile.config_dir, None);
+    assert_eq!(plan.command.line(), "claude auth login");
 }
 
 /// What the file gains: a declared profile naming the directory that was

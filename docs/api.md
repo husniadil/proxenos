@@ -117,12 +117,14 @@ proxenos accounts   stored accounts, and which one serves turns (also
                     is on every row, since with two stored an unnamed one is
                     a guess
   accounts login   NAME --provider codex|anthropic [--path DIR]
-                    [--device-auth]
+                    [--device-auth] [--relogin]
                     sign in to a new profile of the owning program and
                     declare it; --path says where, absent it goes under this
                     daemon's own directory; --device-auth has the client print
                     a URL and a code instead of opening a browser, and is
-                    `codex` only
+                    `codex` only; --relogin signs a profile `[profiles]`
+                    already declares back in, against the directory it names,
+                    and declares nothing
   accounts add-key NAME --provider codex|anthropic
                     store an API key, read from stdin
   accounts use     NAME   serve every following turn as this account
@@ -187,6 +189,16 @@ A directory that is **already** signed in is adopted rather than signed in
 again: no client is run, and the entry is written. That is how a profile
 another tool made is taken on, and how a second run finishes the job after the
 operator ran the printed line themselves.
+
+`--relogin` is the case that adoption cannot serve: a declared profile whose
+grant has lapsed. An expired grant still reads as one, so without the flag the
+name is refused as already declared and with it the profile would be adopted
+and nothing would change. Given it, the name has to be declared already, the
+provider has to be the one it is declared as, the directory is the one
+`[profiles]` names — so `--path` is refused, and a declaration naming no path
+is the stock profile and is signed in with no variable set — and the client is
+run whatever the profile currently reads as. Nothing is written afterwards:
+the entry is already there, and the file is not opened at all.
 
 Where there is no terminal to answer a login's prompts, the command is printed
 instead of run — with the environment variable already on it — along with the

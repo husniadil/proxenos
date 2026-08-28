@@ -1952,6 +1952,19 @@ is how a profile made elsewhere is taken on. And where there is no terminal to
 answer the login's prompts, the command is printed with its variable already
 attached instead of being started somewhere it can only hang.
 
+Adoption is also what a declared profile whose grant has lapsed must not get,
+and that is the one case needing to be asked for: a grant whose access token
+has expired still reads as a grant, so the profile would be adopted and nothing
+would run. `--relogin` says the profile is one already declared and is to be
+signed in again. The declaration is then the whole of what is decided from —
+the name has to be in `[profiles]`, the provider stated has to be the one
+declared, and the directory is the one declared, resolved exactly as the daemon
+reads it, a declaration naming no path being the stock profile and signed in
+with no variable set. The client runs whatever the profile currently reads as,
+and the read afterwards settles it in the same words a first login uses. The
+file is never opened: the entry is already there, so a re-login has nothing to
+add and cannot damage what it did not write.
+
 A machine can have the terminal and still not the browser, which is a third
 case and the only one needing a flag: `--device-auth` asks the client to print
 a URL and a code to carry to a browser elsewhere. It is a flag of `codex login`

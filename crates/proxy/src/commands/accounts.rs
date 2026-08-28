@@ -101,6 +101,7 @@ async fn sign_in_profile(args: &cli::AccountLoginArgs) -> Result<()> {
         args.provider,
         args.path.clone(),
         args.device_auth,
+        args.relogin,
         &config,
         &proxenos::config::config_dir(),
         &keys,

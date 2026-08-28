@@ -169,6 +169,15 @@ pub struct AccountLoginArgs {
     /// refuses it: `claude auth login` has no equivalent.
     #[arg(long)]
     pub device_auth: bool,
+    /// Sign a profile this file already declares back in.
+    ///
+    /// For a grant that has lapsed. Without it a declared name is refused,
+    /// because declaring it twice leaves a file the daemon cannot start from;
+    /// with it the name has to be declared already, the provider has to be the
+    /// one it is declared as, and the directory is the declaration's — so
+    /// `--path` is refused, and nothing is written afterwards.
+    #[arg(long)]
+    pub relogin: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -535,6 +544,49 @@ mod tests {
             panic!("login should parse");
         };
         assert!(args.device_auth);
+    }
+
+    /// `--relogin` says the profile is one the file already declares, whose
+    /// grant has lapsed. It is off unless it is asked for: a login that
+    /// silently re-signed a declared name would hide the misspelling that is
+    /// the other reason to have typed one.
+    #[test]
+    fn a_profile_login_can_ask_to_sign_a_declared_profile_in_again() {
+        let cli = Cli::try_parse_from([
+            "proxenos",
+            "accounts",
+            "login",
+            "work",
+            "--provider",
+            "codex",
+            "--relogin",
+        ])
+        .unwrap();
+        let Command::Accounts(args) = cli.command else {
+            panic!("accounts should parse");
+        };
+        let Some(AccountsAction::Login(args)) = args.action else {
+            panic!("login should parse");
+        };
+        assert!(args.relogin);
+        assert_eq!(args.path, None);
+
+        let cli = Cli::try_parse_from([
+            "proxenos",
+            "accounts",
+            "login",
+            "work",
+            "--provider",
+            "codex",
+        ])
+        .unwrap();
+        let Command::Accounts(args) = cli.command else {
+            panic!("accounts should parse");
+        };
+        let Some(AccountsAction::Login(args)) = args.action else {
+            panic!("login should parse");
+        };
+        assert!(!args.relogin);
     }
 
     /// Top-level `login` is gone with the flag pair that told its two halves
