@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.18.1]
 
 - A Claude profile on macOS is read from the keychain item **and then** from
   `.credentials.json` beside it. A daemon started as a system-domain
