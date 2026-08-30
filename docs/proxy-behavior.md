@@ -1740,13 +1740,36 @@ never writes. On Linux there is no keychain and the same JSON sits in
 has looked, and inventing a location would produce a profile that reads as
 "never signed in" for a reason of our own making.
 
+**On macOS the file is read too, when the keychain says nothing.** A macOS
+Claude profile is *two* places, tried in order: the keychain item, then
+`.credentials.json` inside the same profile directory the Linux rule names.
+Both a missing item (`security` exiting 44) and a keychain that cannot be read
+at all lead to the file. The second case is why the fallback exists: a daemon
+started as a system-domain LaunchDaemon for an account nobody logs into has no
+security session, so the item reads as absent; give it one with `SessionCreate`
+and the login keychain is locked instead, so the read fails outright. Unlocking
+it wants the account password at every boot, which is not a thing a daemon can
+be asked for. The file holds the same JSON and that daemon can read it.
+
+**The keychain's failure is set aside, never dropped.** Where the file answered,
+it is logged at `debug` — the grant was found, and nothing is wrong that an
+operator has to act on. Where neither place held a grant, it is carried into the
+refusal, which already names both places and the remedy: a keychain this process
+cannot reach and a profile nobody signed into want different answers, and
+reporting the second for the first sends the operator to sign in again against a
+keychain that will refuse the next read exactly as it refused this one. The
+label a listing shows names both places for the same reason.
+
 **What is measured, and where.** Everything above about the keychain — the item
 names, the digest over the value verbatim, the sixteen reads per client run,
 the blanked item — was observed on macOS, on signed-in profiles, and the tests
 that encode it run there. The Linux layout comes from the client rather than
 from a machine anyone here ran: the code path is exercised end to end against a
 reader that hands it those bytes, so what is unproven is the location, not the
-parsing. On any other platform the daemon **starts** and refuses at the first
+parsing. The macOS fallback reads that same unmeasured location: what is
+measured there is the fall-through — the real reader is asked for an item that
+does not exist and comes back with the file — and not that the client writes
+that file on macOS rather than some other one. On any other platform the daemon **starts** and refuses at the first
 profile that needs a location, naming the platform; a configuration holding
 only keys neither needs one nor is refused. Refusing at startup would refuse a
 valid configuration, and guessing a location would report a profile as never

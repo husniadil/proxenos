@@ -421,16 +421,18 @@ fn the_service_digest_is_taken_over_the_value_verbatim() {
     );
 }
 
-/// On macOS the grant is a keychain item, and the default profile is the
-/// unset-variable one.
+/// On macOS the grant is a keychain item with the file beside it, and the
+/// default profile is the unset-variable one. The file is the same one Linux
+/// reads: a daemon that cannot reach the keychain still has somewhere to look.
 #[test]
-fn a_macos_profile_reads_from_the_keychain() {
+fn a_macos_profile_reads_from_the_keychain_then_the_file() {
     let home = Path::new("/Users/husni");
 
     assert_eq!(
         borrowed::claude_source(borrowed::Host::MacOs, None, home),
-        borrowed::ClaudeSource::Keychain {
-            service: "Claude Code-credentials".to_owned()
+        borrowed::ClaudeSource::KeychainThenFile {
+            service: "Claude Code-credentials".to_owned(),
+            path: PathBuf::from("/Users/husni/.claude/.credentials.json"),
         }
     );
     assert_eq!(
@@ -439,10 +441,45 @@ fn a_macos_profile_reads_from_the_keychain() {
             Some(Path::new("/Users/husni/.claude")),
             home
         ),
-        borrowed::ClaudeSource::Keychain {
-            service: "Claude Code-credentials-0b88b8e3".to_owned()
+        borrowed::ClaudeSource::KeychainThenFile {
+            service: "Claude Code-credentials-0b88b8e3".to_owned(),
+            path: PathBuf::from("/Users/husni/.claude/.credentials.json"),
         }
     );
+}
+
+/// And the two places are tried in that order, which is what the label says
+/// and what the reader is asked for.
+#[test]
+fn a_macos_claude_source_names_the_keychain_first_and_the_file_second() {
+    let home = Path::new("/Users/husni");
+    let source = borrowed::source(Provider::Anthropic, borrowed::Host::MacOs, None, home);
+
+    assert_eq!(
+        source.places(),
+        vec![
+            borrowed::Source::Claude(borrowed::ClaudeSource::Keychain {
+                service: "Claude Code-credentials".to_owned()
+            }),
+            borrowed::Source::Claude(borrowed::ClaudeSource::File {
+                path: PathBuf::from("/Users/husni/.claude/.credentials.json")
+            }),
+        ]
+    );
+    assert_eq!(
+        source.label(),
+        "keychain item `Claude Code-credentials`, else /Users/husni/.claude/.credentials.json"
+    );
+}
+
+/// Every other source is one place, and `places` hands it back unchanged.
+#[test]
+fn a_single_place_source_is_its_own_only_place() {
+    let source = borrowed::Source::Codex {
+        auth_json: PathBuf::from("/profiles/work/auth.json"),
+    };
+
+    assert_eq!(source.places(), vec![source]);
 }
 
 /// On Linux there is no keychain, and the grant sits in the profile directory
@@ -519,8 +556,9 @@ fn a_profile_with_no_path_is_the_stock_one() {
     );
     assert_eq!(
         borrowed::source(Provider::Anthropic, borrowed::Host::MacOs, None, home),
-        borrowed::Source::Claude(borrowed::ClaudeSource::Keychain {
-            service: "Claude Code-credentials".to_owned()
+        borrowed::Source::Claude(borrowed::ClaudeSource::KeychainThenFile {
+            service: "Claude Code-credentials".to_owned(),
+            path: PathBuf::from("/Users/husni/.claude/.credentials.json"),
         })
     );
 }
@@ -553,21 +591,59 @@ use proxenos::auth::borrowed::read;
 use proxenos::error::ProxyError;
 use std::collections::HashMap;
 
-struct FakeReader(HashMap<String, String>);
+/// A reader over what each *place* holds, keyed by that place's own label.
+///
+/// A place rather than a source, because a macOS Claude source is two of them
+/// and the whole question below is which one answered.
+struct FakeReader {
+    held: HashMap<String, String>,
+    /// Places that refuse, and what they refuse with. A keychain no daemon can
+    /// reach is this, and it is not the same as one holding nothing.
+    refusing: HashMap<String, String>,
+}
 
 impl FakeReader {
+    /// Every place of `source` holds `raw`. The keychain answers first, so on
+    /// macOS this is the case where the keychain has it.
     fn holding(source: &borrowed::Source, raw: &str) -> Self {
-        Self(HashMap::from([(source.label(), raw.to_owned())]))
+        Self {
+            held: source
+                .places()
+                .iter()
+                .map(|place| (place.label(), raw.to_owned()))
+                .collect(),
+            refusing: HashMap::new(),
+        }
     }
 
     fn empty() -> Self {
-        Self(HashMap::new())
+        Self {
+            held: HashMap::new(),
+            refusing: HashMap::new(),
+        }
+    }
+
+    /// One named place holds `raw`, and nothing else does.
+    fn place_holding(place: &borrowed::Source, raw: &str) -> Self {
+        Self {
+            held: HashMap::from([(place.label(), raw.to_owned())]),
+            refusing: HashMap::new(),
+        }
+    }
+
+    /// One named place fails to answer at all.
+    fn refusing(mut self, place: &borrowed::Source, reason: &str) -> Self {
+        self.refusing.insert(place.label(), reason.to_owned());
+        self
     }
 }
 
 impl read::GrantReader for FakeReader {
     fn read(&self, source: &borrowed::Source) -> Result<Option<String>, ProxyError> {
-        Ok(self.0.get(&source.label()).cloned())
+        if let Some(reason) = self.refusing.get(&source.label()) {
+            return Err(ProxyError::authentication(reason.to_owned()));
+        }
+        Ok(self.held.get(&source.label()).cloned())
     }
 }
 
@@ -677,6 +753,137 @@ fn an_unreadable_source_names_the_store() {
     );
 }
 
+// --- a macOS Claude profile: the keychain, then the file ------------------
+//
+// A daemon started as a system-domain LaunchDaemon for a headless account has
+// no security session, so `security` says the item is not there (exit 44); give
+// it one and the login keychain is locked instead, so the read fails outright.
+// Unlocking it wants the account password at every boot. The file the client
+// falls back to on a host with no keychain holds the same JSON and is readable
+// by that daemon, so it is the second place, and both failures at the first
+// place lead to it.
+
+/// The two places a macOS Claude source names, in order.
+fn places_of(profile: &read::Profile) -> (borrowed::Source, borrowed::Source) {
+    let places = profile
+        .source(borrowed::Host::MacOs, Path::new(HOME))
+        .places();
+    let [keychain, file] = <[borrowed::Source; 2]>::try_from(places)
+        .expect("a macOS Claude source is the keychain and the file beside it");
+    (keychain, file)
+}
+
+/// The keychain answers, and that is the whole read. The file holds nothing
+/// here, so a grant coming back at all is the keychain's.
+#[test]
+fn a_macos_claude_grant_comes_from_the_keychain_where_it_answers() {
+    let profile = profile("personal", Provider::Anthropic, None);
+    let (keychain, _) = places_of(&profile);
+
+    let grant = read_grant(
+        &FakeReader::place_holding(&keychain, &claude_blob(4_000_000_000, 4_100_000_000)),
+        &profile,
+    )
+    .expect("the keychain holds it");
+
+    assert_eq!(grant.credentials.access_token, "sk-ant-oat01-borrowed");
+    assert_eq!(grant.plan.as_deref(), Some("max"));
+}
+
+/// No item — `security` exiting 44, which is what a daemon with no security
+/// session gets — and the file beside it holds the grant. Parsed exactly as
+/// the keychain's bytes are.
+#[test]
+fn an_absent_keychain_item_falls_through_to_the_file() {
+    let profile = profile("personal", Provider::Anthropic, None);
+    let (_, file) = places_of(&profile);
+
+    let grant = read_grant(
+        &FakeReader::place_holding(&file, &claude_blob(4_000_000_000, 4_100_000_000)),
+        &profile,
+    )
+    .expect("the file holds it");
+
+    assert_eq!(grant.credentials.access_token, "sk-ant-oat01-borrowed");
+    assert_eq!(grant.credentials.expires_at, Some(4_000_000_000));
+    assert_eq!(grant.refresh_token_expires_at, Some(4_100_000_000));
+}
+
+/// A keychain that *fails* is the case a locked login keychain produces, and
+/// it must reach the file too. Read wrong, the daemon this exists for refuses
+/// every turn while the grant sits readable beside the item.
+#[test]
+fn a_keychain_that_cannot_be_read_falls_through_to_the_file() {
+    let profile = profile("personal", Provider::Anthropic, None);
+    let (keychain, file) = places_of(&profile);
+
+    let grant = read_grant(
+        &FakeReader::place_holding(&file, &claude_blob(4_000_000_000, 4_100_000_000))
+            .refusing(&keychain, "could not read keychain item `x`: "),
+        &profile,
+    )
+    .expect("the file holds it");
+
+    assert_eq!(grant.credentials.access_token, "sk-ant-oat01-borrowed");
+    assert_eq!(grant.plan.as_deref(), Some("max"));
+}
+
+/// Neither place holds anything: one refusal, naming both, and carrying what
+/// the keychain said. Dropping the keychain's failure would send an operator
+/// to sign in again against a keychain that will refuse the next read exactly
+/// as it refused this one.
+#[test]
+fn a_grant_in_neither_place_names_both_and_carries_the_keychain_failure() {
+    let profile = profile("personal", Provider::Anthropic, None);
+    let (keychain, file) = places_of(&profile);
+
+    let refusal = read_grant(
+        &FakeReader::empty().refusing(&keychain, "SecKeychainSearchCopyNext: locked"),
+        &profile,
+    )
+    .expect_err("nothing is there")
+    .to_string();
+
+    assert!(
+        refusal.contains("keychain item `Claude Code-credentials`"),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains(&file.label()),
+        "the file is the other place, and it is not named: {refusal}"
+    );
+    assert!(refusal.contains("holds no grant"), "{refusal}");
+    assert!(refusal.contains("`claude`"), "{refusal}");
+    assert!(
+        refusal.contains("SecKeychainSearchCopyNext: locked"),
+        "the keychain's own failure is swallowed: {refusal}"
+    );
+}
+
+/// And where the keychain simply had nothing to say, there is no failure to
+/// carry: the refusal is the plain one, still naming both places.
+#[test]
+fn a_grant_in_neither_place_says_nothing_about_a_keychain_that_did_not_fail() {
+    let profile = profile("personal", Provider::Anthropic, None);
+
+    let refusal = read_grant(&FakeReader::empty(), &profile)
+        .expect_err("nothing is there")
+        .to_string();
+
+    assert!(
+        refusal.contains("keychain item `Claude Code-credentials`"),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("/Users/husni/.claude/.credentials.json"),
+        "{refusal}"
+    );
+    assert!(
+        !refusal.contains("could not be read"),
+        "nothing failed, and the refusal says something did: {refusal}"
+    );
+}
+
 // --- the declared profiles as a store -------------------------------------
 
 use proxenos::auth::borrowed::store::BorrowedStore;
@@ -692,19 +899,21 @@ fn store(
 ) -> BorrowedStore {
     let held = contents
         .iter()
-        .map(|(profile, raw)| {
-            (
-                profile
-                    .source(borrowed::Host::MacOs, Path::new(HOME))
-                    .label(),
-                raw.clone(),
-            )
+        .flat_map(|(profile, raw)| {
+            profile
+                .source(borrowed::Host::MacOs, Path::new(HOME))
+                .places()
+                .into_iter()
+                .map(move |place| (place.label(), raw.clone()))
         })
         .collect();
 
     BorrowedStore::new(
         profiles,
-        Box::new(FakeReader(held)),
+        Box::new(FakeReader {
+            held,
+            refusing: HashMap::new(),
+        }),
         Ok(proxenos::auth::borrowed::store::Platform {
             host: borrowed::Host::MacOs,
             home: PathBuf::from(HOME),
@@ -1874,6 +2083,29 @@ fn a_keychain_item_that_is_not_there_reads_as_absent() {
         .expect("absent is an answer");
 
     assert_eq!(read, None);
+}
+
+/// The real reader, on the compound source: no such item, and the file beside
+/// it holds the grant. This is the whole fix on the machine it exists for,
+/// exercised against a real `security` and a real file.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_host_reader_falls_through_a_missing_keychain_item_to_the_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join(".credentials.json");
+    let raw = claude_blob(4_000_000_000, 4_100_000_000);
+    std::fs::write(&path, &raw).expect("written");
+
+    let read = HostReader
+        .read(&borrowed::Source::Claude(
+            borrowed::ClaudeSource::KeychainThenFile {
+                service: "proxenos-no-such-item-9f3c2a".to_owned(),
+                path,
+            },
+        ))
+        .expect("the file is readable");
+
+    assert_eq!(read.as_deref(), Some(raw.as_str()));
 }
 
 // --- what one refresh sweep is allowed to spend ---------------------------

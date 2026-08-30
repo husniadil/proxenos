@@ -4,6 +4,21 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- A Claude profile on macOS is read from the keychain item **and then** from
+  `.credentials.json` beside it. A daemon started as a system-domain
+  LaunchDaemon for a headless account cannot reach a login keychain: with no
+  security session `security` reports the item as absent, and with
+  `SessionCreate` the keychain is locked instead and the read fails outright —
+  and unlocking it wants the account password at every boot. Both answers now
+  fall through to the file the client writes where there is no keychain, which
+  is the same file Linux has always read. The keychain's failure is not
+  swallowed: where the file answered it is logged at `debug`, and where neither
+  place held a grant the refusal carries it, on top of naming both places and
+  the remedy — a keychain this process cannot reach and a profile nobody signed
+  into want different answers. The source a listing shows names both places.
+
 ## [0.18.0]
 
 - A tier mapped to a model the account's catalog no longer carries no longer

@@ -303,7 +303,7 @@ pub enum Host {
 }
 
 /// Where a Claude profile's grant is read from.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClaudeSource {
     /// A macOS keychain item, read by spawning `security`. Never through
     /// Security.framework: the item's ACL trusts that binary, and a process
@@ -312,6 +312,19 @@ pub enum ClaudeSource {
     Keychain { service: String },
     /// A file inside the profile directory, `0600`.
     File { path: PathBuf },
+    /// macOS: the keychain item, and the file beside it where the keychain
+    /// cannot answer.
+    ///
+    /// Not a preference between two stores — the item is where the client puts
+    /// the grant, and the file is what it falls back to — but a daemon reading
+    /// the item needs a login keychain that is unlocked in a security session,
+    /// and a system-domain LaunchDaemon for a headless account has neither. It
+    /// gets "item not found" with no session, and an unexplained failure with
+    /// one, and the only remedy at the keychain is typing the account password
+    /// at every boot. The file holds the same JSON, so it is read when the
+    /// keychain says nothing — whether that is an absent item or a refusal
+    /// (§8.4).
+    KeychainThenFile { service: String, path: PathBuf },
 }
 
 /// Where to look for the grant of the profile launched with `config_dir`.
@@ -319,15 +332,15 @@ pub enum ClaudeSource {
 /// `None` is the default profile, launched with `CLAUDE_CONFIG_DIR` unset, and
 /// `home` is where that profile lives.
 pub fn claude_source(host: Host, config_dir: Option<&Path>, home: &Path) -> ClaudeSource {
+    let path = config_dir
+        .map_or_else(|| home.join(CLAUDE_DEFAULT_PROFILE), Path::to_path_buf)
+        .join(CLAUDE_CREDENTIALS_FILE);
     match host {
-        Host::MacOs => ClaudeSource::Keychain {
+        Host::MacOs => ClaudeSource::KeychainThenFile {
             service: claude_service(config_dir.map(|dir| dir.to_string_lossy()).as_deref()),
+            path,
         },
-        Host::Linux => ClaudeSource::File {
-            path: config_dir
-                .map_or_else(|| home.join(CLAUDE_DEFAULT_PROFILE), Path::to_path_buf)
-                .join(CLAUDE_CREDENTIALS_FILE),
-        },
+        Host::Linux => ClaudeSource::File { path },
     }
 }
 
@@ -344,7 +357,7 @@ pub const CODEX_CREDENTIALS_FILE: &str = "auth.json";
 /// inside the directory, the other is a keychain item named *after* the
 /// directory on macOS and a file on Linux. Resolving that here keeps the
 /// difference in one place, where §8.4 can be checked against it.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Source {
     Codex { auth_json: PathBuf },
     Claude(ClaudeSource),
@@ -410,6 +423,35 @@ impl Source {
             Self::Claude(ClaudeSource::Keychain { service }) => {
                 format!("keychain item `{service}`")
             }
+            // Both, in the order they are tried. An operator whose keychain
+            // cannot be reached has to know the file was the other candidate,
+            // and one whose file is missing has to know the item was tried
+            // first; naming one of the two would send them to the wrong place
+            // half the time.
+            Self::Claude(ClaudeSource::KeychainThenFile { service, path }) => {
+                format!("keychain item `{service}`, else {}", path.display())
+            }
+        }
+    }
+
+    /// The readable locations this source stands for, in the order they are
+    /// tried.
+    ///
+    /// One for every source but the macOS Claude one, which is two. Splitting
+    /// it here rather than inside the reader is what keeps the reader a thing
+    /// that reads one place: the ordering, and what a failure at the first
+    /// place means, are decisions, and decisions in this module are made
+    /// without I/O.
+    #[must_use]
+    pub fn places(&self) -> Vec<Self> {
+        match self {
+            Self::Claude(ClaudeSource::KeychainThenFile { service, path }) => vec![
+                Self::Claude(ClaudeSource::Keychain {
+                    service: service.clone(),
+                }),
+                Self::Claude(ClaudeSource::File { path: path.clone() }),
+            ],
+            other => vec![other.clone()],
         }
     }
 }

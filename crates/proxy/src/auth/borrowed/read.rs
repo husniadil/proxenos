@@ -80,6 +80,23 @@ impl GrantReader for HostReader {
             Source::Codex { auth_json } => read_file(auth_json),
             Source::Claude(ClaudeSource::File { path }) => read_file(path),
             Source::Claude(ClaudeSource::Keychain { service }) => read_keychain(service),
+            // `grant` splits a compound source into its places before reading,
+            // so this arm answers only a caller that read the source whole. It
+            // walks the same order, and the keychain's failure goes no further
+            // than the log — the refusal that carries it is `grant`'s to word.
+            Source::Claude(ClaudeSource::KeychainThenFile { service, path }) => {
+                match read_keychain(service) {
+                    Ok(Some(raw)) => Ok(Some(raw)),
+                    Ok(None) => read_file(path),
+                    Err(error) => {
+                        tracing::debug!(
+                            %error,
+                            "the keychain could not be read; trying the file beside it"
+                        );
+                        read_file(path)
+                    }
+                }
+            }
         }
     }
 }
@@ -147,10 +164,24 @@ pub fn grant(
     let source = profile.source(host, home);
     let label = source.label();
 
-    let Some(raw) = reader.read(&source)? else {
-        return Err(ProxyError::authentication(
-            BorrowedError::NotSignedIn(label, remedy(profile.provider)).to_string(),
-        ));
+    let raw = match locate(reader, &source)? {
+        Located::Found(raw) => raw,
+        Located::Absent { carried } => {
+            let mut message =
+                BorrowedError::NotSignedIn(label, remedy(profile.provider)).to_string();
+            // The keychain's failure is not the answer — the file beside it
+            // could have held the grant — but where nothing held it, it is the
+            // difference between a profile nobody signed into and a keychain
+            // this process cannot reach. Silently dropping it would send an
+            // operator to sign in again against a keychain that will refuse
+            // the next read exactly as it refused this one.
+            if let Some(carried) = carried {
+                message.push_str(&format!(
+                    " The keychain could not be read either: {carried}"
+                ));
+            }
+            return Err(ProxyError::authentication(message));
+        }
     };
 
     match profile.provider {
@@ -176,6 +207,55 @@ pub fn grant(
             })
         }
     }
+}
+
+/// What the walk over a source's places came back with.
+enum Located {
+    Found(String),
+    /// Nothing was there. `carried` is the failure of an earlier place that
+    /// was tried and could not answer — the macOS keychain, in the only case
+    /// that has one.
+    Absent {
+        carried: Option<String>,
+    },
+}
+
+/// Read the first place that answers, in the order the source names them.
+///
+/// A single-place source is the whole of the old rule: absent is an answer,
+/// and a failure is reported. What the macOS Claude source adds is that a
+/// keychain which cannot be read is not the end of the attempt — a daemon
+/// with no security session, or with a locked login keychain, fails there
+/// while the file beside it holds the same JSON — so the failure is set aside
+/// and the file is asked. It is set aside, not discarded: logged where the
+/// file answered, carried into the refusal where nothing did.
+///
+/// The **last** place's failure is still reported. There is nothing left to
+/// try, and a read that failed is not a profile that was never signed into.
+fn locate(reader: &dyn GrantReader, source: &Source) -> Result<Located, ProxyError> {
+    let places = source.places();
+    let last = places.len().saturating_sub(1);
+    let mut carried: Option<String> = None;
+
+    for (index, place) in places.iter().enumerate() {
+        match reader.read(place) {
+            Ok(Some(raw)) => {
+                if let Some(carried) = &carried {
+                    tracing::debug!(
+                        error = carried,
+                        place = %place.label(),
+                        "the keychain could not be read; the grant came from the file beside it"
+                    );
+                }
+                return Ok(Located::Found(raw));
+            }
+            Ok(None) => {}
+            Err(error) if index == last => return Err(error),
+            Err(error) => carried = Some(error.message),
+        }
+    }
+
+    Ok(Located::Absent { carried })
 }
 
 fn as_error(error: BorrowedError) -> ProxyError {
