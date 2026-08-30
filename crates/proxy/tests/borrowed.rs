@@ -1101,6 +1101,56 @@ fn a_named_profile_answers_regardless_of_the_selection() {
     );
 }
 
+/// A declared profile whose store cannot be read says why, and still names
+/// the store that was tried.
+///
+/// The reason is the whole value of the row: `account_id`, `plan` and every
+/// expiry are absent either way, and absent alone does not separate a profile
+/// nobody signed into from one this process cannot reach.
+#[test]
+fn an_unreadable_profile_is_listed_with_the_reason_and_its_source() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let empty = profile("empty", Provider::Codex, Some("/profiles/empty"));
+    let store = store(dir.path(), vec![empty], &[]);
+
+    let listed = store.accounts().expect("lists");
+    let row = listed.iter().find(|it| it.name == "empty").expect("listed");
+
+    let reason = row.unreadable.as_deref().expect("a reason");
+    assert!(
+        reason.contains("/profiles/empty/auth.json"),
+        "was: {reason}"
+    );
+    assert!(reason.contains("holds no grant"), "was: {reason}");
+    assert_eq!(
+        row.source.as_deref(),
+        Some("/profiles/empty/auth.json"),
+        "the store that was tried is still named",
+    );
+    assert_eq!(row.account_id, None);
+    assert_eq!(row.expires_at, None);
+}
+
+/// A readable profile carries no reason, and the field is absent from the
+/// payload rather than present and null. A reader that took `null` for a
+/// reason would report every healthy account as unreadable.
+#[test]
+fn a_readable_profile_carries_no_unreadable_reason() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = profile("work", Provider::Codex, Some("/profiles/work"));
+    let store = store(dir.path(), vec![work.clone()], &[(&work, a_codex_grant())]);
+
+    let listed = store.accounts().expect("lists");
+    let row = listed.iter().find(|it| it.name == "work").expect("listed");
+
+    assert_eq!(row.unreadable, None);
+    let payload = serde_json::to_value(row).expect("serializes");
+    assert!(
+        payload.get("unreadable").is_none(),
+        "the key is present on a readable row: {payload}"
+    );
+}
+
 // --- asking the owning program to refresh ---------------------------------
 
 use proxenos::auth::borrowed::poke;

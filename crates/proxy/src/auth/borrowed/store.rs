@@ -259,7 +259,11 @@ impl AccountStore for BorrowedStore {
     ///
     /// A profile whose grant cannot be read is still listed. It is a profile
     /// the operator declared, and dropping it would read as one they never
-    /// wrote down; what is unknown about it is reported absent instead.
+    /// wrote down; what is unknown about it is reported absent instead — and
+    /// `unreadable` says why it is absent, because absence alone leaves the
+    /// reader to guess between a profile nobody signed into, a store this
+    /// process cannot reach, and a file holding something that is not a
+    /// grant. Those want different answers (§8.4).
     fn accounts(&self) -> Result<Vec<Account>, ProxyError> {
         let selected = self.selected().map(|profile| profile.name).ok();
         let recorded = self.selection.recorded_account_id()?;
@@ -269,7 +273,10 @@ impl AccountStore for BorrowedStore {
             .visible()
             .into_iter()
             .map(|profile| {
-                let grant = self.grant_for(&profile).ok();
+                // The refusal is kept rather than dropped: it is the only
+                // thing that says why the rest of this row is empty.
+                let read = self.grant_for(&profile);
+                let grant = read.as_ref().ok();
                 Account {
                     // The operator's own entry, or one this daemon found
                     // because none were written down (§8.4).
@@ -289,16 +296,14 @@ impl AccountStore for BorrowedStore {
                     kind: "grant",
                     provider: profile.provider.as_str(),
                     key_flavour: None,
-                    account_id: grant
-                        .as_ref()
-                        .and_then(|it| it.credentials.account_id.clone()),
-                    email: grant.as_ref().and_then(|it| it.email.clone()),
-                    plan: grant.as_ref().and_then(|it| it.plan.clone()),
-                    expires_at: grant.as_ref().and_then(|it| it.credentials.expires_at),
+                    account_id: grant.and_then(|it| it.credentials.account_id.clone()),
+                    email: grant.and_then(|it| it.email.clone()),
+                    plan: grant.and_then(|it| it.plan.clone()),
+                    expires_at: grant.and_then(|it| it.credentials.expires_at),
                     // Claude only, and read from the same item the client
                     // counts down from. Absent on a Codex profile because
                     // nothing in `auth.json` says it (§8.4).
-                    login_expires_at: grant.as_ref().and_then(|it| it.refresh_token_expires_at),
+                    login_expires_at: grant.and_then(|it| it.refresh_token_expires_at),
                     selected: selected.as_deref() == Some(profile.name.as_str()),
                     // Only against something recorded, and only where the
                     // profile can be read now: one that cannot be read has not
@@ -306,9 +311,13 @@ impl AccountStore for BorrowedStore {
                     identity_changed: selected.as_deref() == Some(profile.name.as_str())
                         && recorded.is_some()
                         && grant
-                            .as_ref()
                             .and_then(|it| it.credentials.account_id.as_ref())
                             .is_some_and(|account_id| recorded.as_ref() != Some(account_id)),
+                    // The refusal's own words. They name the store and the
+                    // remedy and carry nothing out of it: `BorrowedError`
+                    // words every variant that way, and `grant` wraps it
+                    // without adding anything a token could reach.
+                    unreadable: read.as_ref().err().map(ToString::to_string),
                 }
             })
             .collect())

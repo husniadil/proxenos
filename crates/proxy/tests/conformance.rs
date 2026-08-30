@@ -646,6 +646,7 @@ fn the_live_relay_arm_names_the_account_it_would_spend() {
             selected,
             source: None,
             identity_changed: false,
+            unreadable: None,
         }
     };
     let codex = account("work", proxenos::auth::store::Provider::Codex, true);

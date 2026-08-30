@@ -72,12 +72,34 @@ pub fn accounts_at(result: &Value, now: u64) -> String {
     };
 
     format!(
-        "{}{found}{ignored}",
+        "{}{found}{ignored}{}",
         table(
             &["  NAME", "PROVIDER", "KIND", "ACCOUNT", "SOURCE", "STATE"],
             &rows,
-        )
+        ),
+        unreadable(accounts),
     )
+}
+
+/// Why each row that holds nothing holds nothing, in the refusal's own words.
+///
+/// The state cell says `unreadable`, which is all a column that has to stay on
+/// one screen can carry. The reason is a sentence naming the store and the
+/// remedy, and it is the whole value of the field — a row saying only that
+/// something is wrong sends the operator to go and find out what, which is the
+/// state this exists to end. So it goes under the table, one line per row, the
+/// way the other notes do.
+fn unreadable(accounts: &[Value]) -> String {
+    accounts
+        .iter()
+        .filter_map(|account| {
+            let reason = field(account, "unreadable").and_then(Value::as_str)?;
+            let name = field(account, "name")
+                .and_then(Value::as_str)
+                .unwrap_or("unnamed");
+            Some(format!("\nnote: {name} holds no readable grant — {reason}"))
+        })
+        .collect()
 }
 
 /// One account, cell by cell.
@@ -212,6 +234,17 @@ fn shorten(source: &str) -> String {
 fn state(account: &Value, now: u64) -> String {
     if field(account, "refused").is_some_and(|refused| !refused.is_null()) {
         return "refused".to_owned();
+    }
+    // Above everything the grant itself would have said, because none of it
+    // was read. A row whose store could not be opened used to say `ok` — the
+    // one word that is certainly untrue of it — since every field the other
+    // states are computed from was absent (§8.4). The reason is under the
+    // table: it is a sentence, and this column is a column.
+    if field(account, "unreadable")
+        .and_then(Value::as_str)
+        .is_some()
+    {
+        return "unreadable".to_owned();
     }
     if field(account, "identity_changed")
         .and_then(Value::as_bool)

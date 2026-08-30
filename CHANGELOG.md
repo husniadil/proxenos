@@ -4,6 +4,16 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- `accounts list --json` and `status.auth.accounts` carry `unreadable` on a
+  borrowed profile whose grant could not be read: the refusal's own words,
+  naming the store tried and the remedy, never any part of what it holds. The
+  key is absent on a readable grant and on every key. The table shows the
+  state as `unreadable` and prints the reason as a note under it, so a
+  consumer no longer has to infer "declared but nothing could be read" from
+  four empty columns.
+
 ## [0.18.1]
 
 - A Claude profile on macOS is read from the keychain item **and then** from

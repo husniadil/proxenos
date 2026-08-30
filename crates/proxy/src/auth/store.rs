@@ -339,6 +339,22 @@ pub struct Account {
     /// from the one where there is no line to delete.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub declared: bool,
+    /// Why the credential behind this row could not be read, where it could
+    /// not be.
+    ///
+    /// Only a borrowed profile can be in this state: the grant lives in
+    /// another program's store, and that store can be absent, unreadable, or
+    /// holding something that is not a grant (§8.4). Every other field about
+    /// such a row is then absent, and absent alone does not say why — an
+    /// operator reading "no account id, no plan, no expiry" has to guess
+    /// between a profile nobody signed into and a keychain this process
+    /// cannot reach, which want opposite answers.
+    ///
+    /// The refusal's own words, which name the store and the remedy and
+    /// never any part of what the store holds. `None` where the grant was
+    /// read, and on a key, which is this daemon's own and is always readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable: Option<String>,
 }
 
 /// A store that holds more than one grant.
@@ -999,6 +1015,10 @@ impl AccountStore for FileStore {
                     selected: selected == Some(index),
                     source: None,
                     identity_changed: false,
+                    // This store holds what it reports, so reading it is
+                    // reading the row. There is no elsewhere that could
+                    // have refused.
+                    unreadable: None,
                 }
             })
             .collect())

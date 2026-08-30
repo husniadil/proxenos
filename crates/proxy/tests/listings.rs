@@ -430,6 +430,51 @@ fn the_state_column_says_the_most_urgent_true_thing() {
     );
 }
 
+/// A row whose store could not be read says so, and says why under the table.
+///
+/// It used to say `ok`, which is the one word certainly untrue of it: every
+/// field the other states are computed from is absent on such a row, so
+/// nothing else in the listing contradicted it.
+#[test]
+fn a_row_whose_grant_could_not_be_read_says_so_and_says_why() {
+    let reason = "/profiles/empty/auth.json holds no grant. Sign in to that profile first, \
+                  in the ChatGPT app or with `codex login`";
+    let rendered = proxenos::render::accounts_at(
+        &serde_json::json!({
+            "accounts": [{
+                "name": "empty",
+                "kind": "grant",
+                "provider": "codex",
+                "source": "/profiles/empty/auth.json",
+                "declared": true,
+                "selected": false,
+                "unreadable": reason,
+            }],
+        }),
+        NOW,
+    );
+
+    assert_eq!(row(&rendered, "empty")[5], "unreadable", "{rendered}");
+    assert!(
+        rendered.contains(reason),
+        "the reason is nowhere in the listing: {rendered}"
+    );
+    assert!(
+        rendered.contains("empty holds no readable grant"),
+        "the note does not say which row it is about: {rendered}"
+    );
+}
+
+/// A readable store says nothing about readability, on the row or under the
+/// table.
+#[test]
+fn a_readable_row_carries_no_unreadable_note() {
+    let rendered = proxenos::render::accounts_at(&a_store(), NOW);
+
+    assert!(!rendered.contains("holds no readable grant"), "{rendered}");
+    assert_eq!(row(&rendered, "work-codex")[5], "ok", "{rendered}");
+}
+
 /// The notes under the table survive the table. The one saying these were
 /// found is about the whole set, so it is said only where the whole set is
 /// found — a store holding one declared profile is not describing itself.

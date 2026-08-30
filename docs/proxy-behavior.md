@@ -1864,6 +1864,19 @@ rather than falling through to another account.
 the operator wrote, and dropping it from the listing would read as one they
 never wrote; what is unknown about it is reported absent.
 
+**And why it is absent is reported with it.** A row that cannot be read carries
+`unreadable`, the refusal's own words — the store that was tried and the remedy
+for it. Absence alone does not separate a profile nobody signed into from a
+keychain this process cannot reach from a file holding something that is not a
+grant, and those want different answers; a listing that showed only the empty
+columns left the reader to guess which, and the listing's state column said
+`ok`, because every field the other states are computed from was absent. The
+field is absent on a row that was read and on every key, so absent means
+readable rather than unknown, and it never carries any part of what the store
+holds. The table says `unreadable` in the state column and prints the reason
+under it, the way the other notes are printed: the reason is a sentence and a
+column is a column.
+
 **Every other write refuses, naming the profile.** Adding, renaming and saving
 are verbs of a store that owns what it holds, and this one does not. The
 refusal says what does: the program that owns the profile changes what is
