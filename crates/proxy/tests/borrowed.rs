@@ -1023,9 +1023,12 @@ fn a_selection_naming_a_deleted_profile_is_refused_by_name() {
     assert!(error.contains("accounts use"), "was: {error}");
 }
 
-/// Every write refuses, names the profile, and says who may change it. The
-/// refresh path is the one that matters: taking it would rotate a token the
-/// owning program still holds.
+/// Every write that is not a refresh refuses, names the profile, and says who
+/// may change it. Adding, renaming and removing are verbs of a store that owns
+/// what it holds, and this one does not.
+///
+/// A refresh is judged separately, by where the grant was read from (§8.4):
+/// the cases below.
 #[test]
 fn every_write_refuses_naming_the_profile() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1034,7 +1037,6 @@ fn every_write_refuses_naming_the_profile() {
     let credentials = store.load().expect("loads").expect("a grant");
 
     let refusals = [
-        store.save(&credentials).expect_err("save"),
         store.clear().expect_err("clear"),
         store.add(&credentials, Some("work")).expect_err("add"),
         store.remove("work").expect_err("remove"),
@@ -1099,6 +1101,367 @@ fn a_named_profile_answers_regardless_of_the_selection() {
         credential.grant().and_then(|it| it.account_id.as_deref()),
         Some("acct_spare")
     );
+}
+
+// --- writing a refreshed grant back (§8.4) --------------------------------
+//
+// The refusal is about the macOS keychain item, which is the client's own
+// store. A file is the opposite case: the owning client reads it at start, so
+// writing the rotated grant back is what keeps both sides on one token.
+
+/// A store over real files, read by the real reader, so a write can be
+/// checked against what is actually on disk.
+fn host_store(dir: &Path, host: borrowed::Host, profiles: Vec<read::Profile>) -> BorrowedStore {
+    BorrowedStore::new(
+        profiles,
+        Box::new(read::HostReader),
+        Ok(proxenos::auth::borrowed::store::Platform {
+            host,
+            home: dir.to_path_buf(),
+        }),
+        proxenos::auth::selection::Selection::new(dir.join("selected.json")),
+    )
+}
+
+fn write_json(path: &Path, body: &serde_json::Value) {
+    std::fs::create_dir_all(path.parent().expect("a parent")).expect("the profile directory");
+    std::fs::write(path, body.to_string()).expect("the profile file");
+}
+
+fn read_json(path: &Path) -> serde_json::Value {
+    serde_json::from_str(&std::fs::read_to_string(path).expect("readable")).expect("json")
+}
+
+fn rotated() -> proxenos::auth::store::Credentials {
+    proxenos::auth::store::Credentials {
+        access_token: access_token(1_900_000_000),
+        refresh_token: "rt.2.rotated".to_owned(),
+        id_token: None,
+        account_id: Some("acct_123".to_owned()),
+        expires_at: Some(1_900_000_000),
+    }
+}
+
+/// A Codex profile is a file, so the refreshed grant goes back into it — and
+/// every field this crate does not model survives the write.
+#[test]
+fn a_refresh_on_a_file_backed_codex_profile_rewrites_the_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_dir = dir.path().join("profiles/work");
+    let path = config_dir.join("auth.json");
+    write_json(
+        &path,
+        &serde_json::json!({
+            "OPENAI_API_KEY": null,
+            "auth_mode": "chatgpt",
+            "last_refresh": "2026-08-23T08:00:44.123456Z",
+            "something_only_codex_knows_about": { "kept": true },
+            "tokens": {
+                "access_token": access_token(1_800_000_000),
+                "refresh_token": "rt.1.borrowed",
+                "account_id": "acct_123",
+                "an_unmodelled_token_field": "kept too",
+            },
+        }),
+    );
+    let work = read::Profile {
+        name: "work".to_owned(),
+        provider: Provider::Codex,
+        config_dir: Some(config_dir),
+    };
+    let store = host_store(dir.path(), borrowed::Host::Linux, vec![work]);
+
+    store.save(&rotated()).expect("a file is written back");
+
+    let after = read_json(&path);
+    assert_eq!(after["tokens"]["refresh_token"], "rt.2.rotated");
+    assert_eq!(after["tokens"]["access_token"], access_token(1_900_000_000));
+    assert_eq!(
+        after["tokens"]["an_unmodelled_token_field"], "kept too",
+        "an unknown field inside `tokens` was dropped: {after}"
+    );
+    assert_eq!(
+        after["something_only_codex_knows_about"]["kept"], true,
+        "an unknown top-level field was dropped: {after}"
+    );
+    assert_eq!(after["last_refresh"], "2026-08-23T08:00:44.123456Z");
+    assert_eq!(after["auth_mode"], "chatgpt");
+
+    // And the store reads back what it just wrote.
+    let reloaded = store.load().expect("loads").expect("a grant");
+    assert_eq!(reloaded.refresh_token, "rt.2.rotated");
+}
+
+/// The written file is `0600`. It holds a grant, and a grant readable by
+/// anyone else on the machine is the leak §8 exists to prevent.
+#[cfg(unix)]
+#[test]
+fn the_rewritten_file_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_dir = dir.path().join("profiles/work");
+    let path = config_dir.join("auth.json");
+    write_json(
+        &path,
+        &serde_json::json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "access_token": access_token(1_800_000_000),
+                "refresh_token": "rt.1.borrowed",
+            },
+        }),
+    );
+    let work = read::Profile {
+        name: "work".to_owned(),
+        provider: Provider::Codex,
+        config_dir: Some(config_dir),
+    };
+
+    host_store(dir.path(), borrowed::Host::Linux, vec![work])
+        .save(&rotated())
+        .expect("writes");
+
+    let mode = std::fs::metadata(&path)
+        .expect("metadata")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600, "was: {mode:o}");
+}
+
+/// A Claude profile on a host with no keychain is the same case, in the
+/// spelling that client uses — and the two fields the item carries that a
+/// credential does not are left exactly as they were.
+#[test]
+fn a_refresh_on_a_file_backed_claude_profile_rewrites_the_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_dir = dir.path().join("profiles/personal");
+    let path = config_dir.join(borrowed::CLAUDE_CREDENTIALS_FILE);
+    write_json(
+        &path,
+        &serde_json::json!({
+            "somethingOnlyTheClientKnowsAbout": ["kept"],
+            "claudeAiOauth": {
+                "accessToken": "sk-ant-oat01-borrowed",
+                "refreshToken": "sk-ant-ort01-borrowed",
+                "expiresAt": 1_800_000_000_000u64,
+                "refreshTokenExpiresAt": 1_890_000_000_000u64,
+                "subscriptionType": "max",
+                "scopes": ["user:inference"],
+            },
+        }),
+    );
+    let personal = read::Profile {
+        name: "personal".to_owned(),
+        provider: Provider::Anthropic,
+        config_dir: Some(config_dir),
+    };
+    let store = host_store(dir.path(), borrowed::Host::Linux, vec![personal]);
+
+    let refreshed = proxenos::auth::store::Credentials {
+        access_token: "sk-ant-oat01-rotated".to_owned(),
+        refresh_token: "sk-ant-ort01-rotated".to_owned(),
+        id_token: None,
+        account_id: None,
+        expires_at: Some(1_900_000_000),
+    };
+    store.save(&refreshed).expect("a file is written back");
+
+    let after = read_json(&path);
+    assert_eq!(
+        after["claudeAiOauth"]["accessToken"],
+        "sk-ant-oat01-rotated"
+    );
+    assert_eq!(
+        after["claudeAiOauth"]["refreshToken"],
+        "sk-ant-ort01-rotated"
+    );
+    assert_eq!(
+        after["claudeAiOauth"]["expiresAt"], 1_900_000_000_000u64,
+        "the expiry goes back in milliseconds: {after}"
+    );
+    assert_eq!(
+        after["claudeAiOauth"]["refreshTokenExpiresAt"], 1_890_000_000_000u64,
+        "an expiry the credential does not carry was overwritten: {after}"
+    );
+    assert_eq!(after["claudeAiOauth"]["subscriptionType"], "max");
+    assert_eq!(after["claudeAiOauth"]["scopes"][0], "user:inference");
+    assert_eq!(after["somethingOnlyTheClientKnowsAbout"][0], "kept");
+}
+
+/// A grant read out of the keychain is still refused, and the refusal says
+/// which store it is about. Rotating that item replaces the value the client
+/// still holds and logs the operator out over there.
+#[test]
+fn a_refresh_on_a_keychain_backed_profile_is_still_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let personal = profile("personal", Provider::Anthropic, Some("/profiles/personal"));
+    let (keychain, _) = {
+        let places = personal
+            .source(borrowed::Host::MacOs, Path::new(HOME))
+            .places();
+        let [keychain, file] = <[borrowed::Source; 2]>::try_from(places).expect("two places");
+        (keychain, file)
+    };
+    let store = BorrowedStore::new(
+        vec![personal],
+        Box::new(FakeReader::place_holding(
+            &keychain,
+            &claude_blob(4_000_000_000, 4_100_000_000),
+        )),
+        Ok(proxenos::auth::borrowed::store::Platform {
+            host: borrowed::Host::MacOs,
+            home: PathBuf::from(HOME),
+        }),
+        proxenos::auth::selection::Selection::new(dir.path().join("selected.json")),
+    );
+    let credentials = store.load().expect("loads").expect("a grant");
+
+    let refusal = store.save(&credentials).expect_err("refused").to_string();
+
+    assert!(refusal.contains("personal"), "was: {refusal}");
+    assert!(refusal.contains("keychain"), "was: {refusal}");
+    assert!(refusal.contains("never writes"), "was: {refusal}");
+}
+
+/// `clear` is refused everywhere. Signing a profile out is the owning
+/// program's verb, and nothing about the file case changes that.
+#[test]
+fn signing_out_is_refused_on_a_file_backed_profile_too() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_dir = dir.path().join("profiles/work");
+    write_json(
+        &config_dir.join("auth.json"),
+        &serde_json::json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "access_token": access_token(1_800_000_000),
+                "refresh_token": "rt.1.borrowed",
+            },
+        }),
+    );
+    let work = read::Profile {
+        name: "work".to_owned(),
+        provider: Provider::Codex,
+        config_dir: Some(config_dir),
+    };
+
+    let refusal = host_store(dir.path(), borrowed::Host::Linux, vec![work])
+        .clear()
+        .expect_err("refused")
+        .to_string();
+
+    assert!(refusal.contains("sign out of"), "was: {refusal}");
+}
+
+/// The decision itself, over every shape a read can come back from. A
+/// compound source is never an origin, and reaching the rule with one means
+/// nobody recorded which place answered — which reads as the keychain.
+#[test]
+fn only_a_place_that_is_a_file_may_be_written_back_to() {
+    use proxenos::auth::borrowed::write;
+
+    let auth_json = PathBuf::from("/profiles/work/auth.json");
+    assert_eq!(
+        write::writeback(&borrowed::Source::Codex {
+            auth_json: auth_json.clone(),
+        }),
+        Some(auth_json.as_path())
+    );
+
+    let credentials = PathBuf::from("/profiles/personal/.credentials.json");
+    assert_eq!(
+        write::writeback(&borrowed::Source::Claude(borrowed::ClaudeSource::File {
+            path: credentials.clone(),
+        })),
+        Some(credentials.as_path())
+    );
+
+    assert_eq!(
+        write::writeback(&borrowed::Source::Claude(
+            borrowed::ClaudeSource::Keychain {
+                service: borrowed::CLAUDE_SERVICE.to_owned(),
+            }
+        )),
+        None
+    );
+    assert_eq!(
+        write::writeback(&borrowed::Source::Claude(
+            borrowed::ClaudeSource::KeychainThenFile {
+                service: borrowed::CLAUDE_SERVICE.to_owned(),
+                path: credentials,
+            }
+        )),
+        None
+    );
+}
+
+/// A macOS Claude profile whose keychain said nothing was read from the file
+/// beside it, and that file is where a refresh goes. The platform does not
+/// decide this — the read does.
+#[test]
+fn a_macos_profile_that_fell_through_to_its_file_is_written_back_to_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_dir = dir.path().join("profiles/personal");
+    let path = config_dir.join(borrowed::CLAUDE_CREDENTIALS_FILE);
+    write_json(
+        &path,
+        &serde_json::json!({
+            "claudeAiOauth": {
+                "accessToken": "sk-ant-oat01-borrowed",
+                "refreshToken": "sk-ant-ort01-borrowed",
+                "expiresAt": 1_800_000_000_000u64,
+                "subscriptionType": "max",
+            },
+        }),
+    );
+    let personal = read::Profile {
+        name: "personal".to_owned(),
+        provider: Provider::Anthropic,
+        config_dir: Some(config_dir.clone()),
+    };
+    let source = personal.source(borrowed::Host::MacOs, dir.path());
+    let file = read::Profile {
+        name: "personal".to_owned(),
+        provider: Provider::Anthropic,
+        config_dir: Some(config_dir),
+    }
+    .source(borrowed::Host::Linux, dir.path());
+
+    // The keychain holds nothing; only the file does. `HostReader` would spawn
+    // `security` here, and the test must not depend on a real keychain.
+    let store = BorrowedStore::new(
+        vec![personal],
+        Box::new(FakeReader::place_holding(
+            &file,
+            &std::fs::read_to_string(&path).expect("the file"),
+        )),
+        Ok(proxenos::auth::borrowed::store::Platform {
+            host: borrowed::Host::MacOs,
+            home: dir.path().to_path_buf(),
+        }),
+        proxenos::auth::selection::Selection::new(dir.path().join("selected.json")),
+    );
+    assert!(
+        source.places().len() == 2,
+        "a macOS Claude source is two places"
+    );
+
+    let refreshed = proxenos::auth::store::Credentials {
+        access_token: "sk-ant-oat01-rotated".to_owned(),
+        refresh_token: "sk-ant-ort01-rotated".to_owned(),
+        id_token: None,
+        account_id: None,
+        expires_at: Some(1_900_000_000),
+    };
+    store.save(&refreshed).expect("the file it came from");
+
+    let after = read_json(&path);
+    assert_eq!(
+        after["claudeAiOauth"]["accessToken"],
+        "sk-ant-oat01-rotated"
+    );
+    assert_eq!(after["claudeAiOauth"]["subscriptionType"], "max");
 }
 
 // --- asking the owning program to refresh ---------------------------------

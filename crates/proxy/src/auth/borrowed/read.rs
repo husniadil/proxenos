@@ -52,6 +52,14 @@ pub struct Grant {
     pub refresh_token_expires_at: Option<u64>,
     pub plan: Option<String>,
     pub email: Option<String>,
+    /// The single place that answered, never the compound source it was
+    /// reached through.
+    ///
+    /// A macOS Claude profile is the keychain item *and* the file beside it,
+    /// and which of the two held the grant is not a detail: it decides whether
+    /// a refreshed grant may be written back (§8.4). Recorded where the read
+    /// happened, because that is the only point at which it is known.
+    pub origin: Source,
 }
 
 /// Where the bytes come from.
@@ -164,8 +172,8 @@ pub fn grant(
     let source = profile.source(host, home);
     let label = source.label();
 
-    let raw = match locate(reader, &source)? {
-        Located::Found(raw) => raw,
+    let (raw, origin) = match locate(reader, &source)? {
+        Located::Found { raw, origin } => (raw, origin),
         Located::Absent { carried } => {
             let mut message =
                 BorrowedError::NotSignedIn(label, remedy(profile.provider)).to_string();
@@ -193,6 +201,7 @@ pub fn grant(
                 email: jwt::email(id_token),
                 refresh_token_expires_at: None,
                 credentials,
+                origin,
             })
         }
         Provider::Anthropic => {
@@ -204,6 +213,7 @@ pub fn grant(
                 // The item carries no email, and the client's own account file
                 // is not this module's to read. Absent is reported as absent.
                 email: None,
+                origin,
             })
         }
     }
@@ -211,13 +221,12 @@ pub fn grant(
 
 /// What the walk over a source's places came back with.
 enum Located {
-    Found(String),
+    /// The bytes, and the place they came from.
+    Found { raw: String, origin: Source },
     /// Nothing was there. `carried` is the failure of an earlier place that
     /// was tried and could not answer — the macOS keychain, in the only case
     /// that has one.
-    Absent {
-        carried: Option<String>,
-    },
+    Absent { carried: Option<String> },
 }
 
 /// Read the first place that answers, in the order the source names them.
@@ -247,7 +256,10 @@ fn locate(reader: &dyn GrantReader, source: &Source) -> Result<Located, ProxyErr
                         "the keychain could not be read; the grant came from the file beside it"
                     );
                 }
-                return Ok(Located::Found(raw));
+                return Ok(Located::Found {
+                    raw,
+                    origin: place.clone(),
+                });
             }
             Ok(None) => {}
             Err(error) if index == last => return Err(error),

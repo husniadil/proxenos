@@ -1702,13 +1702,45 @@ the client. That directory is the identity — point at it and the account it
 holds is the account turns are spent against — so choosing which account pays
 is choosing which directory to read.
 
-**A borrowed grant is read, never written, and never refreshed.** The refresh
-token in one is single-use: exchanging it rotates the stored value in place,
-and the previous one is refused afterwards (`refresh_token_reused`, §8). Doing
-that here would log the operator out of the program that owns the file, and the
-symptom would appear over there rather than here. The owning program refreshes
-on its own next turn; an expired borrowed grant is reported as expired rather
-than repaired.
+**A borrowed grant is never obtained here, and never refreshed here.** The
+refresh token in one is single-use: exchanging it rotates the stored value in
+place, and the previous one is refused afterwards (`refresh_token_reused`, §8).
+Performing that exchange here would log the operator out of the program that
+owns the profile, and the symptom would appear over there rather than here. The
+owning program refreshes on its own next turn; an expired borrowed grant is
+reported as expired rather than repaired.
+
+**Where a refreshed grant may be written back is decided by the store it was
+read from, not by the platform.** The two stores are opposite cases:
+
+- **The macOS keychain item is never written.** It is the client's own store,
+  and replacing the item is replacing the value that client still holds.
+  A refresh against a keychain-backed profile is refused, saying so.
+- **A file is written back.** `auth.json`, and the `.credentials.json` beside a
+  Claude profile, are read by the owning client *when it starts*. Writing the
+  rotated grant into the same file is what leaves both sides holding one token;
+  refusing leaves this side's grant stale from the first rotation onwards while
+  the file it was borrowed from moves on without it.
+
+Which of the two applies comes from the read, because a macOS Claude profile is
+both: the keychain item, then the file beside it. A profile that fell through to
+its file is written back to that file, and the same profile answered by its
+keychain item is refused — on the same machine, on the same run.
+
+The write is atomic — a `0600` temporary file in the same directory, then a
+rename — because the owning client reads the file at start and a client that
+started mid-write would read a half-written grant and treat itself as signed
+out. It preserves every field this side does not model: the bytes are re-read as
+JSON, only the credential's own fields are overwritten, and everything else —
+`last_refresh`, `subscriptionType`, `refreshTokenExpiresAt`, anything either
+program adds later — is written back exactly as it was. A field the credential
+does not carry is left alone rather than written null: `None` here means this
+side could not determine it, which is not the same as the owning program having
+no value for it. A file that is not JSON is refused rather than replaced.
+
+**Signing a borrowed profile out is still refused everywhere.** Clearing is the
+owning program's verb whichever store the grant came from, and nothing above
+changes that.
 
 Every refusal names the store it read and what to do about it, and the remedy
 differs by provider: one sends the operator to the ChatGPT app or `codex
@@ -1864,8 +1896,9 @@ rather than falling through to another account.
 the operator wrote, and dropping it from the listing would read as one they
 never wrote; what is unknown about it is reported absent.
 
-**Every other write refuses, naming the profile.** Adding, renaming and saving
-are verbs of a store that owns what it holds, and this one does not. The
+**Every other write refuses, naming the profile.** Adding, renaming and
+removing are verbs of a store that owns what it holds, and this one does not.
+A refresh is the exception, and only for the file case above. The
 refusal says what does: the program that owns the profile changes what is
 inside it, and the configuration file is where this daemon's view of it is
 edited.

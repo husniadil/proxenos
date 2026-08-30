@@ -6,14 +6,20 @@
 //! account it holds is the account turns are spent against. An operator who has
 //! already signed in over there does not sign in again here.
 //!
-//! **Nothing in this module writes, and nothing built on it may refresh.** The
-//! refresh token in that file is single-use: exchanging it rotates the stored
-//! value and the previous one is refused afterwards, which is the failure
-//! `tokens.rs` already names `refresh_token_reused`. Spending it here would
-//! therefore log the operator out of the program that owns the file, and the
-//! symptom would appear over there rather than here. The owning program
-//! refreshes on its own next turn; this side reads whatever it finds, and an
-//! expired grant is reported as expired rather than repaired.
+//! **Nothing here obtains a grant, and a grant read out of the keychain is
+//! never written back.** The refresh token in one is single-use: exchanging it
+//! rotates the stored value and the previous one is refused afterwards, which
+//! is the failure `tokens.rs` already names `refresh_token_reused`. Rotating
+//! the macOS keychain item would therefore log the operator out of the program
+//! that owns it, and the symptom would appear over there rather than here.
+//!
+//! Where the grant was read out of a **file**, the same reasoning says the
+//! opposite: the owning client reads that file when it starts, so writing a
+//! refreshed grant back into it is what keeps the two sides in step, and
+//! refusing is what leaves this side stale. `write.rs` holds that split and
+//! nothing else in this module writes at all. An expired grant is still
+//! reported as expired rather than repaired: the owning program refreshes on
+//! its own next turn.
 //!
 //! The decisions live here as pure functions over the file's text: what is
 //! wrong with a credential is decided without I/O, and the caller supplies the
@@ -412,6 +418,7 @@ pub const DISCOVERED_CLAUDE: &str = "claude";
 pub mod poke;
 pub mod read;
 pub mod store;
+pub mod write;
 
 impl Source {
     /// What to call this source in a message: the one an operator can go and

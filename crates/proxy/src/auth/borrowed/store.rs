@@ -228,6 +228,21 @@ impl BorrowedStore {
              view of it is edited."
         ))
     }
+
+    /// Why a refresh was refused for a grant that came out of the keychain.
+    ///
+    /// Worded apart from `read_only` because it is no longer the same
+    /// statement: this daemon does write a borrowed grant back to a *file*
+    /// (§8.4), and a refusal saying it never writes one would send an
+    /// operator looking for a bug that is not there.
+    fn keychain_read_only(name: &str) -> ProxyError {
+        ProxyError::authentication(format!(
+            "`{name}` keeps its grant in the macOS keychain, which this daemon never writes, so \
+             it cannot refresh it. Rotating that item would replace the value the program \
+             owning the profile still holds, and the operator would be logged out over there; \
+             that program refreshes on its own next run."
+        ))
+    }
 }
 
 impl CredentialStore for BorrowedStore {
@@ -236,14 +251,38 @@ impl CredentialStore for BorrowedStore {
         Ok(Some(self.grant_for(&profile)?.credentials))
     }
 
-    /// The write a refresh would make. Refused: exchanging a borrowed refresh
-    /// token rotates the value the owning program still holds, and the
-    /// operator would be logged out of it (§8.4).
-    fn save(&self, _credentials: &Credentials) -> Result<(), ProxyError> {
-        let name = self
-            .selected()
-            .map_or_else(|_| "a borrowed profile".to_owned(), |it| it.name);
-        Err(self.read_only("refresh", &name))
+    /// The write a refresh makes, where the store it came out of is a file.
+    ///
+    /// Refusing every refresh was the rule for one store: the macOS keychain
+    /// item is the client's own, and rotating it behind that client logs the
+    /// operator out of it. For a file the same reasoning runs backwards. The
+    /// owning client reads `auth.json` or `.credentials.json` when it starts,
+    /// so writing the rotated grant back into the same file is what keeps
+    /// both sides holding the same token — and refusing means this side's
+    /// grant is stale from the first refresh onwards (§8.4).
+    ///
+    /// Which of the two it is comes from where the grant was actually read,
+    /// not from the platform: a macOS Claude profile is the keychain *and*
+    /// the file beside it, and only the read knows which one answered.
+    fn save(&self, credentials: &Credentials) -> Result<(), ProxyError> {
+        let profile = match self.selected() {
+            Ok(profile) => profile,
+            // Nothing to write and nothing to name. The refusal is the one
+            // this store has always given, because an unresolved selection is
+            // not evidence that a write would have been allowed.
+            Err(_) => return Err(self.read_only("refresh", "a borrowed profile")),
+        };
+        let grant = match self.grant_for(&profile) {
+            Ok(grant) => grant,
+            // A profile that cannot be read now has no origin to decide on,
+            // so the conservative answer stands.
+            Err(_) => return Err(self.read_only("refresh", &profile.name)),
+        };
+
+        match super::write::writeback(&grant.origin) {
+            Some(path) => super::write::write_back(profile.provider, path, credentials),
+            None => Err(Self::keychain_read_only(&profile.name)),
+        }
     }
 
     fn clear(&self) -> Result<(), ProxyError> {
