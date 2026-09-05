@@ -6,6 +6,27 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **`proxenos inspect <pid>` says whether a process was started through this
+  daemon, and as which account.** It reads that process's environment —
+  `/proc/<pid>/environ` on Linux, `ps -Eww -o command=` on macOS — and parses
+  the auth-token tags with the same function the daemon reads a request's
+  header with. The knowledge used to live in whichever consumer wanted it,
+  matching `proxenos-account:` by hand: this project's own spelling, parsed
+  somewhere it could not be kept in step with the daemon that writes it.
+- **It needs no daemon**, which is the point: the answer is in the process being
+  asked about, so it works in client mode, with the daemon stopped, and over a
+  list of pids. `--json` is `{"pid","through","account","daemon"}`; the rendered
+  form is one line. `account` is null where the launch tagged none — those turns
+  go as whichever account is serving — and `through` counts the `unused`
+  sentinel only beside an `ANTHROPIC_BASE_URL`, since that pair is what a launch
+  without `--account` actually leaves behind.
+- **No token is printed, in either form.** The value parsed may carry
+  `proxenos-token:<secret>` beside the account tag, which is what a client-mode
+  launch sets; the token is dropped where it is read and the answer has no field
+  it could reach. A pid nobody is using and a pid whose environment cannot be
+  read are refused separately, naming which — `not through proxenos` for either
+  would be a wrong answer rather than a missing one.
+
 - **`supervised` in `status` answers on Linux**, where 0.22.0 left it null and
   said so. The gap was real — systemd puts no unit name into the environment of
   the process it starts — but it was a gap in *where the question was asked*,

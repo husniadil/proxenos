@@ -39,6 +39,7 @@ async fn main() -> Result<()> {
         Command::Statusline(args) => commands::inspect::statusline(args).await,
         Command::Record(args) => commands::record::record(args).await,
         Command::Supervisor(args) => commands::supervisor::supervisor(args).await,
+        Command::Inspect(args) => commands::process::inspect(args),
     }
 }
 

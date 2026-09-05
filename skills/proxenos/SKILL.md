@@ -89,7 +89,14 @@ proxenos accounts list     # stored accounts and which one serves by default
 proxenos usage             # quota as last reported; --refresh asks the backend (costs a request)
 proxenos doctor            # capability probes; --live runs them against the real backend
 proxenos env               # the exports, for a shell you want to configure by hand
+proxenos inspect <pid>     # whether that process was started through proxenos, and as which
+                           # account; --json for {pid,through,account,daemon}. Needs no daemon
 ```
+
+`proxenos inspect` answers about **another** process — the pane holding an agent,
+say — by reading its environment. Do not read that environment yourself and
+match `proxenos-account:` by hand; the spelling is this project's and this verb
+is where it is kept. It never prints the token the environment may carry.
 
 `proxenos status` also prints client policy. `client claude-api denied` means the
 `claude-api` skill is disabled for sessions through the proxy; a reviewer that does

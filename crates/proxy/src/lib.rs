@@ -17,6 +17,7 @@ pub mod ingress;
 pub mod launch;
 pub mod policy;
 pub mod probe;
+pub mod process;
 pub mod recorder;
 pub mod render;
 pub mod session;

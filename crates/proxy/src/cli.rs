@@ -87,6 +87,22 @@ pub enum Command {
     /// after an implementation cannot grow a second one — which it since did:
     /// launchd on macOS, a systemd user service on Linux.
     Supervisor(SupervisorArgs),
+    /// What another process's environment says about how it was started.
+    ///
+    /// Needs no daemon, because the answer is in the process being asked
+    /// about. Before this verb a consumer read that environment itself and
+    /// matched this project's own `proxenos-account:` spelling by hand, which
+    /// is knowledge that belongs on this side of the line.
+    Inspect(InspectArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct InspectArgs {
+    /// The process to read.
+    pub pid: u32,
+    /// Print the answer as one JSON document instead of the line.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, clap::Args)]

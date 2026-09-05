@@ -220,6 +220,13 @@ proxenos usage      what quota is left (--refresh asks, per account), as a
                     with a `*` on the account serving turns and one row per
                     window (--json prints the socket's own payload)
 proxenos statusline wrap a status-line script, adding that quota
+proxenos inspect    PID [--json]
+                    what another process's environment says about how it was
+                    started: `pid 4242: through proxenos as work-codex
+                    (http://127.0.0.1:8787)`, or `pid 4242: not through
+                    proxenos`. --json prints
+                    `{"pid","through","account","daemon"}`. Needs no daemon —
+                    the answer is in the process being asked about (§2.8)
 proxenos record     capture exchanges as fixtures
 proxenos supervisor install|uninstall|status
                     the supervisor that keeps the daemon alive — launchd on
@@ -238,10 +245,11 @@ proxenos supervisor install|uninstall|status
                     it since did
 ```
 
-Every verb except `run`, `start`, `record`, `supervisor`, `doctor`, and the two
-`accounts` verbs that add an account operates through the control socket (§3)
-against a running daemon. Those bring a daemon up, run one of their own, touch
-the machine, or need credentials rather than a socket.
+Every verb except `run`, `start`, `record`, `supervisor`, `doctor`, `inspect`,
+and the two `accounts` verbs that add an account operates through the control
+socket (§3) against a running daemon. Those bring a daemon up, run one of their
+own, touch the machine, read a process, or need credentials rather than a
+socket.
 
 **And that socket need not be on this machine.** With `PROXENOS_DAEMON` set,
 every verb that goes through the control vocabulary goes over HTTP to a daemon
@@ -1262,6 +1270,11 @@ Everything else works: `status`, `accounts`, `accounts use`, `accounts rename`,
 `record`, `env`, `exec`, `statusline`. `doctor` is unaffected — it runs in the
 CLI against the fixture corpus and never needed a daemon.
 
+| Verb | In client mode |
+|---|---|
+| `doctor` | works: it runs in the CLI against the fixture corpus and never needed a daemon |
+| `inspect` | works: it reads a process on the machine it is typed on, not the daemon. The `daemon` it reports is whatever that process's `ANTHROPIC_BASE_URL` says, which for a client-mode launch is the remote URL |
+
 **`--persist` writes the configuration on the daemon's machine**, which is
 correct and worth saying out loud: the file it changes is the one that daemon
 starts from, and there is no file on this side for it to have meant instead.
@@ -1287,6 +1300,64 @@ be a document that does not work. `exec` is the client-mode launcher, and it
 sets both halves without printing either.
 
 ---
+
+### 2.8 `inspect`
+
+```
+proxenos inspect PID [--json]
+```
+
+**Which account another process's turns go as, asked of the process.** A pane
+holding an agent is a process whose environment `exec` set, and until this verb
+every program that wanted the answer read that environment itself and matched
+`proxenos-account:` by hand — this project's own spelling, parsed somewhere it
+cannot be kept in step with the daemon that writes it. It is parsed here with
+the same function the daemon reads a request's header with (§1), so the
+spelling moves in one place.
+
+**It needs no daemon**, which is what makes it usable where the interesting
+cases are: a client-mode pane, a machine whose daemon has stopped, a script
+sweeping pids. Reading the environment is its only I/O.
+
+| Platform | Where the environment is read |
+|---|---|
+| Linux | `/proc/<pid>/environ`, NUL-separated |
+| macOS | `ps -Eww -o command= -p <pid>`, the command and then the environment, space-separated. `ps` shows the environment of the caller's **own** processes only, which every agent in one of the caller's panes is |
+
+`--json` is one document:
+
+```json
+{ "pid": 4242, "through": true, "account": "work-codex", "daemon": "http://127.0.0.1:8787" }
+```
+
+`through` is true when the process was started through this daemon: its
+`ANTHROPIC_AUTH_TOKEN` carries the account tag or the daemon's token (§1), or
+it holds the `unused` sentinel a launch without `--account` leaves standing
+**beside** an `ANTHROPIC_BASE_URL` — the sentinel alone points at nothing and is
+not a launch. `account` is the tagged name, and **null where the launch tagged
+none**: those turns go as whichever account is serving, which is a question for
+`status` and not for the process. Both `account` and `daemon` are null where
+`through` is false.
+
+The rendered form is one line, for a status line or a sweep:
+
+```
+pid 4242: through proxenos as work-codex (http://127.0.0.1:8787)
+pid 4242: through proxenos as the serving account (http://127.0.0.1:8787)
+pid 4242: not through proxenos
+```
+
+**No token is ever printed.** The value being parsed may hold
+`proxenos-token:<secret>` beside the account tag — that is exactly what a
+client-mode launch sets — and the parsed token is dropped where it is read: the
+answer has no field it could reach, in either form.
+
+**A pid that cannot be answered about is refused, saying which of the two it
+is.** `no process <pid> is running` and `the environment of process <pid> could
+not be read` call for different next steps, and `not through proxenos` for
+either would be a wrong answer rather than a missing one. On macOS a command
+line with no assignment after it is the second case: that is what `ps` prints
+for a process that is not the caller's, and it is not an error.
 
 ---
 
@@ -2101,7 +2172,9 @@ removed within a major version; only new ones are added.
 that needs it checks for it, and its absence means a local daemon.
 
 **No method name was added, renamed or removed.** The HTTP transport carries
-the same eighteen; that is the point of it.
+the same eighteen; that is the point of it. `inspect` (§2.8) is a CLI verb
+added and not a method: it reads a process rather than asking a daemon, so
+there is nothing on the socket for it to have needed.
 
 **Before 1.0 that rule has one deliberate exception, and it closes on its own.**
 Semantic versioning does not bind a zero major, and nothing outside this
