@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.21.0]
 
 - **One daemon, reached from other machines.** A second machine can run only
   the proxenos CLI and be served by a daemon on the first — its accounts, its
