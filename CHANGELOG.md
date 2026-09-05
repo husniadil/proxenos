@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.21.1]
 
 - **A tokened daemon shut its own machine out.** Setting `listen.address` to a
   reachable address moved the only listener there, so nothing answered on
