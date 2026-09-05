@@ -4,6 +4,15 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.23.3]
+
+- **A named usage window survives a snapshot from the other source.** The
+  headers on a served turn state the 5h, 7d and overage windows; the usage
+  endpoint states the 5h, 7d and each model's own. A snapshot replaced the
+  whole set, so "Fable" and "overage" took turns on the meter depending on
+  which source spoke last. A named window the newer source did not restate is
+  now kept from the older one until it resets.
+
 ## [0.23.2]
 
 - **A request naming a pinned tier's model id is served as that tier.** A
