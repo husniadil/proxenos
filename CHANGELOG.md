@@ -4,6 +4,18 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.23.2]
+
+- **A request naming a pinned tier's model id is served as that tier.** A
+  client is handed the routing table's ids at launch (`/v1/models`), and Claude
+  Code 2.1.25x resolves a tier name to that id before sending — so a subagent
+  asked for as `sonnet` arrives as `gpt-5.6-luna`. A tier pinned to a
+  first-provider account was matched by name only; asked for by id while an
+  Anthropic account served turns, the id fell through to the serving account
+  and was relayed to a provider that had never heard of it, `404 model: …`.
+  The tier that owns the id now decides who pays, by name first and by id
+  second.
+
 ## [0.23.1]
 
 - **`inspect` on Linux refuses an empty environment rather than reading it as
