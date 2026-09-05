@@ -143,11 +143,20 @@ proxenos stop       ask the running daemon to stop
 proxenos tiers      the tier mapping as `TIER MODEL`, a tier the catalog
                     cannot honour marked (--json prints the `tiers` payload)
   tiers set        TIER MODEL [--account NAME] [--persist]
+                   [--as ACCOUNT [--allow-cross-account]]
                     point one tier at a model, through `tiers.set` (§3) with
                     exactly what was typed: no account means the shared
                     table, no --persist means until the daemon stops, and
                     the answer says which. One tier per call, because a set
-                    is partial. The pinned form is not spelled here
+                    is partial. `--as` pins the tier to a stored account —
+                    the table form of §4 — which needs the operator's
+                    consent and is refused without it, naming the flag;
+                    `--allow-cross-account` grants that consent first, in the
+                    same breath, through `cross_account_tiers.set` (always
+                    written), and a consent already given is left alone
+  tiers cross-account on|off
+                    grant or revoke consent for pinned tiers; `off` is
+                    refused while any tier still pins an account
 proxenos effort     the effort ceiling in force, read from `status`
   effort set       low|medium|high|none [--account NAME] [--persist]
                     set the ceiling through `effort.set` (§3); `none` is the
@@ -165,7 +174,11 @@ proxenos supervisor install|uninstall|status
                     writes the unit for this user and hands it over,
                     `uninstall` removes it and the daemon it was supervising
                     stops with it, `status` says whether it is installed and
-                    what the supervisor makes of it. Named for what supervises
+                    what the supervisor makes of it (--json prints the same
+                    as one document: `installed` — absent, current, or
+                    divergent — the plist, program, log and socket paths, and
+                    the `state` word and `pid` launchd holds, null where it
+                    said nothing). Named for what supervises
                     rather than for launchd, because a verb named after an
                     implementation cannot grow a second one
 ```
@@ -1062,14 +1075,14 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 
 | Method | Returns | v0.1 |
 |---|---|---|
-| `status` | connection state, the process serving the socket (`pid`) and whether the supervisor of §2.6 started it (`supervised` — `true`, `false`, or **null** where this side cannot tell, which is every platform with no supervisor here and any process launchd started under some other label), whether the grant has been **refused** — `dead` where this side cannot spend it and `refused` carrying the backend's own words where it was sent and turned away — when the serving account's login has to be renewed (`login_expires_at`, absent where no such date exists), plan and which source reported it, the tier mapping and the effort ceiling, any mapped model the catalog withholds, `missing_tiers` — the tiers whose stated model this account's catalog does not carry at all, present and empty rather than absent — whether the catalog was authoritative, the client policy in effect, and the build and `instance` serving the socket | yes |
+| `status` | connection state, the process serving the socket (`pid`) and whether the supervisor of §2.6 started it (`supervised` — `true`, `false`, or **null** where this side cannot tell, which is every platform with no supervisor here and any process launchd started under some other label), whether the grant has been **refused** — `dead` where this side cannot spend it and `refused` carrying the backend's own words where it was sent and turned away — when the serving account's login has to be renewed (`login_expires_at`, absent where no such date exists), plan and which source reported it, the tier mapping and the effort ceiling, any mapped model the catalog withholds, `missing_tiers` — the tiers whose stated model this account's catalog does not carry at all, present and empty rather than absent — whether the catalog was authoritative, `cross_account_tiers` — whether a tier may pin another account, so a front-end knows before asking rather than from the refusal — the client policy in effect, and the build and `instance` serving the socket | yes |
 | `accounts.select` (re-selection) | selecting the account already serving answers `{"selected", "provider", "previous_provider", "unchanged": true}` and does nothing else: no catalog fetch, no conversation ended, no figure dropped. A switch pays all three to arrive somewhere; this one is already there | no — `unchanged` added after v0.12 |
 | `accounts.remove` | removes one account — the selected one, or `{"account": name}` — and answers with the name it cleared and the one serving turns afterwards; the rest stay usable, and an idle account's removal leaves the serving grant's quota alone. A key is dropped from this daemon's store; a **declared** profile loses its `[profiles]` entry and nothing else — the grant belongs to the program that owns the directory — after which the file is re-read so the daemon stops answering for it. A profile that was found rather than declared is refused, saying so and that `[profiles]` is empty | no — was `disconnect`, then `accounts.forget` |
 | `accounts` | every stored account, what kind of credential each holds, whether the operator wrote it down (`declared`, true only for a profile named in `[profiles]`), and which one serves turns, plus `discovered` — whether these are the operator's own `[profiles]` entries or the stock profile of each program, read because none were declared; each borrowed row also carries the profile it was read from and, for a Claude profile, `login_expires_at` — the date the operator has to sign in again. A borrowed row whose store could not be read carries `unreadable`, the refusal's own words naming the store and the remedy; the key is **absent** on a row that was read, and on every key, so a reader must treat absent as readable rather than looking for a null. No tokens | no — v0.3 |
 | `accounts.select` | `{"account": name}`, the account every following turn is made as, the provider now serving and the one serving a moment ago (absent where nothing was) — one select moves every unpinned turn onto that provider's subscription — whether the catalog was refetched for it, and the tier mapping now in force; refuses, and moves nothing, where that account's mapping names a model its catalog does not have, naming whose menu refused and how to give that account its own mapping | no — v0.3 |
 | `accounts.rename` | `{"account": from, "name": to}`, the name this daemon calls an account by, and whether an account section moved with it; the grant and the account id are untouched | no — v0.3 |
 | `models` | catalog, whether it is the fallback list, and whether it was fetched for an account other than the one it was asked about. `{"account": name}` answers for that account's menu rather than the selection's — which is the curated list where that account relays (§9.1), and is what `exec --account` measures a `--model` id against; a name the store does not hold is refused by name | yes — `{"account": name}` added after v0.16.0 |
-| `tiers` | tier mapping, plus `missing_tiers` — the tiers whose stated model this account's catalog does not carry | no — was `tiers.get`; `missing_tiers` added after v0.17.0 |
+| `tiers` | tier mapping, plus `missing_tiers` — the tiers whose stated model this account's catalog does not carry — and `cross_account_tiers`, as `status` carries it | no — was `tiers.get`; `missing_tiers` added after v0.17.0, `cross_account_tiers` after v0.19.0 |
 | `usage` | the serving account's quota as of its last turn, or that no turn has been made, plus `models` — the ids this daemon serves — and `accounts`, one entry per stored account with its own figure, its freshness, and `unavailable` where it has none. Each account entry also carries `served_tokens`, the §6.1 tally, and an entry with no figure carries `reason` beside its `detail` — `no_turn`, `no_relayed_turn`, `metered`, `unknown_key_kind`, `not_reported` — the same fact in a word, so a renderer never matches on prose. Each window carries `used_percent`, `window_minutes`, `resets_at`, and — where the provider stated them — `status`, `surpassed_threshold`, `representative`, and `label` for a window no duration identifies. An entry whose provider states a credit balance also carries `credit` — `used_minor`, `limit_minor`, `exponent`, `currency`, `percent`, `severity` — money in the units the provider stated it in, present only where there is a balance to state. An entry whose provider states a subscription it no longer calls active also carries `subscription_status`, that provider's own word verbatim — absent where the subscription is active, which is silence | yes |
 | `usage.refresh` | asks the backend for a figure now, **per account** — every stored account whose credential can hold one, each on its own credential and each recorded under its own name. The answer is the serving account's outcome plus `accounts`, one entry per stored account carrying either its figure or the sentence saying why it has none. Nothing about which account serves turns is read or changed | yes |
 | `env` | the §2.2 block: `variables`, and `settings` always present. `{"account": name}` answers for a session served as that account rather than as the selection — the mapping, the window, and the client policy all resolved for it, which is what `exec --account` launches with; a name the store does not hold is refused by name | yes — `{"account": name}` added after v0.15.1 |

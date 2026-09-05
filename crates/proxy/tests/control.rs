@@ -509,6 +509,11 @@ async fn status_reports_the_base_url_and_tiers() {
     // against the fallback list. A caller that cannot tell would report an
     // unvalidated mapping as a validated one.
     assert_eq!(status["catalog_authoritative"], json!(true));
+    // Whether a tier may pin another account, stated so a front-end knows
+    // before it asks rather than from the refusal. The harness grants none.
+    assert_eq!(status["cross_account_tiers"], json!(false));
+    let tiers = harness.call("tiers").await.unwrap();
+    assert_eq!(tiers["cross_account_tiers"], json!(false));
 }
 
 #[tokio::test]

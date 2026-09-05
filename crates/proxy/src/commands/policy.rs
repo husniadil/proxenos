@@ -15,25 +15,69 @@ use serde_json::json;
 
 pub(crate) async fn tiers(args: cli::TiersArgs) -> Result<()> {
     let socket = control::default_path();
-    let Some(cli::TiersAction::Set(set)) = args.action else {
-        let result = control::call(&socket, "tiers", None).await?;
-        if args.json {
-            println!("{}", serde_json::to_string_pretty(&result)?);
+    let set = match args.action {
+        None => {
+            let result = control::call(&socket, "tiers", None).await?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+                return Ok(());
+            }
+            println!("{}", render::tiers(&result));
             return Ok(());
         }
-        println!("{}", render::tiers(&result));
-        return Ok(());
+        Some(cli::TiersAction::CrossAccount(consent)) => {
+            let enabled = consent.state == "on";
+            let result = control::call(
+                &socket,
+                "cross_account_tiers.set",
+                Some(json!({ "enabled": enabled })),
+            )
+            .await?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+                return Ok(());
+            }
+            println!("{}", render::cross_account_set(&result));
+            return Ok(());
+        }
+        Some(cli::TiersAction::Set(set)) => set,
     };
 
+    // Consent first, in the same breath, where the pin asks for it. The
+    // daemon persists consent always and answers `persisted: false` where it
+    // already stood, so granting again is not a second decision.
+    let mut consented = None;
+    if set.allow_cross_account {
+        let answer = control::call(
+            &socket,
+            "cross_account_tiers.set",
+            Some(json!({ "enabled": true })),
+        )
+        .await?;
+        consented = Some(answer);
+    }
+
+    // The same two shapes the file takes: a model id, or the pinned table.
+    let value = match &set.as_account {
+        Some(account) => json!({ "account": account, "model": set.model }),
+        None => Value::String(set.model.clone()),
+    };
     let params = with_scope(
-        json!({ "tiers": { set.tier.clone(): set.model } }),
+        json!({ "tiers": { set.tier.clone(): value } }),
         set.account,
         set.persist,
     );
     let result = control::call(&socket, "tiers.set", Some(params)).await?;
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&result)?);
+        let mut document = result;
+        if let (Some(consent), Some(fields)) = (consented, document.as_object_mut()) {
+            fields.insert("consent".to_owned(), consent);
+        }
+        println!("{}", serde_json::to_string_pretty(&document)?);
         return Ok(());
+    }
+    if let Some(consent) = consented {
+        println!("{}", render::cross_account_set(&consent));
     }
     println!("{}", render::tier_set(&set.tier, &result));
     Ok(())

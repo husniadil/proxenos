@@ -162,7 +162,28 @@ pub(crate) async fn supervisor(args: cli::SupervisorArgs) -> Result<()> {
             );
         }
         cli::SupervisorAction::Status => {
-            match supervisor::compare(existing.as_deref(), &unit) {
+            let installed = supervisor::compare(existing.as_deref(), &unit);
+            if args.json {
+                let (state, pid) = launchctl_state(&target);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "installed": match installed {
+                            supervisor::Installed::Absent => "absent",
+                            supervisor::Installed::Current => "current",
+                            supervisor::Installed::Divergent => "divergent",
+                        },
+                        "plist": plist,
+                        "program": unit.program,
+                        "log": unit.log,
+                        "socket": unit.socket,
+                        "state": state,
+                        "pid": pid,
+                    }))?
+                );
+                return Ok(());
+            }
+            match installed {
                 supervisor::Installed::Absent => {
                     println!("not supervised; install it with `proxenos supervisor install`");
                     return Ok(());
@@ -189,22 +210,31 @@ pub(crate) async fn supervisor(args: cli::SupervisorArgs) -> Result<()> {
             }
             println!("  control socket {}", unit.socket.display());
 
-            let output = launchctl(&["print", &target]).context("could not run launchctl")?;
-            let printed = String::from_utf8_lossy(&output.stdout);
-            let state = printed
-                .lines()
-                .find_map(|line| line.trim().strip_prefix("state = "))
-                .unwrap_or("unknown to the supervisor");
-            let pid = printed
-                .lines()
-                .find_map(|line| line.trim().strip_prefix("pid = "))
-                .unwrap_or("none");
+            let (state, pid) = launchctl_state(&target);
             println!(
                 "  the supervisor says: state {}, pid {}",
-                state.trim(),
-                pid.trim()
+                state.as_deref().unwrap_or("unknown to the supervisor"),
+                pid.map_or_else(|| "none".to_owned(), |pid| pid.to_string()),
             );
         }
     }
     Ok(())
+}
+
+/// What the supervisor itself says about the job: its state word and the pid
+/// it holds, each absent where launchd did not say.
+fn launchctl_state(target: &str) -> (Option<String>, Option<u64>) {
+    let Ok(output) = launchctl(&["print", target]) else {
+        return (None, None);
+    };
+    let printed = String::from_utf8_lossy(&output.stdout);
+    let state = printed
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("state = "))
+        .map(|state| state.trim().to_owned());
+    let pid = printed
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("pid = "))
+        .and_then(|pid| pid.trim().parse().ok());
+    (state, pid)
 }

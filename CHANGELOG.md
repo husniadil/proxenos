@@ -4,6 +4,22 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- `tiers set` takes `--as ACCOUNT` to pin a tier — the table form config.toml
+  already had, refused without the operator's consent as before — and
+  `--allow-cross-account` to grant that consent in the same breath, written
+  to config.toml before the pin is set and left alone where it already
+  stood. `tiers cross-account on|off` grants or revokes it on its own; `off`
+  is refused while a tier still pins. `proxenos tiers` prints a STATE column
+  where a row has one (`as spare`, or a model the catalog lacks) and the
+  consent line.
+- `status` and `tiers` carry `cross_account_tiers`, so a front-end knows
+  whether a pin will be taken before it asks.
+- `proxenos tiers` printed a pinned tier's model as nothing (0.19.0 read the
+  value as a string, and a pin is a table). Fixed.
+- `supervisor status --json` prints the report as one document.
+
 ## [0.19.0]
 
 - `proxenos tiers` and `proxenos effort` read the two settings a running daemon

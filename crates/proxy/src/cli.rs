@@ -105,10 +105,23 @@ pub enum TiersAction {
     /// One tier per call, because a set is partial: naming one tier changes
     /// that tier and no other. The model is validated against the catalog of
     /// the account being changed, and a model that catalog does not carry is
-    /// refused rather than written. A pinned tier — one served as another
-    /// account — needs the operator's consent in config.toml and is not
-    /// spelled here.
+    /// refused rather than written. `--as ACCOUNT` pins the tier: its turns
+    /// are made as that account whatever serves the rest, which needs the
+    /// operator's consent (`cross_account_tiers`) and is refused without it.
     Set(SetTierArgs),
+    /// Grant or revoke consent for pinned tiers: `on` or `off`.
+    ///
+    /// Always written to config.toml, unlike a set: consent is the operator
+    /// changing what the daemon is. `off` is refused while any tier still
+    /// pins an account, since the file would then refuse the next start.
+    CrossAccount(CrossAccountArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct CrossAccountArgs {
+    /// on, or off.
+    #[arg(value_parser = ["on", "off"])]
+    pub state: String,
 }
 
 #[derive(Debug, clap::Args)]
@@ -122,6 +135,17 @@ pub struct SetTierArgs {
     /// which needs --persist to mean anything.
     #[arg(long)]
     pub account: Option<String>,
+    /// Pin the tier: make its turns as this stored account, whatever account
+    /// serves the rest of the session. The model is then that account's to
+    /// offer, and its quota is the one spent.
+    #[arg(long = "as", value_name = "ACCOUNT")]
+    pub as_account: Option<String>,
+    /// Grant the consent a pin needs in the same breath, written to
+    /// config.toml before the pin is set. A consent already given is left
+    /// alone. Without this, a pin on a daemon that lacks it is refused,
+    /// naming this flag.
+    #[arg(long, requires = "as_account")]
+    pub allow_cross_account: bool,
     /// Write the change into config.toml as well. Without it the change lasts
     /// until the daemon stops, and the answer says which it was.
     #[arg(long)]
@@ -161,6 +185,9 @@ pub struct SetEffortArgs {
 pub struct SupervisorArgs {
     #[command(subcommand)]
     pub action: SupervisorAction,
+    /// Print what `status` found as one JSON document instead of the report.
+    #[arg(long, global = true)]
+    pub json: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -501,6 +528,66 @@ mod tests {
         assert!(set.persist);
 
         assert!(Cli::try_parse_from(["proxenos", "tiers", "set", "opus"]).is_err());
+    }
+
+    /// A pin is `--as ACCOUNT`; consent rides along as a flag that means
+    /// nothing without a pin, and consent on its own is a sub-verb.
+    #[test]
+    fn a_pin_is_as_and_consent_needs_one() {
+        let cli = Cli::try_parse_from([
+            "proxenos",
+            "tiers",
+            "set",
+            "haiku",
+            "gpt-5.6-luna",
+            "--as",
+            "spare",
+            "--allow-cross-account",
+        ])
+        .unwrap();
+        let Command::Tiers(TiersArgs {
+            action: Some(TiersAction::Set(set)),
+            ..
+        }) = cli.command
+        else {
+            panic!("tiers set should parse");
+        };
+        assert_eq!(set.as_account.as_deref(), Some("spare"));
+        assert!(set.allow_cross_account);
+
+        assert!(
+            Cli::try_parse_from([
+                "proxenos",
+                "tiers",
+                "set",
+                "haiku",
+                "x",
+                "--allow-cross-account"
+            ])
+            .is_err(),
+            "consent without a pin is a flag that does nothing, and is refused"
+        );
+
+        let cli = Cli::try_parse_from(["proxenos", "tiers", "cross-account", "off"]).unwrap();
+        let Command::Tiers(TiersArgs {
+            action: Some(TiersAction::CrossAccount(c)),
+            ..
+        }) = cli.command
+        else {
+            panic!("cross-account should parse");
+        };
+        assert_eq!(c.state, "off");
+        assert!(Cli::try_parse_from(["proxenos", "tiers", "cross-account", "maybe"]).is_err());
+    }
+
+    #[test]
+    fn supervisor_status_takes_json() {
+        let cli = Cli::try_parse_from(["proxenos", "supervisor", "status", "--json"]).unwrap();
+        let Command::Supervisor(args) = cli.command else {
+            panic!("supervisor should parse");
+        };
+        assert!(args.json);
+        assert!(matches!(args.action, SupervisorAction::Status));
     }
 
     #[test]

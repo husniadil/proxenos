@@ -34,7 +34,9 @@ proxenos exec --account work-codex claude --model gpt-5.6-sol --effort high
   `~/.config/proxenos/config.toml`. If the ceiling is `low`, asking for `high` gets
   `low`; check `proxenos effort` first. `proxenos effort set high` raises it on the
   running daemon until it stops (`--persist` writes the file), and
-  `proxenos tiers set opus gpt-5.6-sol` repoints one tier the same way.
+  `proxenos tiers set opus gpt-5.6-sol` repoints one tier the same way, and
+  `--as ACCOUNT` pins a tier's turns to another stored account's quota (consent
+  is asked once: `--allow-cross-account`, written to config.toml).
 
 Non-interactive works the same way: `proxenos exec --account work-codex claude -p
 "..." --model gpt-5.6-sol`.

@@ -46,11 +46,24 @@ fn stand_in(
 
             let result = match method.as_str() {
                 "tiers" => serde_json::json!({
-                    "tiers": { "fable": "gpt-5.6-sol", "opus": "gpt-5.6-luna" },
+                    "tiers": {
+                        "fable": "gpt-5.6-sol",
+                        "haiku": { "account": "spare", "model": "gpt-5.6-luna" },
+                        "opus": "gpt-5.6-luna",
+                    },
                     "missing_tiers": ["opus"],
+                    "cross_account_tiers": true,
+                }),
+                "cross_account_tiers.set" => serde_json::json!({
+                    "cross_account_tiers": request["params"]["enabled"],
+                    "persisted": true,
                 }),
                 "tiers.set" => serde_json::json!({
-                    "tiers": { "fable": "gpt-5.6-sol", "opus": "gpt-5.6-sol" },
+                    "tiers": {
+                        "fable": "gpt-5.6-sol",
+                        "opus": request["params"]["tiers"]["opus"].clone(),
+                        "haiku": request["params"]["tiers"]["haiku"].clone(),
+                    },
                     "persisted": request["params"]["persist"].as_bool().unwrap_or(false),
                     "account": request["params"]["account"],
                     "detail": "in effect until the daemon stops; the configuration file is unchanged",
@@ -97,11 +110,96 @@ fn tiers_reads_the_mapping_and_marks_a_missing_one() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "tiers failed: {stdout}");
     assert_eq!(requests.lock().unwrap()[0]["method"], "tiers");
+    assert!(stdout.contains("TIER    MODEL         STATE"), "{stdout}");
     assert!(stdout.contains("fable   gpt-5.6-sol"), "{stdout}");
     assert!(
-        stdout.contains("opus    gpt-5.6-luna  (not in this account's catalog)"),
+        stdout.contains("haiku   gpt-5.6-luna  as spare"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("opus    gpt-5.6-luna  not in this account's catalog"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("cross-account tiers: allowed"), "{stdout}");
+}
+
+/// A pin is the table form the file takes, and consent given in the same
+/// breath goes first — written before the pin that needs it is asked for.
+#[test]
+fn a_pin_is_the_table_form_and_consent_goes_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let (requests, server) = stand_in(&dir.path().join("proxenos.sock"), 3);
+
+    let pinned = run(
+        dir.path(),
+        &["tiers", "set", "haiku", "gpt-5.6-luna", "--as", "spare"],
+    );
+    let consented = run(
+        dir.path(),
+        &[
+            "tiers",
+            "set",
+            "haiku",
+            "gpt-5.6-luna",
+            "--as",
+            "spare",
+            "--allow-cross-account",
+        ],
+    );
+    server.join().unwrap();
+
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests[0]["method"], "tiers.set");
+    assert_eq!(
+        requests[0]["params"]["tiers"],
+        serde_json::json!({ "haiku": { "account": "spare", "model": "gpt-5.6-luna" } })
+    );
+    assert_eq!(requests[1]["method"], "cross_account_tiers.set");
+    assert_eq!(
+        requests[1]["params"],
+        serde_json::json!({ "enabled": true })
+    );
+    assert_eq!(requests[2]["method"], "tiers.set");
+
+    let stdout = String::from_utf8_lossy(&pinned.stdout);
+    assert!(stdout.contains("haiku → gpt-5.6-luna as spare"), "{stdout}");
+
+    let stdout = String::from_utf8_lossy(&consented.stdout);
+    assert!(
+        stdout.contains("cross-account tiers allowed; written to config.toml"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("haiku → gpt-5.6-luna as spare"), "{stdout}");
+}
+
+/// Consent on its own is a sub-verb, `on` or `off`, and nothing else.
+#[test]
+fn cross_account_grants_and_revokes_by_word() {
+    let dir = tempfile::tempdir().unwrap();
+    let (requests, server) = stand_in(&dir.path().join("proxenos.sock"), 2);
+
+    let on = run(dir.path(), &["tiers", "cross-account", "on"]);
+    let off = run(dir.path(), &["tiers", "cross-account", "off", "--json"]);
+    server.join().unwrap();
+
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests[0]["method"], "cross_account_tiers.set");
+    assert_eq!(
+        requests[0]["params"],
+        serde_json::json!({ "enabled": true })
+    );
+    assert_eq!(
+        requests[1]["params"],
+        serde_json::json!({ "enabled": false })
+    );
+
+    let stdout = String::from_utf8_lossy(&on.stdout);
+    assert!(
+        stdout.contains("allowed; written to config.toml"),
+        "{stdout}"
+    );
+    let payload: serde_json::Value = serde_json::from_slice(&off.stdout).unwrap();
+    assert_eq!(payload["cross_account_tiers"], false);
 }
 
 /// `tiers set` sends one tier, and only the flags that were given.

@@ -61,28 +61,102 @@ pub fn tiers(result: &Value) -> String {
         .and_then(Value::as_array)
         .map(|values| values.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
-    let mut lines = vec!["TIER    MODEL".to_owned()];
-    if let Some(map) = field(result, "tiers").and_then(Value::as_object) {
-        for (tier, model) in map {
-            let model = model.as_str().unwrap_or_default();
-            let mark = if missing.contains(&tier.as_str()) {
-                "  (not in this account's catalog)"
-            } else {
-                ""
-            };
-            lines.push(format!("{tier:<7} {model}{mark}"));
-        }
+    let rows: Vec<(String, String, String)> = field(result, "tiers")
+        .and_then(Value::as_object)
+        .map(|map| {
+            map.iter()
+                .map(|(tier, value)| {
+                    let (model, pinned) = tier_value(value);
+                    let state = if missing.contains(&tier.as_str()) {
+                        "not in this account's catalog".to_owned()
+                    } else {
+                        pinned
+                            .map(|account| format!("as {account}"))
+                            .unwrap_or_default()
+                    };
+                    (tier.clone(), model, state)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // The STATE column only where a row has one, as `status` prints it.
+    let stated = rows.iter().any(|(_, _, state)| !state.is_empty());
+    let width = rows
+        .iter()
+        .map(|(_, model, _)| model.len())
+        .max()
+        .unwrap_or(5)
+        .max(5);
+    let mut lines = vec![if stated {
+        format!("{:<7} {:<width$}  STATE", "TIER", "MODEL")
+    } else {
+        "TIER    MODEL".to_owned()
+    }];
+    for (tier, model, state) in rows {
+        lines.push(if stated {
+            format!("{tier:<7} {model:<width$}  {state}")
+                .trim_end()
+                .to_owned()
+        } else {
+            format!("{tier:<7} {model}")
+        });
+    }
+    if let Some(consent) = field(result, "cross_account_tiers").and_then(Value::as_bool) {
+        lines.push(format!(
+            "cross-account tiers: {}",
+            if consent { "allowed" } else { "off" }
+        ));
     }
     lines.join("\n")
 }
 
-/// What a set did: the tier's new model, and whether it outlives the daemon.
+/// A tier's value in either of the two shapes the file takes: the model, and
+/// the account it is pinned to where it is.
+fn tier_value(value: &Value) -> (String, Option<String>) {
+    match (value.as_str(), value.as_object()) {
+        (Some(model), _) => (model.to_owned(), None),
+        (None, Some(pinned)) => (
+            pinned
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+                .to_owned(),
+            pinned
+                .get("account")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        ),
+        _ => ("?".to_owned(), None),
+    }
+}
+
+/// What a set did: the tier's new model, the account it is pinned to where
+/// it is, and whether it outlives the daemon.
 pub fn tier_set(tier: &str, result: &Value) -> String {
-    let model = field(result, "tiers")
+    let (model, pinned) = field(result, "tiers")
         .and_then(|tiers| tiers.get(tier))
-        .and_then(Value::as_str)
-        .unwrap_or("?");
-    format!("{tier} → {model}\n{}", scope(result))
+        .map(tier_value)
+        .unwrap_or_else(|| ("?".to_owned(), None));
+    let pin = pinned
+        .map(|account| format!(" as {account}"))
+        .unwrap_or_default();
+    format!("{tier} → {model}{pin}\n{}", scope(result))
+}
+
+/// What granting or revoking consent did.
+pub fn cross_account_set(result: &Value) -> String {
+    let enabled = field(result, "cross_account_tiers")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let persisted = field(result, "persisted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    match (enabled, persisted) {
+        (true, true) => "cross-account tiers allowed; written to config.toml".to_owned(),
+        (true, false) => "cross-account tiers were already allowed".to_owned(),
+        (false, true) => "cross-account tiers off; written to config.toml".to_owned(),
+        (false, false) => "cross-account tiers were already off".to_owned(),
+    }
 }
 
 /// The ceiling in force, read from `status`.

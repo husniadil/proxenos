@@ -394,6 +394,11 @@ fn status(state: &ControlState) -> Value {
         // tier is up but refusing every turn. Present and empty rather than
         // absent, so "nothing missing" is distinguishable from "not reported".
         "missing_tiers": missing_tiers(state),
+        // Whether a tier may pin another account (§7.1). Reported so a
+        // front-end knows before it asks, rather than learning from the
+        // refusal; the flag is always persisted, so this is what the file
+        // says as much as what the daemon holds.
+        "cross_account_tiers": cross_account_permitted(state),
         // Whether the catalog is the backend's or the fallback list. A caller
         // that cannot tell would report an unvalidated mapping as a validated
         // one.
@@ -510,7 +515,15 @@ fn models(state: &ControlState, params: Option<&Value>) -> Result<Value, ProxyEr
 }
 
 fn tiers(state: &ControlState) -> Value {
-    json!({ "tiers": tier_map(state), "missing_tiers": missing_tiers(state) })
+    json!({
+        "tiers": tier_map(state),
+        "missing_tiers": missing_tiers(state),
+        "cross_account_tiers": cross_account_permitted(state),
+    })
+}
+
+fn cross_account_permitted(state: &ControlState) -> bool {
+    state.policy.get().cross_account() == crate::config::CrossAccountTiers::Permitted
 }
 
 /// Every model a tier points at, once each.
@@ -1092,7 +1105,8 @@ fn set_tiers(state: &ControlState, params: Option<&Value>) -> Result<Value, Prox
             return Err(ProxyError::invalid_request(format!(
                 "pinning `{name}` to another account routes this client's traffic across \
                  accounts. That is a decision the operator owns: set \
-                 `cross_account_tiers = true` in config.toml to permit it."
+                 `cross_account_tiers = true` in config.toml to permit it, or pass \
+                 `--allow-cross-account` to `proxenos tiers set`."
             )));
         }
 
