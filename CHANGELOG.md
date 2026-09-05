@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.22.0]
 
 - **`supervisor` supervises on Linux.** `install`, `uninstall` and `status`
   refused every platform but macOS, with a message that already described the
