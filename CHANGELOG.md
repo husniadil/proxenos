@@ -4,6 +4,13 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.21.3]
+
+- **`models --account NAME`** asks for one stored account's menu from the
+  command line, the way the control method has answered `{"account"}` since
+  v0.16.0. A tier pinned to a relay account can now be chosen from that
+  account's curated list without opening a socket by hand.
+
 ## [0.21.2]
 
 - **`claude-fable-5-1` joins the curated Anthropic menu**, with its `[1m]`

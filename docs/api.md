@@ -185,7 +185,8 @@ proxenos status     connection, tier mapping, model catalog (--json prints the
                     socket's own payload)
 proxenos models     available models, as `MODEL WINDOW TIER` under a header;
                     TIER names the tiers mapping to each id, read from the
-                    `tiers` method (--json prints the socket's own payload)
+                    `tiers` method (--json prints the socket's own payload;
+                    --account NAME asks for that stored account's menu)
 proxenos env        environment for Claude Code, as shell exports
 proxenos settings   the same configuration, as one settings document
 proxenos exec       run a command with that configuration applied

@@ -342,6 +342,10 @@ pub struct StatusArgs {
 
 #[derive(Debug, clap::Args)]
 pub struct ModelsArgs {
+    /// Whose menu: a stored account's rather than the selection's. Where that
+    /// account relays, this is the curated list.
+    #[arg(long, value_name = "ACCOUNT")]
+    pub account: Option<String>,
     /// Print the socket's own payload instead of the table.
     #[arg(long)]
     pub json: bool,
@@ -952,6 +956,15 @@ mod tests {
             panic!("models should parse");
         };
         assert!(!args.json);
+        assert!(args.account.is_none());
+
+        let cli =
+            Cli::try_parse_from(["proxenos", "models", "--account", "spare", "--json"]).unwrap();
+        let Command::Models(args) = cli.command else {
+            panic!("models should parse");
+        };
+        assert_eq!(args.account.as_deref(), Some("spare"));
+        assert!(args.json);
     }
 
     /// Everything after the program name belongs to the child, hyphens and

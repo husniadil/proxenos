@@ -34,10 +34,15 @@ pub(crate) async fn print_status(args: cli::StatusArgs) -> Result<()> {
 /// reads it there rather than having the `models` payload carry a second copy
 /// of it. A mapping that cannot be read costs the column and not the table.
 /// `--json` is the `models` payload alone, which is what that flag means
-/// everywhere.
+/// everywhere. `--account` asks for that account's menu (§2.2), which is what
+/// a tier pinned to it may name.
 pub(crate) async fn print_models(args: cli::ModelsArgs) -> Result<()> {
     let endpoint = control::Endpoint::resolve()?;
-    let result = control::dial(&endpoint, "models", None).await?;
+    let params = args
+        .account
+        .as_deref()
+        .map(|account| serde_json::json!({ "account": account }));
+    let result = control::dial(&endpoint, "models", params).await?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
