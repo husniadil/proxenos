@@ -21,23 +21,19 @@ fn origin() -> Origin {
     }
 }
 
-/// A platform with no launchd refuses and says what it would take, rather than
+/// A platform with neither supervisor refuses and says so by name, rather than
 /// writing a file that supervises nothing. A half-installed unit that silently
 /// never runs is worse than no verb at all, and the operator cannot tell the
 /// two apart from the outside.
 #[test]
 fn a_platform_this_cannot_supervise_is_refused_by_name() {
-    let error = plan(&Platform::Other("linux"), &origin()).unwrap_err();
+    let error = plan(&Platform::Other("freebsd"), &origin()).unwrap_err();
     let message = error.to_string();
 
-    assert!(message.contains("linux"), "{message}");
+    assert!(message.contains("freebsd"), "{message}");
     assert!(
-        message.contains("launchd"),
-        "the refusal names the one supervisor this implements: {message}"
-    );
-    assert!(
-        message.contains("systemd"),
-        "and names what supervising this platform would take: {message}"
+        message.contains("launchd") && message.contains("systemd"),
+        "the refusal names both supervisors this implements: {message}"
     );
     assert!(
         message.contains("proxenos start"),
@@ -347,4 +343,250 @@ fn supervision_is_read_from_the_job_label_and_never_guessed() {
         supervised(&Platform::Other("linux"), Some(proxenos::supervisor::LABEL)),
         None
     );
+}
+
+// ---------------------------------------------------------------------------
+// The systemd user service. Same plan, same environment, same socket — a
+// different file format and a different tool to hand it to.
+// ---------------------------------------------------------------------------
+
+/// The unit systemd is handed, in full.
+///
+/// A rendering asserted key by key passes while the file is unloadable, because
+/// what makes a unit work is as much its sections as its settings: a
+/// `Restart=always` outside `[Service]` is a parse error, and an `[Install]`
+/// section that is missing takes `enable` with it. So the whole document is the
+/// assertion.
+#[test]
+fn the_systemd_unit_is_a_user_service_that_always_comes_back() {
+    let document = render(&plan(&Platform::Linux, &origin()).unwrap());
+
+    assert_eq!(
+        document,
+        "[Unit]\n\
+         Description=proxenos daemon\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         ExecStart=\"/Users/someone/.local/bin/proxenos\" \"run\"\n\
+         Environment=\"TMPDIR=/var/folders/j2/abcdef/T/\"\n\
+         Restart=always\n\
+         RestartSec=5\n\
+         StandardOutput=append:/Users/someone/.config/proxenos/daemon.log\n\
+         StandardError=append:/Users/someone/.config/proxenos/daemon.log\n\
+         \n\
+         [Install]\n\
+         WantedBy=default.target\n"
+    );
+}
+
+/// It runs `run` in the foreground, for the reason the launchd unit does: a
+/// process that forks away leaves the supervisor watching something that has
+/// already exited, and the respawn then fights the daemon it cannot see.
+#[test]
+fn the_systemd_unit_runs_the_daemon_in_the_foreground() {
+    let unit = plan(&Platform::Linux, &origin()).unwrap();
+    let document = render(&unit);
+
+    assert_eq!(unit.arguments, vec!["run".to_owned()]);
+    assert!(!document.contains("\"start\""), "{document}");
+    assert!(document.contains("Type=simple"), "{document}");
+    assert!(!document.contains("Type=forking"), "{document}");
+}
+
+/// `%` introduces a specifier to systemd, not a character. A home directory
+/// holding one would be substituted at load time — `%u` is the user name, `%h`
+/// the home directory — and the daemon would bind a socket nobody dials, which
+/// is this verb's whole failure mode arrived at through the file format.
+///
+/// A space is the other one: an unquoted `ExecStart` splits on it into a
+/// program that does not exist and an argument nobody passed.
+#[test]
+fn a_systemd_path_carrying_a_specifier_or_a_space_survives_the_rendering() {
+    let origin = Origin {
+        program: PathBuf::from("/Users/some one/bin/100% proxenos"),
+        log: PathBuf::from("/Users/some one/log/daemon.log"),
+        ..origin()
+    };
+    let document = render(&plan(&Platform::Linux, &origin).unwrap());
+
+    assert!(
+        document.contains("ExecStart=\"/Users/some one/bin/100%% proxenos\" \"run\""),
+        "{document}"
+    );
+    assert!(
+        document.contains("StandardOutput=append:/Users/some one/log/daemon.log"),
+        "{document}"
+    );
+}
+
+/// The unit file is a world-readable file in the user's home, the same as the
+/// plist, and the environment it may carry is the same closed set of two.
+#[test]
+fn the_systemd_unit_carries_no_credential() {
+    let origin = Origin {
+        proxenos_home: Some("/Users/someone/px".into()),
+        ..origin()
+    };
+    let unit = plan(&Platform::Linux, &origin).unwrap();
+    let document = render(&unit);
+
+    let keys: Vec<&str> = unit
+        .environment
+        .iter()
+        .map(|(key, _)| key.as_str())
+        .collect();
+    assert_eq!(keys, vec!["PROXENOS_HOME", "TMPDIR"]);
+    assert!(
+        document.contains("Environment=\"PROXENOS_HOME=/Users/someone/px\"")
+            && document.contains("Environment=\"TMPDIR=/var/folders/j2/abcdef/T/\""),
+        "{document}"
+    );
+
+    let lowered = document.to_ascii_lowercase();
+    for forbidden in ["token", "secret", "api_key", "apikey", "password", "auth"] {
+        assert!(
+            !lowered.contains(forbidden),
+            "the unit must carry no credential, found {forbidden}"
+        );
+    }
+    // `EnvironmentFile=` would let a later edit point the unit at a file of
+    // secrets and have systemd read it in. Nothing here writes one.
+    assert!(!document.contains("EnvironmentFile"), "{document}");
+}
+
+/// The socket hazard, on the other platform. `systemd --user` supplies no
+/// `TMPDIR` at all where the unit names none, so the daemon would fall back to
+/// `/tmp` while the operator's shell went on dialing its own — the same drift
+/// the launchd unit carries `TMPDIR` to close, and closed the same way.
+#[test]
+fn the_systemd_unit_binds_the_socket_the_cli_dials() {
+    for home in [None, Some(OsString::from("/home/someone/px"))] {
+        for tmpdir in [None, Some(OsString::from("/tmp/mine"))] {
+            let origin = Origin {
+                proxenos_home: home.clone(),
+                tmpdir: tmpdir.clone(),
+                ..origin()
+            };
+            let unit = plan(&Platform::Linux, &origin).unwrap();
+
+            let carried = |key: &str| {
+                unit.environment
+                    .iter()
+                    .find(|(name, _)| name == key)
+                    .map(|(_, value)| PathBuf::from(value))
+            };
+            let bound = proxenos::control::path_for(
+                carried("PROXENOS_HOME").as_deref(),
+                carried("TMPDIR").as_deref(),
+            );
+            let dialed = proxenos::control::path_for(
+                home.as_ref().map(PathBuf::from).as_deref(),
+                tmpdir.as_ref().map(PathBuf::from).as_deref(),
+            );
+
+            assert_eq!(bound, dialed, "home {home:?}, tmpdir {tmpdir:?}");
+            assert_eq!(unit.socket, bound, "home {home:?}, tmpdir {tmpdir:?}");
+        }
+    }
+}
+
+/// systemd reads `XDG_CONFIG_HOME` and nothing else, so the unit goes under the
+/// same base the rest of this project resolves its configuration from — and
+/// under `systemd/user`, which is the only directory a *user* manager loads.
+#[test]
+fn the_systemd_unit_is_written_where_a_user_manager_looks() {
+    assert_eq!(
+        proxenos::supervisor::unit_path(std::path::Path::new("/home/someone/.config")),
+        PathBuf::from("/home/someone/.config/systemd/user/proxenos.service")
+    );
+    // Named for the unit type, not for the launchd label: systemd reads the
+    // extension, and `proxenos.daemon` would be a unit of a type that does not
+    // exist.
+    assert!(proxenos::supervisor::SERVICE.ends_with(".service"));
+}
+
+/// A relative program is refused on both platforms: systemd requires an
+/// absolute `ExecStart` exactly as launchd resolves nothing.
+#[test]
+fn a_program_systemd_cannot_resolve_is_refused() {
+    let origin = Origin {
+        program: PathBuf::from("target/release/proxenos"),
+        ..origin()
+    };
+
+    let message = plan(&Platform::Linux, &origin).unwrap_err().to_string();
+    assert!(message.contains("absolute"), "{message}");
+}
+
+/// Divergence is the same comparison on both platforms, and it is the one that
+/// catches an environment that has moved since install.
+#[test]
+fn a_systemd_unit_installed_from_a_different_environment_is_divergent() {
+    use proxenos::supervisor::Installed;
+    use proxenos::supervisor::compare;
+
+    let wanted = plan(&Platform::Linux, &origin()).unwrap();
+    let elsewhere = Origin {
+        tmpdir: Some("/tmp/elsewhere".into()),
+        ..origin()
+    };
+    let stale = render(&plan(&Platform::Linux, &elsewhere).unwrap());
+
+    assert_eq!(compare(None, &wanted), Installed::Absent);
+    assert_eq!(compare(Some(&render(&wanted)), &wanted), Installed::Current);
+    assert_eq!(compare(Some(&stale), &wanted), Installed::Divergent);
+
+    // And a plist is not a service. The two platforms render the same plan into
+    // documents that must never compare equal, or a machine that changed
+    // supervisors would report `current` for a file the supervisor cannot read.
+    let plist = render(&plan(&Platform::MacOs, &origin()).unwrap());
+    assert_eq!(compare(Some(&plist), &wanted), Installed::Divergent);
+}
+
+/// What `status` reports comes from `systemctl --user show`, and the trap is
+/// that `show` answers for a unit it has never heard of in exactly the shape of
+/// one that is installed and stopped. `LoadState=not-found` is what separates
+/// them, and where it says so nothing is reported rather than `inactive` —
+/// which would be a state word for a unit systemd does not have.
+#[test]
+fn systemd_status_is_read_from_show_and_never_invented() {
+    use proxenos::supervisor::parse_systemd_show;
+
+    assert_eq!(
+        parse_systemd_show(
+            "LoadState=loaded\nActiveState=active\nSubState=running\nMainPID=4711\n"
+        ),
+        (Some("active (running)".to_owned()), Some(4711))
+    );
+
+    // Stopped: a real unit with no process. `MainPID=0` is systemd's word for
+    // "none", not a pid.
+    assert_eq!(
+        parse_systemd_show("LoadState=loaded\nActiveState=inactive\nSubState=dead\nMainPID=0\n"),
+        (Some("inactive (dead)".to_owned()), None)
+    );
+
+    // Crash looping, which is what an install over a held port looks like. The
+    // sub-state is the half that says so, and it is why both are reported.
+    assert_eq!(
+        parse_systemd_show(
+            "LoadState=loaded\nActiveState=activating\nSubState=auto-restart\nMainPID=0\n"
+        ),
+        (Some("activating (auto-restart)".to_owned()), None)
+    );
+
+    // Not installed. Same fields, same shape, and no state is the honest read.
+    assert_eq!(
+        parse_systemd_show("LoadState=not-found\nActiveState=inactive\nSubState=dead\nMainPID=0\n"),
+        (None, None)
+    );
+
+    // `show` prints its properties in whatever order it likes, and a version
+    // that prints fewer of them says nothing rather than guessing.
+    assert_eq!(
+        parse_systemd_show("MainPID=12\nSubState=running\nLoadState=loaded\nActiveState=active\n"),
+        (Some("active (running)".to_owned()), Some(12))
+    );
+    assert_eq!(parse_systemd_show(""), (None, None));
 }

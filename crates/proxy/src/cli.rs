@@ -83,9 +83,9 @@ pub enum Command {
     Record(RecordArgs),
     /// Install, remove, or inspect the supervisor that keeps the daemon alive.
     ///
-    /// Named for what supervises rather than for launchd, because the one
-    /// platform this implements is not the only one it will be asked about, and
-    /// a verb named after an implementation cannot grow a second one.
+    /// Named for what supervises rather than for launchd, because a verb named
+    /// after an implementation cannot grow a second one — which it since did:
+    /// launchd on macOS, a systemd user service on Linux.
     Supervisor(SupervisorArgs),
 }
 

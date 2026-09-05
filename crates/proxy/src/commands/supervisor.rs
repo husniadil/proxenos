@@ -1,4 +1,8 @@
 //! `supervisor` — the part of supervision that touches the machine.
+//!
+//! Two supervisors, one verb. What each of them *is* was decided in
+//! `proxenos::supervisor` as a pure function; what is left here is writing the
+//! file, running the tool that loads it, and reading what the tool says back.
 
 use super::Answering;
 use super::STOP_WINDOW;
@@ -69,10 +73,9 @@ async fn settled_after_bootout() -> Option<Answering> {
 /// The decisions all happened in `proxenos::supervisor`; what is left here is
 /// the part that touches the machine.
 pub(crate) async fn supervisor(args: cli::SupervisorArgs) -> Result<()> {
-    use anyhow::Context;
     use proxenos::supervisor;
 
-    // §2 — every action here writes or reads a launchd unit on THIS machine.
+    // §2 — every action here writes or reads a supervisor unit on THIS machine.
     // Pointed at a daemon elsewhere, `install` would supervise a second daemon
     // on the client's own port and `status` would report about it, both
     // looking exactly like success.
@@ -80,6 +83,27 @@ pub(crate) async fn supervisor(args: cli::SupervisorArgs) -> Result<()> {
 
     let origin = supervisor_origin()?;
     let unit = supervisor::plan(&supervisor::Platform::current(), &origin)?;
+    match unit.kind {
+        supervisor::Kind::LaunchdAgent => launchd(args, &unit).await,
+        supervisor::Kind::SystemdUserService => systemd(args, &unit).await,
+    }
+}
+
+/// The word `status --json` prints for what is on disk.
+fn installed_word(installed: &proxenos::supervisor::Installed) -> &'static str {
+    use proxenos::supervisor::Installed;
+    match installed {
+        Installed::Absent => "absent",
+        Installed::Current => "current",
+        Installed::Divergent => "divergent",
+    }
+}
+
+/// Install, remove, or report the launchd agent.
+async fn launchd(args: cli::SupervisorArgs, unit: &proxenos::supervisor::Unit) -> Result<()> {
+    use anyhow::Context;
+    use proxenos::supervisor;
+
     let home = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
         .context("HOME names nothing, so there is no per-user agent directory to write into")?;
@@ -121,7 +145,7 @@ pub(crate) async fn supervisor(args: cli::SupervisorArgs) -> Result<()> {
                 after.as_ref().map(|a| a.version.as_str()),
             );
 
-            std::fs::write(&plist, supervisor::render(&unit))
+            std::fs::write(&plist, supervisor::render(unit))
                 .with_context(|| format!("could not write {}", plist.display()))?;
 
             let output = launchctl(&["bootstrap", &domain, &plist.to_string_lossy()])
@@ -168,17 +192,13 @@ pub(crate) async fn supervisor(args: cli::SupervisorArgs) -> Result<()> {
             );
         }
         cli::SupervisorAction::Status => {
-            let installed = supervisor::compare(existing.as_deref(), &unit);
+            let installed = supervisor::compare(existing.as_deref(), unit);
             if args.json {
                 let (state, pid) = launchctl_state(&target);
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
-                        "installed": match installed {
-                            supervisor::Installed::Absent => "absent",
-                            supervisor::Installed::Current => "current",
-                            supervisor::Installed::Divergent => "divergent",
-                        },
+                        "installed": installed_word(&installed),
                         "plist": plist,
                         "program": unit.program,
                         "log": unit.log,
@@ -243,4 +263,269 @@ fn launchctl_state(target: &str) -> (Option<String>, Option<u64>) {
         .find_map(|line| line.trim().strip_prefix("pid = "))
         .and_then(|pid| pid.trim().parse().ok());
     (state, pid)
+}
+
+/// `systemctl --user`, and never anything else.
+///
+/// No `sudo`, and no system-level unit. A system unit runs as another user and
+/// would bind a control socket in a home directory this operator does not own,
+/// which is a daemon that comes up and answers nothing the CLI dials — the
+/// exact failure the whole verb is shaped around. Where the user manager is
+/// unreachable this refuses and says so.
+fn systemctl(arguments: &[&str]) -> std::io::Result<std::process::Output> {
+    std::process::Command::new("systemctl")
+        .arg("--user")
+        .args(arguments)
+        .output()
+}
+
+/// Refuse before writing anything where there is no user manager to hand it to.
+///
+/// A unit written into a directory nothing reads is the half-installed state
+/// this verb exists to avoid, and it is the likely one in a container or over a
+/// bare `ssh` command: `systemd --user` needs a login session, an
+/// `XDG_RUNTIME_DIR`, and a session bus, and none of those exist merely because
+/// the machine boots systemd.
+fn require_user_manager() -> Result<()> {
+    let output = match systemctl(&["show", "-p", "Version"]) {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => bail!(
+            "`systemctl` is not on this machine's PATH, so there is no systemd to hand a unit \
+             to. Nothing was written. Start the daemon with `proxenos start` and supervise it \
+             with whatever this machine already has."
+        ),
+        Err(error) => bail!("could not run `systemctl --user`: {error}"),
+    };
+    if output.status.success() {
+        return Ok(());
+    }
+    bail!(
+        "`systemctl --user` could not reach a per-user systemd, so nothing was written: {}\n  \
+         a user manager needs a login session — an `XDG_RUNTIME_DIR` (this one says {}) and a \
+         session bus (`DBUS_SESSION_BUS_ADDRESS`: {}). Over a bare `ssh <host> <command>` or \
+         inside a container there is often neither.\n  where the machine has logind, \
+         `loginctl enable-linger $USER` keeps a manager running for this user; then log in \
+         again and retry.\n  this verb does not fall back to a system-level unit or to `sudo`: \
+         a unit running as another user binds a control socket this one never dials.",
+        String::from_utf8_lossy(&output.stderr).trim(),
+        described("XDG_RUNTIME_DIR"),
+        described("DBUS_SESSION_BUS_ADDRESS"),
+    )
+}
+
+/// An environment variable as the refusal should quote it, absence included.
+fn described(key: &str) -> String {
+    std::env::var_os(key).map_or_else(
+        || "unset".to_owned(),
+        |value| value.to_string_lossy().into_owned(),
+    )
+}
+
+/// Write the unit where a half-written one is never loadable.
+///
+/// `daemon-reload` may run against this directory for reasons that have nothing
+/// to do with this verb, so the window between "file exists" and "file is
+/// complete" is a window in which systemd can read a truncated unit. A rename
+/// over the final name has no such window. The temporary carries this process
+/// id, because two installs racing on one name would interleave into a file
+/// that is neither.
+fn write_unit(path: &std::path::Path, body: &str) -> Result<()> {
+    use anyhow::Context;
+
+    let mut pending = path.to_path_buf().into_os_string();
+    pending.push(format!(".{}.pending", std::process::id()));
+    let pending = std::path::PathBuf::from(pending);
+
+    std::fs::write(&pending, body)
+        .with_context(|| format!("could not write {}", pending.display()))?;
+    if let Err(error) = std::fs::rename(&pending, path) {
+        let _ = std::fs::remove_file(&pending);
+        return Err(error).with_context(|| format!("could not write {}", path.display()));
+    }
+    Ok(())
+}
+
+/// Undo an install that systemd would not accept, so nothing is half-installed.
+///
+/// The mirror of the launchd verb's rule, with one more step: `enable --now`
+/// can leave the `default.target.wants` symlink behind after the start it also
+/// asked for has failed, and a symlink to a file this then removes is a unit
+/// systemd complains about on every reload.
+fn undo_install(path: &std::path::Path) {
+    let _ = systemctl(&["disable", proxenos::supervisor::SERVICE]);
+    let _ = std::fs::remove_file(path);
+    let _ = systemctl(&["daemon-reload"]);
+}
+
+/// Install, remove, or report the systemd user service.
+async fn systemd(args: cli::SupervisorArgs, unit: &proxenos::supervisor::Unit) -> Result<()> {
+    use anyhow::Context;
+    use proxenos::supervisor;
+
+    let path = supervisor::unit_path(&proxenos::config::xdg_config_home());
+    let existing = std::fs::read_to_string(&path).ok();
+
+    // Asked of every action, `status` included. A report assembled from a file
+    // on disk while the manager that would run it cannot be reached is a report
+    // about nothing, and `installed: current` is exactly the sentence a reader
+    // would take as "it is running".
+    require_user_manager()?;
+
+    match args.action {
+        cli::SupervisorAction::Install => {
+            for parent in [path.parent(), unit.log.parent()].into_iter().flatten() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("could not create {}", parent.display()))?;
+            }
+
+            // Replacing rather than adding, and the stop is what frees the
+            // port: a reinstall means the new binary, and the running job is
+            // still the old one until something ends it.
+            let before = answering().await;
+            let booted_out = existing.is_some();
+            if booted_out {
+                let _ = systemctl(&["stop", supervisor::SERVICE]);
+            }
+            let after = if booted_out {
+                settled_after_bootout().await
+            } else {
+                None
+            };
+            let held = supervisor::holder(
+                booted_out,
+                before.as_ref().map(|a| a.version.as_str()),
+                after.as_ref().map(|a| a.version.as_str()),
+            );
+
+            write_unit(&path, &supervisor::render(unit))?;
+
+            let reload = systemctl(&["daemon-reload"]).context("could not run systemctl")?;
+            if !reload.status.success() {
+                undo_install(&path);
+                bail!(
+                    "systemd would not reload its units, so nothing was installed: {}",
+                    String::from_utf8_lossy(&reload.stderr).trim()
+                );
+            }
+
+            let enabled = systemctl(&["enable", "--now", supervisor::SERVICE])
+                .context("could not run systemctl")?;
+            if !enabled.status.success() {
+                undo_install(&path);
+                bail!(
+                    "systemctl refused the unit, so nothing was installed: {}\n  what it \
+                     tried to start is in the journal: {}",
+                    String::from_utf8_lossy(&enabled.stderr).trim(),
+                    supervisor::journal_command()
+                );
+            }
+
+            println!("supervising {}, from {}", unit.label, path.display());
+            println!("  runs {} run", unit.program.display());
+            println!("  logs to {}", unit.log.display());
+            println!(
+                "  the unit's own failures go to the journal: {}",
+                supervisor::journal_command()
+            );
+            println!("  control socket {}", unit.socket.display());
+            if let Some(notice) = supervisor::port_notice(held) {
+                println!("{notice}");
+            }
+            println!("stop it for good with `proxenos supervisor uninstall`");
+        }
+        cli::SupervisorAction::Uninstall => {
+            if existing.is_none() {
+                println!("nothing installed at {}", path.display());
+                return Ok(());
+            }
+            let output = systemctl(&["disable", "--now", supervisor::SERVICE])
+                .context("could not run systemctl")?;
+            std::fs::remove_file(&path)
+                .with_context(|| format!("could not remove {}", path.display()))?;
+            // After the removal, not before: a reload while the file is still
+            // there leaves systemd holding a unit whose file is about to go.
+            let _ = systemctl(&["daemon-reload"]);
+            if !output.status.success() {
+                println!(
+                    "removed {}; systemctl said: {}",
+                    path.display(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+                return Ok(());
+            }
+            println!(
+                "removed {}; the daemon it supervised is stopped",
+                path.display()
+            );
+        }
+        cli::SupervisorAction::Status => {
+            let installed = supervisor::compare(existing.as_deref(), unit);
+            let (state, pid) = systemd_state();
+            if args.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "installed": installed_word(&installed),
+                        // `unit` rather than `plist`: it is a systemd unit
+                        // file, and a key that lied about its format would be
+                        // read by a front-end that then names a plist nobody
+                        // has.
+                        "unit": path,
+                        "program": unit.program,
+                        "log": unit.log,
+                        "socket": unit.socket,
+                        "state": state,
+                        "pid": pid,
+                    }))?
+                );
+                return Ok(());
+            }
+            match installed {
+                supervisor::Installed::Absent => {
+                    println!("not supervised; install it with `proxenos supervisor install`");
+                    return Ok(());
+                }
+                supervisor::Installed::Current => {
+                    println!("supervised, from {}", path.display());
+                }
+                supervisor::Installed::Divergent => {
+                    println!(
+                        "supervised from {}, but by a unit this environment would not write.",
+                        path.display()
+                    );
+                    println!(
+                        "  the daemon it starts may bind a control socket other than the {} \
+                         this shell dials, in which case it serves turns on the port while every \
+                         verb here reports connection refused.",
+                        unit.socket.display()
+                    );
+                    println!("  reinstall it with `proxenos supervisor install`");
+                }
+            }
+            println!("  control socket {}", unit.socket.display());
+            println!(
+                "  the supervisor says: state {}, pid {}",
+                state.as_deref().unwrap_or("unknown to the supervisor"),
+                pid.map_or_else(|| "none".to_owned(), |pid| pid.to_string()),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// What systemd itself says about the unit, read through the pure parser.
+///
+/// `LoadState` is asked for alongside the three that are reported, because
+/// `show` answers for a unit it has never heard of in exactly the shape of one
+/// that is installed and stopped.
+fn systemd_state() -> (Option<String>, Option<u64>) {
+    let Ok(output) = systemctl(&[
+        "show",
+        "-p",
+        "LoadState,ActiveState,SubState,MainPID",
+        proxenos::supervisor::SERVICE,
+    ]) else {
+        return (None, None);
+    };
+    proxenos::supervisor::parse_systemd_show(&String::from_utf8_lossy(&output.stdout))
 }

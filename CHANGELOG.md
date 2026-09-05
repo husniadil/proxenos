@@ -4,6 +4,66 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **`supervisor` supervises on Linux.** `install`, `uninstall` and `status`
+  refused every platform but macOS, with a message that already described the
+  missing piece; that description is now the implementation. Linux gets a
+  systemd **user** service at `$XDG_CONFIG_HOME/systemd/user/proxenos.service`
+  — `~/.config` where nothing names one, resolved the way the rest of the
+  configuration is, and deliberately not moved by `PROXENOS_HOME`, since
+  systemd reads `XDG_CONFIG_HOME` and nothing else. `install` writes it through
+  a rename, runs `daemon-reload`, and `enable --now`s it; `uninstall` does
+  `disable --now`, removes it, and reloads. Which supervisor a platform has
+  stays an input rather than a `cfg`, so both renderings and the refusal are
+  covered by tests on whichever machine runs them.
+- The unit runs `run` in the foreground under `Type=simple` and comes back with
+  `Restart=always`. `RestartSec` is **5**, not systemd's 100ms default: five
+  restarts inside ten seconds put a unit into `failed` and end the supervision,
+  and the case that reaches it is the ordinary one — `run` exits at once
+  against a port another daemon holds, so a hand-started daemon makes the
+  supervised job a tight crash loop. At five seconds the loop stays under the
+  burst limit indefinitely, which is the same order as launchd's own ten.
+- **It carries the same closed environment the plist does**, for the same
+  reason: `TMPDIR` and `PROXENOS_HOME` are what the control socket path is
+  derived from, and `systemd --user` supplies no `TMPDIR` at all — so a unit
+  that omitted it would leave the daemon binding `/tmp/proxenos.sock` while the
+  operator's shell dialed its own. That is the drift the launchd unit already
+  closed, arriving from the opposite direction. No credential, and no
+  `EnvironmentFile=`.
+- **Logs stay a file, and journald keeps what the file cannot hold.**
+  `StandardOutput`/`StandardError` append to the same `daemon.log` the macOS
+  job writes, so both platforms leave one file to read and `log` in `status
+  --json` is a path on both. A unit that never started is systemd's failure
+  rather than the daemon's, so `install` prints `journalctl --user -u
+  proxenos.service` as where that lives.
+- **`status --json` keeps its shape**: `installed`, `state`, `pid`, `program`,
+  `socket`, `log` are the keys they were, and the file is `plist` on macOS and
+  **`unit`** on Linux — a systemd unit file named `plist` would send an
+  operator looking for a file nobody has. `state` and `pid` come from
+  `systemctl --user show`, which is asked for `LoadState` as well as the three
+  that are reported: `show` answers for a unit it has never heard of in exactly
+  the shape of one that is installed and stopped, and `not-found` is the only
+  thing that separates them, so it reports no state at all rather than
+  `inactive` for a unit systemd does not have.
+- **No `sudo`, no system unit, and no silent fallback.** A system-level unit
+  runs as another user and would bind a control socket in a home directory this
+  operator does not own — healthy on the port, connection refused on every
+  verb. Where no per-user systemd is reachable (no login session, no
+  `XDG_RUNTIME_DIR`, no session bus — a container, or a bare `ssh <host>
+  <command>`) every action including `status` refuses before writing anything,
+  quotes what `systemctl --user` said, names both variables with what each
+  currently holds, and names `loginctl enable-linger $USER`.
+- **Nothing is left half-installed**, mirroring the launchd verb: a unit the
+  supervisor refuses is removed again, and on Linux the enable is undone first,
+  since `enable --now` can leave the `default.target.wants` symlink behind
+  after the start it also asked for has failed.
+- **`supervised` in `status` stays null on Linux**, and that is a gap stated
+  rather than papered over: systemd puts no unit name into the environment of
+  the process it starts. `INVOCATION_ID` says *a* unit started this and never
+  which one, so both answers would be claims about some other supervisor's
+  evidence.
+
 ## [0.21.3]
 
 - **`models --account NAME`** asks for one stored account's menu from the

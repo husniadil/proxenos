@@ -222,17 +222,20 @@ proxenos usage      what quota is left (--refresh asks, per account), as a
 proxenos statusline wrap a status-line script, adding that quota
 proxenos record     capture exchanges as fixtures
 proxenos supervisor install|uninstall|status
-                    the supervisor that keeps the daemon alive; `install`
+                    the supervisor that keeps the daemon alive — launchd on
+                    macOS, a systemd **user** service on Linux; `install`
                     writes the unit for this user and hands it over,
                     `uninstall` removes it and the daemon it was supervising
                     stops with it, `status` says whether it is installed and
                     what the supervisor makes of it (--json prints the same
                     as one document: `installed` — absent, current, or
-                    divergent — the plist, program, log and socket paths, and
-                    the `state` word and `pid` launchd holds, null where it
-                    said nothing). Named for what supervises
-                    rather than for launchd, because a verb named after an
-                    implementation cannot grow a second one
+                    divergent — the program, log and socket paths, the file
+                    the unit lives in under `plist` on macOS and `unit` on
+                    Linux, and the `state` word and `pid` the supervisor
+                    holds, null where it said nothing). Named for what
+                    supervises rather than for launchd, because a verb named
+                    after an implementation cannot grow a second one — which
+                    it since did
 ```
 
 Every verb except `run`, `start`, `record`, `supervisor`, `doctor`, and the two
@@ -394,7 +397,12 @@ and — where the daemon can tell — whether the supervisor of §2.6 is what
 started it. `stop`, `supervisor` and `start` all talk about that
 process, and nothing in the report named it. The supervision clause is silence
 rather than `not supervised` where the answer is not established, since a
-platform with no supervisor here has no standing to make that claim.
+platform with no supervisor here has no standing to make that claim — and so,
+for now, has Linux, which has one: systemd puts no unit name into the
+environment of the process it starts, so nothing this side reads can attribute
+the process to *this* unit rather than to some other supervisor. `INVOCATION_ID`
+says a unit started it and never which, and answering from that would be the
+plausible-answer failure this field exists to avoid.
 
 **The four tier rows are a table under `TIER  MODEL`**, with a `STATE` column
 where a row has one — `inert while relaying`, or `as <account>` for a tier
@@ -1049,31 +1057,75 @@ supervising proxenos.daemon, from ~/Library/LaunchAgents/proxenos.daemon.plist
 stop it for good with `proxenos supervisor uninstall`
 ```
 
-`install` writes a per-user LaunchAgent and hands it to launchd; `uninstall`
-removes both, stopping the daemon with it; `status` says whether it is installed
-and what the supervisor makes of it. The verb and its three actions are
-semver-bound like the rest of §6.
+`install` writes the unit for this user and hands it to the supervisor;
+`uninstall` removes both, stopping the daemon with it; `status` says whether it
+is installed and what the supervisor makes of it. The verb and its three actions
+are semver-bound like the rest of §6.
 
-**macOS is the only platform implemented, and every other one refuses by name.**
-The refusal says what supervising that platform would take — a systemd user
-unit with `Restart=always` — and names `proxenos start` as the way to start the
-daemon meanwhile. Nothing writes a file it cannot hand to a supervisor: a unit
-that is installed but never runs reports success and supervises nothing, which
-is worse than having no verb at all.
+**Two platforms are implemented, and every other one refuses by name.** macOS
+gets a per-user LaunchAgent at `~/Library/LaunchAgents/proxenos.daemon.plist`,
+handed to `launchctl bootstrap`. Linux gets a systemd **user** service at
+`$XDG_CONFIG_HOME/systemd/user/proxenos.service` — `~/.config` where nothing
+names one, resolved the way §4 resolves configuration, and deliberately *not*
+moved by `PROXENOS_HOME`, since systemd reads `XDG_CONFIG_HOME` and nothing
+else. Anything else refuses, names both supervisors, and names `proxenos start`
+as the way to start the daemon meanwhile. Nothing writes a file it cannot hand
+to a supervisor: a unit that is installed but never runs reports success and
+supervises nothing, which is worse than having no verb at all.
+
+```
+$ proxenos supervisor install          # on Linux
+supervising proxenos.service, from /home/someone/.config/systemd/user/proxenos.service
+  runs /home/someone/.local/bin/proxenos run
+  logs to /home/someone/.config/proxenos/daemon.log
+  the unit's own failures go to the journal: journalctl --user -u proxenos.service
+  control socket /tmp/proxenos.sock
+stop it for good with `proxenos supervisor uninstall`
+```
+
+**The Linux unit is a *user* unit, and this verb never reaches for `sudo` or a
+system-level one.** A system unit needs root, runs as another user, and would
+bind a control socket in a home directory this operator does not own — a daemon
+that comes up healthy and answers nothing the CLI dials, which is the failure
+the whole verb is shaped around. Where no per-user systemd is reachable —
+no login session, no `XDG_RUNTIME_DIR`, no session bus, which is the ordinary
+state inside a container or over a bare `ssh <host> <command>` — every action
+including `status` refuses **before writing anything**, quotes what `systemctl
+--user` said, names the two variables and what each currently holds, and names
+`loginctl enable-linger $USER` where the machine has logind. It does not fall
+back.
 
 **The job runs `run` in the foreground, and logs where the daemon already
-logs.** Not `start`: a process that forks away leaves launchd supervising
+logs.** Not `start`: a process that forks away leaves the supervisor watching
 something that has already exited, and its respawn then fights the daemon it
-cannot see. `KeepAlive` is what brings it back.
+cannot see. `Type=simple` says that to systemd, and the absence of a fork says
+it to launchd. `KeepAlive` brings it back on macOS; `Restart=always` with
+`RestartSec=5` does on Linux — five seconds rather than systemd's 100ms default
+because five restarts inside ten seconds put a unit into `failed` and end the
+supervision, and the case that reaches it is real: `run` exits at once against a
+port another daemon holds, so a hand-started daemon makes the supervised job a
+tight crash loop.
 
-**It carries no credential.** A plist in the user's home is a world-readable
-file, and the store is what holds credentials. The job's environment is a closed
-set of two — `TMPDIR`, and `PROXENOS_HOME` when the installing shell names one —
-so adding to it is a deliberate edit rather than a filter that widened.
+**On Linux the daemon's log is still a file, and journald still holds what the
+unit itself failed with.** `StandardOutput`/`StandardError` are
+`append:` the same `daemon.log` the macOS job writes, so a supervised start and
+a background one leave one file to read on both platforms and `log` in `status
+--json` is a path on both. What that file cannot hold is a unit that never
+started — an `ExecStart` that could not be spawned is systemd's failure, not the
+daemon's — so `install` prints `journalctl --user -u proxenos.service` as the
+place that does.
+
+**It carries no credential**, on either platform. A unit file in the user's home
+is a world-readable file, and the store is what holds credentials. The job's
+environment is a closed set of two — `TMPDIR`, and `PROXENOS_HOME` when the
+installing shell names one — so adding to it is a deliberate edit rather than a
+filter that widened. Nothing writes an `EnvironmentFile=`: a token travels as a
+file path the daemon reads (§2.7), never as a value in a unit.
 
 **Those two are carried for one reason: the socket path.** It is derived from
-`PROXENOS_HOME` when set and from `TMPDIR` otherwise (§3), and a process launchd
-starts does not necessarily see the `TMPDIR` a login shell does. If the two
+`PROXENOS_HOME` when set and from `TMPDIR` otherwise (§3), and a supervised
+process does not necessarily see the `TMPDIR` a login shell does — launchd
+supplies one of its own, and `systemd --user` supplies none at all. If the two
 disagree the daemon comes up healthy on its port while every CLI verb in the
 operator's terminal reports connection refused, because it is dialing a
 different path. Naming both in the unit makes the daemon's bind and the CLI's
@@ -1086,8 +1138,26 @@ is the subtle half. launchd does not hand a job an empty environment — it
 supplies a `TMPDIR` of its own. So omitting it would not mean "no `TMPDIR`" to
 the supervised daemon; it would mean launchd's, while the path planned at
 install time fell back to `/tmp` and the operator's CLI went on dialing whatever
-its own shell says. The unit therefore records the value the derivation actually
+its own shell says. Under systemd the same drift arrives from the other
+direction — the unit's environment really is empty of it, so the daemon falls
+back to `/tmp` while the shell dials its own — and the same carried value closes
+both. The unit therefore records the value the derivation actually
 used, including the fallback, which is what leaves the two ends unable to drift.
+
+**`status --json` prints the same report as one document**, with the same keys
+on both platforms — `installed` (`absent`, `current`, `divergent`), `program`,
+`log`, `socket`, `state` and `pid` — and one key that differs because the thing
+it names does: the file is `plist` on macOS and `unit` on Linux. A front-end
+reads whichever is present; naming a systemd unit file `plist` would have it
+tell an operator to look for a file nobody has. `state` and `pid` come from
+`launchctl print` on macOS and from `systemctl --user show -p
+LoadState,ActiveState,SubState,MainPID` on Linux, where the state word is
+systemd's own two-part phrasing — `active (running)`, `activating
+(auto-restart)`. Both are null where the supervisor said nothing. `LoadState` is
+asked for because `show` answers for a unit it has never heard of in exactly the
+shape of one that is installed and stopped (`inactive`/`dead`/`MainPID=0`), and
+a state word for a unit systemd does not have is the plausible answer this
+project refuses; `not-found` reports no state at all.
 
 **`status` compares the installed unit against the one this environment would
 write, and says so when they differ.** That is the same hazard seen from the
@@ -1107,13 +1177,23 @@ started by hand is not what it was asked for.
 
 **What it reports is what will still hold the port, not what was answering when
 the verb was typed.** A reinstall — the ordinary case, a new build or a moved
-binary — boots out the unit it had already installed, so the daemon answering a
-moment earlier is one this verb itself ends. Naming that one would tell the
+binary — ends the job it had already installed (`launchctl bootout`,
+`systemctl --user stop`), so the daemon answering a moment earlier is one this
+verb itself ends. Naming that one would tell the
 operator to hand over a port already theirs, for a job that then starts fine.
-The observation is therefore taken between the bootout and the bootstrap: before
-it, a reinstall reports a daemon on its way out; after it, the supervised job
-reports itself. A reinstall over the supervisor's own daemon prints nothing, and
+The observation is therefore taken between that stop and the load: before it, a
+reinstall reports a daemon on its way out; after it, the supervised job reports
+itself. A reinstall over the supervisor's own daemon prints nothing, and
 so does an install with nothing answering.
+
+**Nothing is left half-installed.** The unit is written through a rename over a
+temporary carrying this process id, so a `daemon-reload` from any other cause
+never reads a truncated file. If the supervisor then refuses it — `launchctl
+bootstrap` on macOS, `daemon-reload` or `enable --now` on Linux — the file this
+verb wrote does not survive the failure that produced it: on Linux the enable is
+undone first, since `enable --now` can leave the `default.target.wants` symlink
+behind after the start it also asked for has failed, and a symlink to a removed
+file is a complaint on every later reload.
 
 **What a supervisor changes about `stop` (§2.4):** it is how a running daemon is
 replaced by the build on disk. `stop` asks the daemon to go and reports what it
@@ -1162,7 +1242,7 @@ run it on that host:
 | `run`, `start` | bind a port on the machine they are typed on. Aimed elsewhere they would start a *second* daemon here |
 | `accounts login` | runs the owning program's own login and reads the profile it wrote (`proxy-behavior.md` §8.4). Both happen on this machine; the daemon would never see the result |
 | `accounts add-key` | writes a credential file the daemon reads. Written here, nothing reads it |
-| `supervisor *` | writes, reads, and reports on a launchd unit on this machine |
+| `supervisor *` | writes, reads, and reports on a supervisor unit on this machine |
 
 **`stop` is allowed**, and that is a decision rather than an oversight. It is a
 control method like any other; the daemon acts on it itself, and an operator who
@@ -1210,7 +1290,7 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 
 | Method | Returns | v0.1 |
 |---|---|---|
-| `status` | connection state, the process serving the socket (`pid`) and whether the supervisor of §2.6 started it (`supervised` — `true`, `false`, or **null** where this side cannot tell, which is every platform with no supervisor here and any process launchd started under some other label), whether the grant has been **refused** — `dead` where this side cannot spend it and `refused` carrying the backend's own words where it was sent and turned away — when the serving account's login has to be renewed (`login_expires_at`, absent where no such date exists), plan and which source reported it, the tier mapping and the effort ceiling, any mapped model the catalog withholds, `missing_tiers` — the tiers whose stated model this account's catalog does not carry at all, present and empty rather than absent — whether the catalog was authoritative, `cross_account_tiers` — whether a tier may pin another account, so a front-end knows before asking rather than from the refusal — the client policy in effect, and the build and `instance` serving the socket | yes |
+| `status` | connection state, the process serving the socket (`pid`) and whether the supervisor of §2.6 started it (`supervised` — `true`, `false`, or **null** where this side cannot tell, which is every platform with no supervisor here, every Linux daemon since systemd names no unit in a started process's environment, and any process launchd started under some other label), whether the grant has been **refused** — `dead` where this side cannot spend it and `refused` carrying the backend's own words where it was sent and turned away — when the serving account's login has to be renewed (`login_expires_at`, absent where no such date exists), plan and which source reported it, the tier mapping and the effort ceiling, any mapped model the catalog withholds, `missing_tiers` — the tiers whose stated model this account's catalog does not carry at all, present and empty rather than absent — whether the catalog was authoritative, `cross_account_tiers` — whether a tier may pin another account, so a front-end knows before asking rather than from the refusal — the client policy in effect, and the build and `instance` serving the socket | yes |
 | `accounts.select` (re-selection) | selecting the account already serving answers `{"selected", "provider", "previous_provider", "unchanged": true}` and does nothing else: no catalog fetch, no conversation ended, no figure dropped. A switch pays all three to arrive somewhere; this one is already there | no — `unchanged` added after v0.12 |
 | `accounts.remove` | removes one account — the selected one, or `{"account": name}` — and answers with the name it cleared and the one serving turns afterwards; the rest stay usable, and an idle account's removal leaves the serving grant's quota alone. A key is dropped from this daemon's store; a **declared** profile loses its `[profiles]` entry and nothing else — the grant belongs to the program that owns the directory — after which the file is re-read so the daemon stops answering for it. A profile that was found rather than declared is refused, saying so and that `[profiles]` is empty | no — was `disconnect`, then `accounts.forget` |
 | `accounts` | every stored account, what kind of credential each holds, whether the operator wrote it down (`declared`, true only for a profile named in `[profiles]`), and which one serves turns, plus `discovered` — whether these are the operator's own `[profiles]` entries or the stock profile of each program, read because none were declared; each borrowed row also carries the profile it was read from and, for a Claude profile, `login_expires_at` — the date the operator has to sign in again. A borrowed row whose store could not be read carries `unreadable`, the refusal's own words naming the store and the remedy; the key is **absent** on a row that was read, and on every key, so a reader must treat absent as readable rather than looking for a null. No tokens | no — v0.3 |

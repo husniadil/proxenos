@@ -596,9 +596,12 @@ a pass, and the two block kinds this proxy *reconstructs* — reasoning into
 were exactly the four it could not reach. They have captures of their own now,
 and both came out subsets.
 
-`supervisor install` writes a per-user LaunchAgent and hands it to launchd;
-macOS is the only platform implemented and every other refuses by name, because
-a unit written but never accepted reports success and supervises nothing. The
+`supervisor install` writes a per-user LaunchAgent and hands it to launchd.
+macOS was the only platform implemented at the time, and every other refused by
+name, because a unit written but never accepted reports success and supervises
+nothing; Linux has since been implemented as a systemd **user** service on the
+same plan, and the refusal now covers only platforms with neither (`api.md`
+§2.6). The
 socket path was the hazard worth settling first: it is derived from
 `PROXENOS_HOME` and `TMPDIR`, a launchd job does not see the login shell's
 environment, and where the two disagree the daemon serves turns while every CLI

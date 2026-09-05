@@ -19,13 +19,24 @@ pub fn config_dir() -> std::path::PathBuf {
     if let Some(home) = std::env::var_os("PROXENOS_HOME") {
         return std::path::PathBuf::from(home);
     }
-    let base = std::env::var_os("XDG_CONFIG_HOME")
+    xdg_config_home().join("proxenos")
+}
+
+/// The base every per-user configuration directory hangs off.
+///
+/// Named separately because one caller needs the base itself rather than this
+/// project's directory under it: a systemd user unit lives at
+/// `<base>/systemd/user`, and that path is systemd's to decide, not ours.
+/// `PROXENOS_HOME` deliberately does not move it — it names where *this*
+/// project keeps its own files, and systemd reads `XDG_CONFIG_HOME` and
+/// nothing else.
+pub fn xdg_config_home() -> std::path::PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| {
             std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
         })
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("proxenos")
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 pub fn config_path() -> std::path::PathBuf {
