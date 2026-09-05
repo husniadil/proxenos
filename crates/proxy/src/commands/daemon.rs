@@ -508,6 +508,12 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
 
     let control_state = proxenos::control::handler::ControlState {
         port: local_addr.port(),
+        // Asked once, here, rather than on every `status`: on Linux the honest
+        // answer costs a `systemctl --user` call, because systemd names no
+        // unit in a started process's environment. Startup is where this
+        // daemon's I/O already happens, and the answer cannot change while the
+        // process lives — a supervisor does not adopt a running daemon.
+        supervised: super::supervisor::supervision(),
         policy: Arc::clone(&policy),
         catalog: Arc::clone(&catalog),
         credentials: Arc::clone(&credentials),

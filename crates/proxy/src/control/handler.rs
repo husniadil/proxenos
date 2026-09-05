@@ -25,6 +25,16 @@ const COMPACT_WINDOW_CEILING: u64 = 1_000_000;
 #[derive(Clone)]
 pub struct ControlState {
     pub port: u16,
+    /// Whether the supervisor of §2.6 is what started this process, decided
+    /// once at startup and carried rather than re-read.
+    ///
+    /// Carried because the honest answer is not always in this process's
+    /// environment: launchd names the job it started, and systemd names
+    /// nothing, so Linux is settled by asking the manager — I/O, which belongs
+    /// where the daemon already does its startup I/O and not in a status
+    /// handler that answers on every call. `None` where nothing established
+    /// it, which a renderer prints as silence rather than "not supervised".
+    pub supervised: Option<bool>,
     /// The live policy: the tier mapping and the effort ceiling, shared with
     /// the ingress so a change here moves what routes turns rather than only
     /// what this socket reports.
@@ -427,10 +437,7 @@ fn status(state: &ControlState) -> Value {
         // side cannot tell, which a renderer reports as silence: "not
         // supervised" is a claim, and a platform with no supervisor here has
         // no standing to make it.
-        "supervised": crate::supervisor::supervised(
-            &crate::supervisor::Platform::current(),
-            std::env::var("XPC_SERVICE_NAME").ok().as_deref(),
-        ),
+        "supervised": state.supervised,
         // Policy this daemon publishes for whoever starts the client. Reported
         // under the configuration's own key names, because the person reading
         // this arrived holding "Skill execution blocked by permission rules" —

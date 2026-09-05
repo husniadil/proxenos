@@ -890,6 +890,7 @@ async fn a_relayed_turn_joins_the_served_models_a_status_line_reads() {
 
     let socket = dir.path().join("control.sock");
     let state = proxenos::control::handler::ControlState {
+        supervised: None,
         port: 8787,
         policy: Arc::clone(&observed.policy),
         catalog: Arc::new(proxenos::catalog::CatalogSource::fixed(

@@ -126,6 +126,7 @@ fn state(dir: &std::path::Path) -> (ControlState, Arc<Counting>) {
     store.reads.store(0, Ordering::SeqCst);
 
     let state = ControlState {
+        supervised: None,
         port: 8787,
         policy: Arc::new(proxenos::policy::Policy::new(
             proxenos::policy::Snapshot::new(

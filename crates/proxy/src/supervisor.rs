@@ -356,15 +356,11 @@ fn escape(value: &str) -> String {
 /// measurement. `None` on every platform with no supervisor here, for the same
 /// reason.
 ///
-/// **`None` on Linux too, and that is a gap rather than a decision about
-/// systemd.** systemd puts no unit name into the environment of the process it
-/// starts: `INVOCATION_ID` says *a* unit started this and never which one, so
-/// answering `false` from its absence would be a claim about every other
-/// supervisor on the machine, and answering `true` from its presence would
-/// name this unit on the strength of some other unit's evidence. Both are the
-/// plausible-answer failure this function exists to refuse. Reading it
-/// honestly would take asking the manager — `systemctl --user show -p MainPID`
-/// against this pid — which is I/O, and this is not where I/O goes.
+/// **Linux is answered by `supervised_by_systemd` instead**, and not here:
+/// systemd puts no unit name into the environment of the process it starts, so
+/// there is no label to read and the honest answer takes asking the manager.
+/// That is I/O, and this is not where I/O goes — the daemon asks once at
+/// startup and hands what it learned to this module's other pure function.
 #[must_use]
 pub fn supervised(platform: &Platform, xpc_service_name: Option<&str>) -> Option<bool> {
     if !matches!(platform, Platform::MacOs) {
@@ -375,6 +371,59 @@ pub fn supervised(platform: &Platform, xpc_service_name: Option<&str>) -> Option
         // launchd's own placeholder, and what a login shell passes down.
         None | Some("") | Some("0") => Some(false),
         Some(_) => None,
+    }
+}
+
+/// What asking the manager for the unit's main pid produced.
+///
+/// Separate from `Option<u64>` because the two absences are different
+/// statements: a manager that answered `MainPID=0` said this unit has no
+/// process, and a manager that could not be reached said nothing at all.
+/// Collapsing them would turn "unanswerable" into "not supervised".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainPid {
+    /// The manager answered: this pid, or none where the unit runs nothing.
+    Reported(Option<u64>),
+    /// The manager could not be asked, or refused to answer.
+    Unreachable,
+}
+
+/// Whether this process is the daemon `proxenos.service` itself runs.
+///
+/// Two facts, and neither is enough alone. `INVOCATION_ID` is set by systemd
+/// in the environment of every process it executes, so its absence is a real
+/// negative rather than a shrug: nothing this manager runs started this
+/// process. Its presence says only that *a* unit did — a terminal emulator is
+/// itself a user unit, and every shell under it inherits the id — so the
+/// second fact has to name the unit rather than the fact of supervision.
+///
+/// That second fact is `MainPID` of `proxenos.service`, compared against this
+/// pid. Chosen over comparing `InvocationID` because it is the narrower claim
+/// and the one `supervised` has always made: the unit is `Type=simple` and its
+/// `ExecStart` is this binary, so its main process is this daemon and nothing
+/// else, and equality is identity rather than resemblance. An `InvocationID`
+/// match would also be true of any child the unit spawned, which is a
+/// different sentence than "the supervisor started what is serving you".
+///
+/// `None` only where the manager could not be asked. That is the one case
+/// where the question is genuinely unanswerable, and answering `false` from it
+/// would report an unsupervised daemon on the strength of an unreachable bus.
+#[must_use]
+pub fn supervised_by_systemd(
+    platform: &Platform,
+    invocation_id: Option<&str>,
+    main_pid: MainPid,
+    own_pid: u32,
+) -> Option<bool> {
+    if !matches!(platform, Platform::Linux) {
+        return None;
+    }
+    match invocation_id {
+        None | Some("") => Some(false),
+        Some(_) => match main_pid {
+            MainPid::Unreachable => None,
+            MainPid::Reported(pid) => Some(pid == Some(u64::from(own_pid))),
+        },
     }
 }
 

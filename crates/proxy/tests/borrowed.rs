@@ -2168,6 +2168,7 @@ fn state_over(accounts: Arc<Accounts>) -> proxenos::control::handler::ControlSta
         Arc::new(proxenos::auth::grants::SystemClock),
     ));
     proxenos::control::handler::ControlState {
+        supervised: None,
         port: 8787,
         policy: Arc::new(proxenos::policy::Policy::new(
             proxenos::policy::Snapshot::new(
@@ -2236,6 +2237,7 @@ async fn a_refresh_carries_the_plan_the_profile_endpoint_states() {
         Arc::new(FakeClient::default()),
     ));
     let state = proxenos::control::handler::ControlState {
+        supervised: None,
         anthropic_usage_endpoint: format!("{base}/usage"),
         anthropic_profile_endpoint: format!("{base}/profile"),
         ..state_over(accounts)
@@ -2317,6 +2319,7 @@ async fn a_refresh_carries_a_subscription_the_provider_no_longer_calls_active() 
         Arc::new(FakeClient::default()),
     ));
     let state = proxenos::control::handler::ControlState {
+        supervised: None,
         anthropic_usage_endpoint: format!("{base}/usage"),
         anthropic_profile_endpoint: format!("{base}/profile"),
         ..state_over(accounts)
@@ -2859,6 +2862,7 @@ fn daemon_over(
     accounts: Arc<dyn AccountStore>,
 ) -> proxenos::control::handler::ControlState {
     proxenos::control::handler::ControlState {
+        supervised: None,
         port: 8787,
         policy: Arc::new(proxenos::policy::Policy::new(
             proxenos::policy::Snapshot::routing_only(Vec::new(), None),

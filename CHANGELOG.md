@@ -4,6 +4,44 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **`supervised` in `status` answers on Linux**, where 0.22.0 left it null and
+  said so. The gap was real — systemd puts no unit name into the environment of
+  the process it starts — but it was a gap in *where the question was asked*,
+  not an unanswerable one. The daemon now settles it at startup from two facts:
+  `INVOCATION_ID`, which systemd sets for every process it executes, and
+  `MainPID` of `proxenos.service`, asked of the user manager once and compared
+  against its own pid.
+- **Neither fact answers it alone.** The id's absence is a real negative —
+  nothing this manager runs started this process, and no `systemctl` is spawned
+  to learn what the environment already settled. Its presence says only that
+  *a* unit did: a terminal emulator is itself a user unit, so every shell under
+  it inherits the id, and a daemon started by hand from that shell would
+  otherwise report itself supervised. `MainPID` is what names the unit.
+  `InvocationID` would have matched too and was not chosen: it is also true of
+  any child the unit spawned, while the unit is `Type=simple` over this binary,
+  so being its main process is identity rather than resemblance.
+- **Null still means null.** Where the manager cannot be asked at all — no
+  login session, no session bus, the container case §2.6 already refuses to
+  install into — the field stays null rather than reporting an unsupervised
+  daemon on the strength of an unreachable bus.
+- **Read once, at startup, and carried.** `supervised` used to be re-derived
+  from this process's environment on every `status`; it is now decided where
+  the daemon's other startup I/O happens and held on the control state, since
+  nothing adopts a running daemon into a unit and there is no later answer to
+  re-read. `supervisor::supervised` stays a pure function, and the systemd
+  reading is a second one beside it over what the manager said. macOS behaviour
+  is unchanged.
+- **The supervisor verbs have a Linux test that touches a real manager.** It
+  installs, reads `supervisor status --json` and the daemon's own `status
+  --json`, uninstalls, and removes what it wrote on every path including a
+  panic. Because the unit name is fixed and a user manager reads only the
+  `XDG_CONFIG_HOME` it was started with, there is no throwaway name to install
+  under — so it prints why and passes without touching anything where a real
+  unit already exists, where a daemon already holds the port, or where no user
+  manager is reachable.
+
 ## [0.22.0]
 
 - **`supervisor` supervises on Linux.** `install`, `uninstall` and `status`

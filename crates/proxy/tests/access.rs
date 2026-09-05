@@ -92,6 +92,7 @@ impl Harness {
         };
 
         let control = ControlState {
+            supervised: None,
             port: 8787,
             policy,
             catalog,

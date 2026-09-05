@@ -397,12 +397,11 @@ and — where the daemon can tell — whether the supervisor of §2.6 is what
 started it. `stop`, `supervisor` and `start` all talk about that
 process, and nothing in the report named it. The supervision clause is silence
 rather than `not supervised` where the answer is not established, since a
-platform with no supervisor here has no standing to make that claim — and so,
-for now, has Linux, which has one: systemd puts no unit name into the
-environment of the process it starts, so nothing this side reads can attribute
-the process to *this* unit rather than to some other supervisor. `INVOCATION_ID`
-says a unit started it and never which, and answering from that would be the
-plausible-answer failure this field exists to avoid.
+platform with no supervisor here has no standing to make that claim. **Both
+implemented platforms do answer it**, by different readings: launchd names the
+job it started in the process's environment, and systemd names nothing there,
+so the Linux answer is the manager's own — see §2.6 for how it is read and
+when it is still silence.
 
 **The four tier rows are a table under `TIER  MODEL`**, with a `STATE` column
 where a row has one — `inert while relaying`, or `as <account>` for a tier
@@ -1195,6 +1194,14 @@ undone first, since `enable --now` can leave the `default.target.wants` symlink
 behind after the start it also asked for has failed, and a symlink to a removed
 file is a complaint on every later reload.
 
+**What a supervisor changes about the daemon's own `status` (§3):** the
+supervised daemon can say so. On macOS it reads the job label launchd handed
+it; on Linux there is no label, so it asks the manager once at startup whether
+`MainPID` of `proxenos.service` is its own pid, and only after `INVOCATION_ID`
+says some unit started it at all. The §3 field is the one place that reading
+surfaces, and it stays **null** where the manager could not be asked — the
+container and bare-`ssh` case this verb already refuses to install into.
+
 **What a supervisor changes about `stop` (§2.4):** it is how a running daemon is
 replaced by the build on disk. `stop` asks the daemon to go and reports what it
 saw afterwards; under a supervisor what it sees is the new build answering.
@@ -1290,7 +1297,7 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 
 | Method | Returns | v0.1 |
 |---|---|---|
-| `status` | connection state, the process serving the socket (`pid`) and whether the supervisor of §2.6 started it (`supervised` — `true`, `false`, or **null** where this side cannot tell, which is every platform with no supervisor here, every Linux daemon since systemd names no unit in a started process's environment, and any process launchd started under some other label), whether the grant has been **refused** — `dead` where this side cannot spend it and `refused` carrying the backend's own words where it was sent and turned away — when the serving account's login has to be renewed (`login_expires_at`, absent where no such date exists), plan and which source reported it, the tier mapping and the effort ceiling, any mapped model the catalog withholds, `missing_tiers` — the tiers whose stated model this account's catalog does not carry at all, present and empty rather than absent — whether the catalog was authoritative, `cross_account_tiers` — whether a tier may pin another account, so a front-end knows before asking rather than from the refusal — the client policy in effect, and the build and `instance` serving the socket | yes |
+| `status` | connection state, the process serving the socket (`pid`) and whether the supervisor of §2.6 started it (`supervised` — `true`, `false`, or **null** where this side cannot tell, which is every platform with no supervisor here, any process launchd started under some other label, and a Linux daemon a unit started while no user manager could be asked which unit), whether the grant has been **refused** — `dead` where this side cannot spend it and `refused` carrying the backend's own words where it was sent and turned away — when the serving account's login has to be renewed (`login_expires_at`, absent where no such date exists), plan and which source reported it, the tier mapping and the effort ceiling, any mapped model the catalog withholds, `missing_tiers` — the tiers whose stated model this account's catalog does not carry at all, present and empty rather than absent — whether the catalog was authoritative, `cross_account_tiers` — whether a tier may pin another account, so a front-end knows before asking rather than from the refusal — the client policy in effect, and the build and `instance` serving the socket | yes |
 | `accounts.select` (re-selection) | selecting the account already serving answers `{"selected", "provider", "previous_provider", "unchanged": true}` and does nothing else: no catalog fetch, no conversation ended, no figure dropped. A switch pays all three to arrive somewhere; this one is already there | no — `unchanged` added after v0.12 |
 | `accounts.remove` | removes one account — the selected one, or `{"account": name}` — and answers with the name it cleared and the one serving turns afterwards; the rest stay usable, and an idle account's removal leaves the serving grant's quota alone. A key is dropped from this daemon's store; a **declared** profile loses its `[profiles]` entry and nothing else — the grant belongs to the program that owns the directory — after which the file is re-read so the daemon stops answering for it. A profile that was found rather than declared is refused, saying so and that `[profiles]` is empty | no — was `disconnect`, then `accounts.forget` |
 | `accounts` | every stored account, what kind of credential each holds, whether the operator wrote it down (`declared`, true only for a profile named in `[profiles]`), and which one serves turns, plus `discovered` — whether these are the operator's own `[profiles]` entries or the stock profile of each program, read because none were declared; each borrowed row also carries the profile it was read from and, for a Claude profile, `login_expires_at` — the date the operator has to sign in again. A borrowed row whose store could not be read carries `unreadable`, the refusal's own words naming the store and the remedy; the key is **absent** on a row that was read, and on every key, so a reader must treat absent as readable rather than looking for a null. No tokens | no — v0.3 |
@@ -1535,13 +1542,36 @@ worth rendering, and a borrowed account is what makes it worth rendering at all
 figure: a session this daemon does not serve is told neither.
 
 **`status` says which process is serving, and what supervises it.** `pid` is
-this process, and `supervised` is read from the job label launchd hands a job
-it starts: the label §2.6 installs is a positive answer and no label at all is
-a negative one. Any other label answers **null**, because "not supervised by
+this process. `supervised` is read from the job label launchd hands a job it
+starts: the label §2.6 installs is a positive answer and no label at all is a
+negative one. Any other label answers **null**, because "not supervised by
 `proxenos.daemon`" and "nothing supervises this" are different statements and
-only the first would be established. Both fields are additive: a caller that
-needs them checks for them (§6), and a daemon predating them omits `pid` and
-answers no `supervised` at all.
+only the first would be established.
+
+**On Linux there is no label, so the answer is the manager's.** systemd puts no
+unit name into the environment of the process it starts, and the reading is
+therefore two facts. `INVOCATION_ID` is set for every process systemd executes,
+so its absence is a real negative — nothing this manager runs started this one,
+and no `systemctl` is spawned to learn what the environment already settled.
+Its presence says only that *a* unit did, since a terminal emulator is itself a
+user unit and every shell under it inherits the id, so the second fact names the
+unit: `MainPID` of `proxenos.service`, asked of the manager **once, at startup**,
+and compared against this process's own pid. The unit is `Type=simple` and its
+`ExecStart` is this binary, so its main process is this daemon and nothing else
+— equality is identity rather than resemblance, which comparing `InvocationID`
+would not be, since any child the unit spawned carries that too. Where the
+manager cannot be asked at all the answer stays **null**: that is the one case
+nothing established, and reporting an unsupervised daemon on the strength of an
+unreachable bus is the plausible answer this field exists to refuse.
+
+**Asked once, not per call.** The reading is taken when the daemon starts, where
+its other startup I/O already happens, and carried for the life of the process;
+nothing adopts a running daemon into a unit, so there is no later answer to
+re-read, and a `status` served over either transport reports the same thing
+without spawning anything.
+
+Both fields are additive: a caller that needs them checks for them (§6), and a
+daemon predating them omits `pid` and answers no `supervised` at all.
 
 **`status` names the account.** `auth.account` is what this daemon calls the one
 serving turns and is what selects it; `auth.account_id` is what the backend

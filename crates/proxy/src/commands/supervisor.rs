@@ -279,6 +279,66 @@ fn systemctl(arguments: &[&str]) -> std::io::Result<std::process::Output> {
         .output()
 }
 
+/// Whether the supervisor of §2.6 started this process, asked once.
+///
+/// The daemon's startup calls this and carries the answer (`ControlState`),
+/// because on Linux it costs a process: launchd names the job it started in
+/// the environment, and systemd names nothing there at all, so the only honest
+/// reading of the Linux half is what the manager says about the unit.
+pub(crate) fn supervision() -> Option<bool> {
+    use proxenos::supervisor;
+
+    let platform = supervisor::Platform::current();
+    if !matches!(platform, supervisor::Platform::Linux) {
+        return supervisor::supervised(
+            &platform,
+            std::env::var("XPC_SERVICE_NAME").ok().as_deref(),
+        );
+    }
+
+    let invocation = std::env::var("INVOCATION_ID").ok();
+    // Asked only where a unit started this process at all. Absent, the answer
+    // is already `false` from the environment, and a daemon started from a
+    // shell should not spawn a `systemctl` to learn what it already knows.
+    let main_pid = if invocation.as_deref().is_some_and(|id| !id.is_empty()) {
+        unit_main_pid()
+    } else {
+        supervisor::MainPid::Unreachable
+    };
+    supervisor::supervised_by_systemd(
+        &platform,
+        invocation.as_deref(),
+        main_pid,
+        std::process::id(),
+    )
+}
+
+/// What systemd says the unit's main process is, or that it could not be asked.
+///
+/// `LoadState` travels with it for the reason `systemd_state` names: `show`
+/// answers for a unit it has never heard of in exactly the shape of one that
+/// is installed and stopped, and a `MainPID=0` read off an unknown unit is
+/// still the right answer here — nothing this manager knows about started this
+/// process — but it is the parser that establishes that rather than luck.
+fn unit_main_pid() -> proxenos::supervisor::MainPid {
+    use proxenos::supervisor::MainPid;
+
+    let Ok(output) = systemctl(&[
+        "show",
+        "-p",
+        "LoadState,MainPID",
+        proxenos::supervisor::SERVICE,
+    ]) else {
+        return MainPid::Unreachable;
+    };
+    if !output.status.success() {
+        return MainPid::Unreachable;
+    }
+    let (_, pid) =
+        proxenos::supervisor::parse_systemd_show(&String::from_utf8_lossy(&output.stdout));
+    MainPid::Reported(pid)
+}
+
 /// Refuse before writing anything where there is no user manager to hand it to.
 ///
 /// A unit written into a directory nothing reads is the half-installed state

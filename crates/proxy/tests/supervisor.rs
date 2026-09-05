@@ -590,3 +590,95 @@ fn systemd_status_is_read_from_show_and_never_invented() {
     );
     assert_eq!(parse_systemd_show(""), (None, None));
 }
+
+/// The Linux half of the same question, which no environment variable answers.
+///
+/// systemd names no unit in a started process's environment, so the reading is
+/// two facts: `INVOCATION_ID` says a unit started this at all, and the
+/// manager's `MainPID` for `proxenos.service` says whether that unit is this
+/// one. Absent, `false` — nothing this manager runs started the process, and
+/// systemd sets the id for everything it executes. Present but belonging to
+/// some other unit's main process, `false` as well: a terminal emulator is
+/// itself a user unit and every shell under it inherits the id, so presence
+/// alone would report the operator's own shell-started daemon as supervised.
+/// Unreachable manager, `null` — the one case nothing established.
+#[test]
+fn systemd_supervision_takes_the_manager_at_its_word_or_says_nothing() {
+    use proxenos::supervisor::MainPid;
+    use proxenos::supervisor::Platform;
+    use proxenos::supervisor::supervised_by_systemd;
+
+    // The supervised daemon: a unit started it, and it is this unit's main
+    // process.
+    assert_eq!(
+        supervised_by_systemd(
+            &Platform::Linux,
+            Some("6b6a1a5f"),
+            MainPid::Reported(Some(4711)),
+            4711
+        ),
+        Some(true)
+    );
+
+    // Started from a shell: no unit executed this process at all, so nothing
+    // is asked of the manager and the answer is a real negative.
+    assert_eq!(
+        supervised_by_systemd(&Platform::Linux, None, MainPid::Unreachable, 4711),
+        Some(false)
+    );
+    assert_eq!(
+        supervised_by_systemd(&Platform::Linux, Some(""), MainPid::Unreachable, 4711),
+        Some(false)
+    );
+
+    // Started from a terminal that is itself a user unit: the id is inherited
+    // and says nothing about this unit, and the pid it names is somebody
+    // else's.
+    assert_eq!(
+        supervised_by_systemd(
+            &Platform::Linux,
+            Some("6b6a1a5f"),
+            MainPid::Reported(Some(22)),
+            4711
+        ),
+        Some(false)
+    );
+
+    // The unit systemd has never heard of, or has heard of and is not running:
+    // either way it did not start this process.
+    assert_eq!(
+        supervised_by_systemd(
+            &Platform::Linux,
+            Some("6b6a1a5f"),
+            MainPid::Reported(None),
+            4711
+        ),
+        Some(false)
+    );
+
+    // A unit started this and the manager could not be asked which. The one
+    // unanswerable case, and answering `false` from it would report an
+    // unsupervised daemon on the strength of an unreachable bus.
+    assert_eq!(
+        supervised_by_systemd(
+            &Platform::Linux,
+            Some("6b6a1a5f"),
+            MainPid::Unreachable,
+            4711
+        ),
+        None
+    );
+
+    // No systemd on this platform, so this reading has no standing at all —
+    // the mirror of `supervised` refusing to answer for a platform without
+    // launchd.
+    assert_eq!(
+        supervised_by_systemd(
+            &Platform::MacOs,
+            Some("6b6a1a5f"),
+            MainPid::Reported(Some(4711)),
+            4711
+        ),
+        None
+    );
+}

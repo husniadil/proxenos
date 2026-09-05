@@ -135,6 +135,7 @@ impl Harness {
         let sessions = Arc::new(proxenos::session::SessionStore::new());
 
         let state = ControlState {
+            supervised: None,
             port: 8787,
             policy: Arc::clone(&policy),
             catalog: Arc::new(CatalogSource::fixed(
@@ -247,6 +248,7 @@ impl Harness {
         let path = self._dir.path().join("control-3.sock");
         let policy = Arc::clone(&self.policy);
         let state = ControlState {
+            supervised: None,
             port: 8787,
             policy: Arc::clone(&policy),
             catalog: Arc::new(CatalogSource::fixed(catalog)),
@@ -302,6 +304,7 @@ impl Harness {
 
         let path = self._dir.path().join("control-4.sock");
         let state = ControlState {
+            supervised: None,
             port: 8787,
             policy: Arc::clone(&self.policy),
             catalog,
@@ -366,6 +369,7 @@ impl Harness {
             proxenos::policy::Snapshot::new(tiers, None, self.config.cross_account_policy()),
         ));
         let state = ControlState {
+            supervised: None,
             port: 8787,
             policy: Arc::clone(&policy),
             catalog: Arc::new(CatalogSource::fixed(Catalog::parse(catalog, 95.0).unwrap())),
@@ -413,6 +417,7 @@ impl Harness {
         ));
         let path = self._dir.path().join("control-quota.sock");
         let state = ControlState {
+            supervised: None,
             port: 8787,
             policy: Arc::clone(&self.policy),
             catalog: Arc::new(CatalogSource::fixed(
@@ -718,6 +723,7 @@ async fn models_lists_windows_and_says_where_they_came_from() {
 async fn an_unknown_window_is_reported_as_null() {
     let dir = tempfile::tempdir().unwrap();
     let state = ControlState {
+        supervised: None,
         port: 1,
         policy: Arc::new(proxenos::policy::Policy::new(
             proxenos::policy::Snapshot::new(
@@ -874,6 +880,7 @@ async fn an_unknown_capture_mode_is_refused() {
 async fn a_malformed_request_is_reported_without_closing_the_socket() {
     let dir = tempfile::tempdir().unwrap();
     let state = ControlState {
+        supervised: None,
         port: 1,
         policy: Arc::new(proxenos::policy::Policy::new(
             proxenos::policy::Snapshot::new(
@@ -1440,6 +1447,7 @@ fn the_rendered_status_is_quiet_when_nothing_is_withheld() {
 async fn status_says_when_the_catalog_was_unavailable() {
     let dir = tempfile::tempdir().unwrap();
     let state = ControlState {
+        supervised: None,
         port: 8787,
         policy: Arc::new(proxenos::policy::Policy::new(
             proxenos::policy::Snapshot::new(
@@ -1479,6 +1487,7 @@ async fn status_says_when_the_catalog_was_unavailable() {
 async fn models_prints_unknown_rather_than_a_number() {
     let dir = tempfile::tempdir().unwrap();
     let state = ControlState {
+        supervised: None,
         port: 1,
         policy: Arc::new(proxenos::policy::Policy::new(
             proxenos::policy::Snapshot::new(
@@ -1558,6 +1567,7 @@ async fn env_states_the_real_context_window() {
 async fn env_states_no_window_when_the_catalog_is_unavailable() {
     let dir = tempfile::tempdir().unwrap();
     let state = ControlState {
+        supervised: None,
         port: 8787,
         policy: Arc::new(proxenos::policy::Policy::new(
             proxenos::policy::Snapshot::new(
@@ -4135,6 +4145,7 @@ async fn asking(
     let store = Arc::new(FileStore::new(dir.path().join("credentials.json")));
     accounts(&store);
     let state = ControlState {
+        supervised: None,
         port: 8787,
         policy: Arc::new(proxenos::policy::Policy::new(
             proxenos::policy::Snapshot::new(
@@ -5438,10 +5449,34 @@ async fn an_over_long_socket_path_is_refused_at_bind_and_at_dial_naming_the_cap(
     );
 }
 
+/// `status` reports the supervision the daemon settled at startup, not a
+/// reading of its own.
+///
+/// The field used to be re-derived on every call from this process's
+/// environment, which is the only thing available to a status handler and is
+/// not an answer on Linux at all. It is carried now, so what the socket
+/// reports is what the daemon established when it started — and a test can
+/// state all three answers without a supervisor anywhere near it.
+#[tokio::test]
+async fn status_reports_the_supervision_recorded_at_startup() {
+    for recorded in [Some(true), Some(false), None] {
+        let dir = tempfile::tempdir().unwrap();
+        let state = ControlState {
+            supervised: recorded,
+            ..probe_state(dir.path())
+        };
+        let status = proxenos::control::handler::dispatch(&state, "status", None)
+            .await
+            .expect("status answers");
+        assert_eq!(status["supervised"], json!(recorded), "{status}");
+    }
+}
+
 /// The smallest state `serve` will accept. It answers nothing here — the bind
 /// is refused before the listener exists.
 fn probe_state(dir: &std::path::Path) -> ControlState {
     ControlState {
+        supervised: None,
         port: 8787,
         policy: Arc::new(proxenos::policy::Policy::new(
             proxenos::policy::Snapshot::new(
@@ -6165,6 +6200,7 @@ fn reloadable(dir: &std::path::Path, config: proxenos::config::Config) -> Contro
         ),
     ));
     ControlState {
+        supervised: None,
         port: 8787,
         policy,
         catalog: Arc::new(CatalogSource::fixed(
