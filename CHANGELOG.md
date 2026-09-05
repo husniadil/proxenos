@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.20.0]
 
 - `tiers set` takes `--as ACCOUNT` to pin a tier — the table form config.toml
   already had, refused without the operator's consent as before — and
