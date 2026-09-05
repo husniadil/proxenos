@@ -2018,3 +2018,64 @@ async fn a_body_in_the_other_providers_shape_is_refused() {
 
     assert!(refusal.message.contains("shape"), "{}", refusal.message);
 }
+
+/// The headers on a served turn name an overage window and the usage endpoint
+/// names each model's own; a snapshot from one source keeps the other's named
+/// windows until they reset, so neither takes turns on a meter.
+#[test]
+fn a_named_window_survives_a_snapshot_from_the_other_source() {
+    let window = |label: Option<&str>, minutes: Option<u64>, resets_at: Option<u64>| {
+        proxenos::usage::Window {
+            used_percent: 10.0,
+            window_minutes: minutes,
+            resets_at,
+            label: label.map(str::to_owned),
+            status: None,
+            surpassed_threshold: None,
+            representative: false,
+        }
+    };
+    let snapshot = |windows: Vec<proxenos::usage::Window>| Snapshot {
+        plan: None,
+        limit_reached: false,
+        windows,
+        credit: None,
+        subscription_status: None,
+    };
+    let endpoint = snapshot(vec![
+        window(None, Some(300), Some(2_000)),
+        window(None, Some(10_080), Some(9_000)),
+        window(Some("Fable"), None, Some(9_000)),
+        window(Some("Stale"), None, Some(500)),
+    ]);
+    let headers = snapshot(vec![
+        window(None, Some(300), Some(2_100)),
+        window(None, Some(10_080), Some(9_000)),
+        window(Some("overage"), None, Some(9_000)),
+    ]);
+
+    let after_turn = headers.carrying(&endpoint, 1_000);
+    let labels: Vec<Option<&str>> = after_turn
+        .windows
+        .iter()
+        .map(|w| w.label.as_deref())
+        .collect();
+    // The turn's own three, then the endpoint's model window; the one that
+    // has reset is dropped rather than carried at an erased figure.
+    assert_eq!(labels, vec![None, None, Some("overage"), Some("Fable")]);
+    // The turn's figures are the turn's: nothing measured by duration is
+    // taken from the older snapshot.
+    assert_eq!(after_turn.windows[0].resets_at, Some(2_100));
+
+    // And the other way round: a refresh keeps the overage the headers named.
+    let after_fetch = endpoint.carrying(&after_turn, 1_000);
+    let labels: Vec<Option<&str>> = after_fetch
+        .windows
+        .iter()
+        .map(|w| w.label.as_deref())
+        .collect();
+    assert_eq!(
+        labels,
+        vec![None, None, Some("Fable"), Some("Stale"), Some("overage")]
+    );
+}

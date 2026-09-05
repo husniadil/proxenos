@@ -434,6 +434,39 @@ impl Snapshot {
     /// and this proxy has measured only the word that means nothing is wrong.
     ///
     /// `None` where there is no organization to read at all.
+    /// This snapshot, plus the named windows a previous one carried that this
+    /// one does not.
+    ///
+    /// The headers on a served turn state the 5h, 7d and overage windows; the
+    /// usage endpoint states the 5h, 7d and each model's own. Neither names
+    /// the other's, so a snapshot that replaced the whole set made "Fable"
+    /// and "overage" take turns on a meter. A named window the newer source
+    /// did not restate is kept from the older one until it resets — a window
+    /// measured by duration is never carried, since every source states
+    /// those, and a reset window is dropped rather than shown at a figure
+    /// the reset erased.
+    #[must_use]
+    pub fn carrying(&self, previous: &Self, now: u64) -> Self {
+        let mut merged = self.clone();
+        for window in &previous.windows {
+            let Some(label) = window.label.as_deref() else {
+                continue;
+            };
+            if merged
+                .windows
+                .iter()
+                .any(|w| w.label.as_deref() == Some(label))
+            {
+                continue;
+            }
+            if has_reset(window.resets_at, now) {
+                continue;
+            }
+            merged.windows.push(window.clone());
+        }
+        merged
+    }
+
     pub fn anthropic_profile(payload: &str) -> Option<Profile> {
         let body: Value = serde_json::from_str(payload).ok()?;
         let organization = body.get("organization")?;
@@ -1080,25 +1113,39 @@ impl UsageStore {
     /// and it is resolved to that account's name here, at the moment the turn
     /// was served, rather than left to be resolved by whoever asks later.
     pub fn record_for(&self, account: Option<&str>, snapshot: &Snapshot, source: Source) {
-        let measured = Measured {
-            snapshot: snapshot.clone(),
-            source,
-            at: now(),
-        };
-
+        let at = now();
         match account
             .map(str::to_owned)
             .or_else(|| self.serving.as_ref().and_then(|serving| serving()))
         {
             Some(name) => {
                 if let Ok(mut by_account) = self.by_account.lock() {
-                    by_account.insert(name, measured);
+                    // The two sources name different windows — the headers
+                    // an overage, the endpoint each model's own — and a
+                    // snapshot that replaced the whole set made a named
+                    // window come and go with whichever source spoke last.
+                    let snapshot = match by_account.get(&name) {
+                        Some(previous) => snapshot.carrying(&previous.snapshot, at),
+                        None => snapshot.clone(),
+                    };
+                    by_account.insert(
+                        name,
+                        Measured {
+                            snapshot,
+                            source,
+                            at,
+                        },
+                    );
                 }
                 self.write_quota(None);
             }
             None => {
                 if let Ok(mut unattributed) = self.unattributed.lock() {
-                    *unattributed = Some(measured);
+                    *unattributed = Some(Measured {
+                        snapshot: snapshot.clone(),
+                        source,
+                        at,
+                    });
                 }
             }
         }
