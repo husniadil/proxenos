@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.21.2]
 
 - **`claude-fable-5-1` joins the curated Anthropic menu**, with its `[1m]`
   long-context sibling, so `models` and a tier set from a relay account can
