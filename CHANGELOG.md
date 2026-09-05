@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.19.0]
 
 - `proxenos tiers` and `proxenos effort` read the two settings a running daemon
   can be handed, and `tiers set TIER MODEL` / `effort set LEVEL` change them
