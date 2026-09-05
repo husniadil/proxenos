@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.23.0]
 
 - **`proxenos inspect <pid>` says whether a process was started through this
   daemon, and as which account.** It reads that process's environment —
