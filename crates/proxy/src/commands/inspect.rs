@@ -9,7 +9,14 @@ use proxenos::render;
 /// Every verb but `run` works through the control socket. The CLI holds no
 /// state of its own, so a second front-end needs no new daemon work.
 pub(crate) async fn print_status(args: cli::StatusArgs) -> Result<()> {
-    let result = control::call(&control::default_path(), "status", None).await?;
+    let endpoint = control::Endpoint::resolve()?;
+    let mut result = control::dial(&endpoint, "status", None).await?;
+    // Where this daemon is, said only where it is not here (§2.4). A front-end
+    // reads the field to show "connected to macbook"; on a local daemon there
+    // is nothing to say and the key is absent rather than null.
+    if let (Some(url), Some(fields)) = (endpoint.remote_url(), result.as_object_mut()) {
+        fields.insert("daemon_at".to_owned(), serde_json::Value::from(url));
+    }
     println!(
         "{}",
         if args.json {
@@ -29,13 +36,13 @@ pub(crate) async fn print_status(args: cli::StatusArgs) -> Result<()> {
 /// `--json` is the `models` payload alone, which is what that flag means
 /// everywhere.
 pub(crate) async fn print_models(args: cli::ModelsArgs) -> Result<()> {
-    let socket = control::default_path();
-    let result = control::call(&socket, "models", None).await?;
+    let endpoint = control::Endpoint::resolve()?;
+    let result = control::dial(&endpoint, "models", None).await?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
     }
-    let tiers = control::call(&socket, "tiers", None).await.ok();
+    let tiers = control::dial(&endpoint, "tiers", None).await.ok();
     println!("{}", render::models(&result, tiers.as_ref()));
     Ok(())
 }
@@ -48,11 +55,11 @@ pub(crate) async fn print_models(args: cli::ModelsArgs) -> Result<()> {
 /// is still the `usage` document, so the shape a status line parses does not
 /// depend on whether a figure was just asked for.
 pub(crate) async fn print_usage(args: cli::UsageArgs) -> Result<()> {
-    let socket = control::default_path();
+    let endpoint = control::Endpoint::resolve()?;
     if args.refresh {
-        control::call(&socket, "usage.refresh", None).await?;
+        control::dial(&endpoint, "usage.refresh", None).await?;
     }
-    let result = control::call(&socket, "usage", None).await?;
+    let result = control::dial(&endpoint, "usage", None).await?;
     println!(
         "{}",
         if args.json {
@@ -84,7 +91,7 @@ pub(crate) async fn statusline(args: cli::StatuslineArgs) -> Result<()> {
 
     let payload: serde_json::Value =
         serde_json::from_str(&input).unwrap_or(serde_json::Value::Null);
-    let usage = control::call(&control::default_path(), "usage", None)
+    let usage = control::ask("usage", None)
         .await
         .unwrap_or(serde_json::Value::Null);
     let merged = proxenos::statusline::merge(payload, &usage);

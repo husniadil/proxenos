@@ -8,12 +8,26 @@ use std::net::SocketAddr;
 
 /// Bind loopback, and only loopback.
 ///
-/// The daemon performs no authentication, which is safe precisely because every
+/// The shipped posture, and what every caller that has no opinion gets: with
+/// no authentication configured, serving is safe precisely because every
 /// caller reaching the socket is already a local process running as the user.
-/// Binding any other address removes the assumption the whole security posture
-/// rests on, so it is not configurable (§6 of `CLAUDE.md`).
+/// Binding beyond it is `bind_at`, and is gated on a token
+/// (`config::Config::resolve_listen`).
 pub async fn bind(port: u16) -> Result<tokio::net::TcpListener, ProxyError> {
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    bind_at(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), port).await
+}
+
+/// Bind a stated address.
+///
+/// **Nothing here decides whether the address is allowed.** That decision is
+/// `resolve_listen`'s, made once at startup over the configuration, because it
+/// needs the token beside the address to make it — and a second check here,
+/// over the address alone, could only get it wrong.
+pub async fn bind_at(
+    address: std::net::IpAddr,
+    port: u16,
+) -> Result<tokio::net::TcpListener, ProxyError> {
+    let addr = SocketAddr::from((address, port));
 
     tokio::net::TcpListener::bind(addr).await.map_err(|error| {
         if error.kind() == std::io::ErrorKind::AddrInUse {
@@ -25,16 +39,32 @@ pub async fn bind(port: u16) -> Result<tokio::net::TcpListener, ProxyError> {
                  stop it, or choose a different port and update the client's base URL."
             ));
         }
-        ProxyError::invalid_request(format!("could not bind 127.0.0.1:{port}: {error}"))
+        ProxyError::invalid_request(format!("could not bind {address}:{port}: {error}"))
     })
 }
 
 /// Serve until the process is asked to stop.
 pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> Result<(), ProxyError> {
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown())
-        .await
-        .map_err(|error| ProxyError::invalid_request(format!("server stopped: {error}")))
+    serve_router(listener, router(state)).await
+}
+
+/// Serve a router that was already built — the daemon's own, which carries the
+/// token guard and the §3 control endpoint.
+///
+/// **The connection's peer address is carried into the handlers.** `/control`
+/// refuses a caller that is neither loopback nor holding a token, and it can
+/// only tell the two apart if it knows where the request came from.
+pub async fn serve_router(
+    listener: tokio::net::TcpListener,
+    router: axum::Router,
+) -> Result<(), ProxyError> {
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown())
+    .await
+    .map_err(|error| ProxyError::invalid_request(format!("server stopped: {error}")))
 }
 
 async fn shutdown() {

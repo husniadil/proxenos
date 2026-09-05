@@ -95,12 +95,19 @@ move in both, in the same commit as the change that moved it.
    surface as terminal. The proxy does not build a second retry loop on top of
    the client's.
 
-6. **Loopback only, no authentication, no telemetry.** The daemon refuses to
-   bind anything but `127.0.0.1`, so every caller is already a local process
-   running as the user. `ANTHROPIC_AUTH_TOKEN` must be set for Claude Code's
-   sake and its value is ignored, with one carve-out: `proxenos-account:<name>`
-   is the launch tag `exec --account` travels as, and a tag is a name rather
-   than a secret — the credential it resolves to never leaves the daemon.
+6. **Loopback without a token, or beyond it with one. No telemetry.** The
+   daemon binds `127.0.0.1` and authenticates nothing by default, so every
+   caller is already a local process running as the user. Binding any other
+   address removes that assumption, so it is allowed only with a token
+   configured (`[listen]`, `api.md` §4) and is **refused at startup**
+   otherwise, naming both keys. `ANTHROPIC_AUTH_TOKEN` must be set for Claude
+   Code's sake, and it is the one header the client offers, so it carries both
+   things this daemon reads out of it: `proxenos-account:<name>`, the launch
+   tag `exec --account` travels as, and `proxenos-token:<secret>`, the token —
+   whitespace-separated where both are present. A value with no token part is
+   read exactly as it always was. A tag is a name and the credential it
+   resolves to never leaves the daemon; the token is a secret and never
+   reaches argv, a log line, or what `status`, `env` or `settings` print.
    Nothing is collected, nothing is transmitted.
 
 7. **Credentials never reach argv or logs.** A key arrives on stdin and lives

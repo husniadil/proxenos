@@ -57,6 +57,12 @@ its environment (`ps eww`):
 | no base URL, default profile | the keychain anthropic account's windows |
 | a foreign base URL, or `CLAUDE_CONFIG_DIR` | nothing — no figure beats a wrong one |
 
+**Client mode needs nothing here.** Everything this plugin does goes through the
+`proxenos` CLI, so with `PROXENOS_DAEMON` set it reads the remote daemon's quota
+and compares against the remote base URL — the same comparison, since `proxenos
+env` and `proxenos exec` both state that URL. The `proxenos` on `PATH` and the
+variables in the pane's environment are the whole configuration.
+
 ## Files
 
 | File | Role |

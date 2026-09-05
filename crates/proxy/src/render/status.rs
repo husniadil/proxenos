@@ -198,6 +198,14 @@ pub fn status(result: &Value) -> String {
 pub fn status_at(result: &Value, now: u64) -> String {
     let mut lines = Vec::new();
 
+    // Where the daemon is, said only where it is not here (`api.md` §2.7).
+    // Absent on a local daemon rather than null, so nothing is printed for the
+    // ordinary case — and printed first where there is one, because every line
+    // below it describes a machine that is not this one.
+    if let Some(url) = field(result, "daemon_at").and_then(Value::as_str) {
+        lines.push(format!("daemon at  {url}"));
+    }
+
     lines.push(format!(
         "base url   {}",
         field(result, "base_url")

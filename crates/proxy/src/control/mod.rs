@@ -94,6 +94,196 @@ pub fn ensure_addressable(path: &Path) -> Result<(), ProxyError> {
     )))
 }
 
+/// The environment variable that puts the CLI in client mode (`api.md` §2).
+///
+/// A URL, not a host: the scheme decides whether the hop is encrypted, and a
+/// daemon reached over anything but a private network wants `https` in front
+/// of it. There is no configuration key for this — client mode is a property
+/// of the machine the CLI is invoked on, and config.toml on that machine is
+/// the *daemon's* configuration shape, not a client's.
+pub const DAEMON_URL_VAR: &str = "PROXENOS_DAEMON";
+
+/// Where the token comes from, in order of precedence.
+///
+/// Never a flag: an argument is visible in `ps` to every process on the
+/// machine, and the whole point of the token is that it is not.
+pub const TOKEN_VAR: &str = "PROXENOS_TOKEN";
+pub const TOKEN_FILE_VAR: &str = "PROXENOS_TOKEN_FILE";
+
+/// Which daemon a verb is talking to.
+///
+/// **One value, resolved from the environment, rather than a path threaded
+/// through every verb.** Every verb already derived its socket path from one
+/// function; this replaces that function's answer with a fuller one, so client
+/// mode reaches a verb by being resolved rather than by being plumbed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Endpoint {
+    /// The daemon on this machine, over the §3 socket.
+    Local(PathBuf),
+    /// A daemon on another machine, over `POST /control`.
+    Remote {
+        url: String,
+        /// `None` reaches a daemon that configured no token, which is only
+        /// possible over loopback — so a remote endpoint with no token will be
+        /// refused by the daemon rather than here. Refusing here would also be
+        /// correct and would say less: the daemon's refusal names the key.
+        token: Option<String>,
+    },
+}
+
+impl Endpoint {
+    /// Read the environment and say which daemon this process talks to.
+    pub fn resolve() -> Result<Self, ProxyError> {
+        let Some(url) = std::env::var(DAEMON_URL_VAR)
+            .ok()
+            .filter(|url| !url.is_empty())
+        else {
+            return Ok(Self::Local(default_path()));
+        };
+        Ok(Self::Remote {
+            url: url.trim_end_matches('/').to_owned(),
+            token: token_from_environment()?,
+        })
+    }
+
+    /// Where the daemon is, for a caller that has to say so. `None` is local,
+    /// which is what `status` reports by leaving the field out.
+    #[must_use]
+    pub fn remote_url(&self) -> Option<&str> {
+        match self {
+            Self::Local(_) => None,
+            Self::Remote { url, .. } => Some(url),
+        }
+    }
+
+    #[must_use]
+    pub fn token(&self) -> Option<&str> {
+        match self {
+            Self::Local(_) => None,
+            Self::Remote { token, .. } => token.as_deref(),
+        }
+    }
+
+    /// Refuse a verb that only means something on the daemon's own machine.
+    ///
+    /// **Refused rather than forwarded.** `accounts login` runs somebody
+    /// else's client and reads the profile it wrote; `supervisor install`
+    /// writes a launchd plist; `run` binds a port. Each of those would happen
+    /// on the wrong machine, and each would look like it worked.
+    pub fn refuse_remote(&self, verb: &str) -> Result<(), ProxyError> {
+        match self.remote_url() {
+            None => Ok(()),
+            Some(url) => Err(ProxyError::invalid_request(format!(
+                "`{verb}` acts on the machine the daemon runs on, and {DAEMON_URL_VAR} points \
+                 this CLI at {url}. Run it on that host."
+            ))),
+        }
+    }
+}
+
+/// The token this process presents, from whichever variable states it.
+fn token_from_environment() -> Result<Option<String>, ProxyError> {
+    if let Some(token) = std::env::var(TOKEN_VAR).ok().filter(|t| !t.is_empty()) {
+        return Ok(Some(token));
+    }
+    let Some(path) = std::env::var_os(TOKEN_FILE_VAR).filter(|path| !path.is_empty()) else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(path);
+    let raw = std::fs::read_to_string(&path).map_err(|error| {
+        ProxyError::invalid_request(format!(
+            "could not read {TOKEN_FILE_VAR} at {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(Some(raw.trim().to_owned()).filter(|token| !token.is_empty()))
+}
+
+/// Ask whichever daemon this process is configured for.
+///
+/// What every verb calls. Resolving per call rather than once at startup keeps
+/// the shape the socket path already had — one derivation, read where it is
+/// needed — and costs two environment reads.
+pub async fn ask(
+    method: &str,
+    params: Option<serde_json::Value>,
+) -> Result<serde_json::Value, ProxyError> {
+    dial(&Endpoint::resolve()?, method, params).await
+}
+
+/// One request to a named endpoint.
+pub async fn dial(
+    endpoint: &Endpoint,
+    method: &str,
+    params: Option<serde_json::Value>,
+) -> Result<serde_json::Value, ProxyError> {
+    match endpoint {
+        Endpoint::Local(path) => call(path, method, params).await,
+        Endpoint::Remote { url, token } => call_http(url, token.as_deref(), method, params).await,
+    }
+}
+
+/// The same vocabulary, over HTTP.
+///
+/// One request per body, and the same JSON-RPC response read the same way —
+/// including the code, which is what lets a caller tell "this daemon has no
+/// such method" from "that method refused what you asked".
+pub async fn call_http(
+    url: &str,
+    token: Option<&str>,
+    method: &str,
+    params: Option<serde_json::Value>,
+) -> Result<serde_json::Value, ProxyError> {
+    let endpoint = format!("{url}/control");
+    let mut request = reqwest::Client::new()
+        .post(&endpoint)
+        .json(&Request::new(1, method, params));
+    if let Some(token) = token {
+        // The same header and the same shape the ingress reads, so one token
+        // serves both surfaces and there is nothing to keep in step.
+        request = request.bearer_auth(crate::ingress::auth_token_value(Some(token), None));
+    }
+
+    let response = request.send().await.map_err(|error| {
+        ProxyError::invalid_request(format!(
+            "could not reach the daemon at {endpoint}: {error}. Is it running, and is \
+             {DAEMON_URL_VAR} right?"
+        ))
+    })?;
+
+    let status = response.status();
+    let body = response.text().await.map_err(|error| {
+        ProxyError::invalid_request(format!("could not read the daemon's answer: {error}"))
+    })?;
+
+    if status == axum::http::StatusCode::UNAUTHORIZED {
+        return Err(ProxyError::authentication(format!(
+            "the daemon at {url} refused this CLI's token. Set {TOKEN_VAR} (or \
+             {TOKEN_FILE_VAR}) to the secret its `listen.token` names."
+        )));
+    }
+    if !status.is_success() {
+        return Err(ProxyError::invalid_request(format!(
+            "the daemon at {endpoint} answered {status}: {}",
+            body.trim()
+        )));
+    }
+
+    let response: Response = serde_json::from_str(&body).map_err(|error| {
+        ProxyError::invalid_request(format!("unreadable response from the daemon: {error}"))
+    })?;
+    match (response.result, response.error) {
+        (Some(result), _) => Ok(result),
+        (None, Some(error)) if error.code == codes::METHOD_NOT_FOUND => {
+            Err(ProxyError::not_found(error.message))
+        }
+        (None, Some(error)) => Err(ProxyError::invalid_request(error.message)),
+        (None, None) => Err(ProxyError::invalid_request(
+            "the daemon returned neither a result nor an error",
+        )),
+    }
+}
+
 /// This binary's version, build id included. One file is both the daemon and
 /// the CLI, so the daemon answering a socket is not necessarily the build that
 /// asked — and within one version number the id is the only thing that says so

@@ -10,14 +10,29 @@ helps; a working exploit is not required.
 
 ## Posture
 
-**Loopback only.** The daemon binds `127.0.0.1` and refuses any other address.
-It performs no authentication, which is safe precisely because every caller
-reaching the socket is already a local process running as the user. The address
-is not configurable — making it so would remove the assumption the whole posture
-rests on.
+**Loopback without a token, or beyond it with one.** The daemon binds
+`127.0.0.1` by default and authenticates nothing there, which is safe precisely
+because every caller reaching the socket is already a local process running as
+the user. Binding any other address removes that assumption, so it is allowed
+only with a token configured (`[listen]`, `docs/api.md` §4) and the daemon
+**refuses to start** with a non-loopback address and no token.
 
-`ANTHROPIC_AUTH_TOKEN` must be set for the client's sake, and its value is
-ignored. It is not a credential and does not protect anything.
+`ANTHROPIC_AUTH_TOKEN` must be set for the client's sake. On a daemon with no
+token its value is ignored — it is not a credential and protects nothing. On one
+with a token it is where that token travels, as `proxenos-token:<secret>`, and
+the token is compared in constant time: a short-circuiting comparison is an
+oracle that gives up the secret a byte at a time.
+
+**What the token is.** It gates this daemon and nothing else. Anyone holding it
+who can reach the port can do what a local caller could — serve turns on the
+accounts this daemon holds, and change its settings. It never appears in process
+arguments (there is no flag for it), in logs, or in what `status`, `env` or
+`settings` print. Prefer `listen.token_file`, which must be `0600` and is
+refused otherwise.
+
+**This project terminates no TLS.** A daemon reachable beyond loopback belongs
+behind a private overlay network or a reverse proxy that does; over plain HTTP
+the token and every turn cross the wire in the clear.
 
 **Credentials.** Stored in a file created `0600`, from the outset rather than
 tightened afterwards — writing first and adjusting permissions later leaves a

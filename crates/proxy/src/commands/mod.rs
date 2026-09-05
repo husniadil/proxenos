@@ -93,9 +93,7 @@ pub(crate) async fn watch(
 }
 
 pub(crate) async fn answering() -> Option<Answering> {
-    let result = control::call(&control::default_path(), "status", None)
-        .await
-        .ok()?;
+    let result = control::ask("status", None).await.ok()?;
     Some(Answering {
         version: version_of(&result).unwrap_or_else(|| "a build that does not say".to_owned()),
         instance: result

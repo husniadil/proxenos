@@ -362,10 +362,20 @@ directions and **saves no tokens** — quota is unaffected either way.
 
 ## Security and privacy
 
-The daemon binds `127.0.0.1` and refuses anything else. It performs no
-authentication, which is safe precisely because every caller reaching the socket
-is already a local process running as the user. `ANTHROPIC_AUTH_TOKEN` must be
-set for Claude Code's sake and its value is ignored.
+The daemon binds `127.0.0.1` and authenticates nothing by default, which is safe
+precisely because every caller reaching the socket is already a local process
+running as the user. `ANTHROPIC_AUTH_TOKEN` must be set for Claude Code's sake
+and its value is ignored.
+
+**Binding any other address needs a token, and the daemon refuses to start
+without one.** `[listen]` in config.toml takes an `address` and a `token_file`
+(or `token`); with a token configured, every request — turns and the control
+vocabulary alike — must carry it as `proxenos-token:<secret>` in
+`ANTHROPIC_AUTH_TOKEN`. That is what lets a second machine run only the CLI and
+be served by this daemon: `PROXENOS_DAEMON` and `PROXENOS_TOKEN`, and every verb
+goes there. This project terminates no TLS, so put a private overlay network or
+a reverse proxy in front of anything reachable beyond loopback. `docs/api.md`
+§1, §2.7, §4 and §7.
 
 Credentials live in a file created `0600`, never in the configuration file,
 never in process arguments, and never in logs. Nothing is collected and nothing

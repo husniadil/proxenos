@@ -72,6 +72,12 @@ pub(crate) async fn supervisor(args: cli::SupervisorArgs) -> Result<()> {
     use anyhow::Context;
     use proxenos::supervisor;
 
+    // §2 — every action here writes or reads a launchd unit on THIS machine.
+    // Pointed at a daemon elsewhere, `install` would supervise a second daemon
+    // on the client's own port and `status` would report about it, both
+    // looking exactly like success.
+    proxenos::control::Endpoint::resolve()?.refuse_remote("supervisor")?;
+
     let origin = supervisor_origin()?;
     let unit = supervisor::plan(&supervisor::Platform::current(), &origin)?;
     let home = std::env::var_os("HOME")

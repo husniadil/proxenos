@@ -18,8 +18,17 @@ pub(crate) async fn accounts(args: cli::AccountsArgs) -> Result<()> {
     match args.action {
         None => list(args.json).await,
         Some(cli::AccountsAction::List(list_args)) => list(args.json || list_args.json).await,
-        Some(cli::AccountsAction::Login(login_args)) => sign_in_profile(&login_args).await,
+        // §2 — the two verbs that ADD an account act on the machine the
+        // daemon runs on: one runs somebody else's client and reads the
+        // profile it wrote, the other writes a credential file. Neither is
+        // something a client-mode CLI can do for a daemon elsewhere, and both
+        // would look like they worked.
+        Some(cli::AccountsAction::Login(login_args)) => {
+            control::Endpoint::resolve()?.refuse_remote("accounts login")?;
+            sign_in_profile(&login_args).await
+        }
         Some(cli::AccountsAction::AddKey(key_args)) => {
+            control::Endpoint::resolve()?.refuse_remote("accounts add-key")?;
             store_key(&key_args.name, key_args.provider).await
         }
         Some(cli::AccountsAction::Use(named)) => select(&named.name).await,
@@ -30,7 +39,7 @@ pub(crate) async fn accounts(args: cli::AccountsArgs) -> Result<()> {
 
 /// Stored accounts, and which one serves turns.
 async fn list(json: bool) -> Result<()> {
-    let result = control::call(&control::default_path(), "accounts", None).await?;
+    let result = control::ask("accounts", None).await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
@@ -40,8 +49,7 @@ async fn list(json: bool) -> Result<()> {
 }
 
 async fn select(name: &str) -> Result<()> {
-    let result = control::call(
-        &control::default_path(),
+    let result = control::ask(
         "accounts.select",
         Some(serde_json::json!({ "account": name })),
     )
@@ -51,8 +59,7 @@ async fn select(name: &str) -> Result<()> {
 }
 
 async fn rename(from: &str, to: &str) -> Result<()> {
-    let result = control::call(
-        &control::default_path(),
+    let result = control::ask(
         "accounts.rename",
         Some(serde_json::json!({ "account": from, "name": to })),
     )
@@ -62,8 +69,7 @@ async fn rename(from: &str, to: &str) -> Result<()> {
 }
 
 async fn remove(name: &str) -> Result<()> {
-    let result = control::call(
-        &control::default_path(),
+    let result = control::ask(
         "accounts.remove",
         Some(serde_json::json!({ "account": name })),
     )

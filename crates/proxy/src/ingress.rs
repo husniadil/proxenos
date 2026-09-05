@@ -1,7 +1,9 @@
 //! `docs/api.md` §1 — the Anthropic Messages surface.
 //!
-//! The daemon binds loopback and performs no authentication: every caller
-//! reaching the socket is already a local process running as the user.
+//! The daemon binds loopback and authenticates nothing by default: every caller
+//! reaching the socket is already a local process running as the user. It binds
+//! anything else only with a token configured, and then every request carries
+//! it — `serving_router` and `require_token` below.
 
 use crate::error::ProxyError;
 use crate::estimate::Estimator;
@@ -130,6 +132,155 @@ async fn not_found() -> Response {
     ProxyError::not_found("unknown endpoint").into_response()
 }
 
+/// What the daemon's own router carries beyond the turn surface.
+///
+/// One value rather than two arguments, so a caller cannot build a router that
+/// exposes the control vocabulary and forgets the guard: both halves of the
+/// posture arrive together or not at all.
+pub struct Access {
+    /// The token every request must carry, where one is configured. `None` is
+    /// the shipped loopback posture — no authentication, and `/control` open
+    /// to a loopback caller only.
+    pub token: Option<String>,
+    /// The §3 vocabulary, served over HTTP at `POST /control`. `None` leaves
+    /// the endpoint absent, which is what a probe or a test wants.
+    pub control: Option<crate::control::handler::ControlState>,
+}
+
+/// The router the daemon actually serves: the turn surface, the control
+/// endpoint, and the token guard over both.
+///
+/// `router` stays as it is — it is what the probes and the ingress tests want,
+/// and neither has a token or a control state to give.
+pub fn serving_router(state: AppState, access: Access) -> Router {
+    let token = access.token.map(std::sync::Arc::<str>::from);
+
+    let mut router = router(state);
+    if let Some(control) = access.control {
+        router = router.merge(
+            Router::new()
+                .route("/control", post(control_over_http))
+                .with_state(ControlOverHttp {
+                    control,
+                    // Read here rather than from the guard below, because the
+                    // guard is absent in exactly the case this has to know
+                    // about: no token configured at all.
+                    authenticated: token.is_some(),
+                }),
+        );
+    }
+
+    match token {
+        Some(token) => router.layer(axum::middleware::from_fn_with_state(token, require_token)),
+        None => router,
+    }
+}
+
+/// Everything `POST /control` reads.
+#[derive(Clone)]
+struct ControlOverHttp {
+    control: crate::control::handler::ControlState,
+    /// Whether a token is configured at all. A daemon with none serves
+    /// loopback callers only, and this endpoint is the one that has to say so.
+    authenticated: bool,
+}
+
+/// Refuse a request that does not carry the daemon's token (`api.md` §1).
+///
+/// In the Anthropic error shape, like every other refusal here (§1.1): the
+/// client's own retry logic reads this body, and a bare 401 from a middleware
+/// is not something it can act on.
+async fn require_token(
+    State(token): State<std::sync::Arc<str>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let presented = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(parse_tags)
+        .and_then(|tags| tags.token);
+
+    match presented {
+        Some(presented) if constant_time_eq(presented.as_bytes(), token.as_bytes()) => {
+            next.run(request).await
+        }
+        // One sentence for both, on purpose: telling a caller whether the
+        // token was absent or merely wrong is telling them where to look next.
+        _ => ProxyError::authentication(
+            "this daemon requires a token. Send it in `ANTHROPIC_AUTH_TOKEN` as \
+             `proxenos-token:<secret>`, or set `PROXENOS_TOKEN` for the CLI.",
+        )
+        .into_response(),
+    }
+}
+
+/// Compare two secrets without leaking where they first differ.
+///
+/// Short-circuiting on the first differing byte turns a comparison into an
+/// oracle: a caller that can time it recovers the token one byte at a time.
+/// The length difference is unavoidable and is not the interesting half.
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |differences, (left, right)| {
+            differences | (left ^ right)
+        })
+        == 0
+}
+
+/// `docs/api.md` §3 — the control vocabulary, over HTTP.
+///
+/// One request per body rather than the socket's line framing, because HTTP
+/// already frames it. Everything below that is the same call: the same
+/// `answer`, the same dispatch, the same JSON-RPC response — so a method
+/// cannot behave one way here and another over the socket.
+///
+/// A JSON-RPC-level failure is still a 200 carrying an `error` member, which
+/// is what the protocol says and what the socket does. The status codes this
+/// endpoint uses are about reaching it at all.
+async fn control_over_http(
+    State(state): State<ControlOverHttp>,
+    request: axum::extract::Request,
+) -> Response {
+    // Read off the request rather than extracted, because the extractor is
+    // infallible only where the server was built with connect info — and a
+    // handler that panics on a router assembled without it is a worse answer
+    // than one that treats an unknown peer as remote.
+    let peer = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .copied();
+    // Unreachable while `resolve_listen` holds — a daemon with no token binds
+    // loopback and nothing else can reach it — and stated anyway, because the
+    // two rules live in different files and only one of them is enforced here.
+    // An unknown peer is treated as remote: this is the direction to fail in.
+    let loopback = peer.is_some_and(|peer| peer.ip().is_loopback());
+    if !state.authenticated && !loopback {
+        return ProxyError::authentication(
+            "this daemon has no token configured, so the control vocabulary is served to \
+             loopback callers only. Set `listen.token_file` on the daemon's machine.",
+        )
+        .into_response();
+    }
+
+    let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+        Ok(body) => body,
+        Err(error) => {
+            return ProxyError::invalid_request(format!(
+                "could not read the request body: {error}"
+            ))
+            .into_response();
+        }
+    };
+    let line = String::from_utf8_lossy(&body);
+    Json(crate::control::answer(&state.control, &line).await).into_response()
+}
+
 /// The mapped models, in the Anthropic list shape.
 async fn models(State(state): State<AppState>) -> Response {
     let policy = state.policy.get();
@@ -199,15 +350,93 @@ struct Routed {
 /// this daemon.
 pub const ACCOUNT_TAG: &str = "proxenos-account:";
 
+/// What a caller puts in front of the daemon's token, in the same value
+/// (`api.md` §1).
+///
+/// The token and the account tag share one header because the client only
+/// offers one: `ANTHROPIC_AUTH_TOKEN` is what Claude Code sends and there is
+/// no second field to put either in. Both are prefixed, and a value carrying
+/// a token is read as **whitespace-separated parts** —
+/// `proxenos-token:<secret> proxenos-account:<name>`, in either order.
+pub const TOKEN_TAG: &str = "proxenos-token:";
+
+/// What a caller's auth-token value says.
+///
+/// Everything here is optional: the value is ignored by design on a loopback
+/// daemon with no token, which is what makes it a channel a launch can use
+/// without the wire gaining a secret.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Tags {
+    /// The daemon's own token, where the value carried one.
+    pub token: Option<String>,
+    /// The stored account this session's turns are made as.
+    pub account: Option<String>,
+}
+
+/// Read the tags out of one auth-token value.
+///
+/// **A value with no token part is read exactly as it was before tokens
+/// existed**: the whole string, tag prefix stripped, is the account name. That
+/// is not tidiness — an account name may hold a space, and splitting a value
+/// that was never multi-part would silently truncate it. Only a value that
+/// announces a token is parsed as parts.
+#[must_use]
+pub fn parse_tags(value: &str) -> Tags {
+    let value = value.strip_prefix("Bearer ").unwrap_or(value);
+
+    if !value
+        .split_whitespace()
+        .any(|part| part.starts_with(TOKEN_TAG))
+    {
+        return Tags {
+            token: None,
+            account: value.strip_prefix(ACCOUNT_TAG).map(str::to_owned),
+        };
+    }
+
+    let mut tags = Tags::default();
+    for part in value.split_whitespace() {
+        if let Some(token) = part.strip_prefix(TOKEN_TAG) {
+            tags.token = Some(token.to_owned());
+        } else if let Some(account) = part.strip_prefix(ACCOUNT_TAG) {
+            tags.account = Some(account.to_owned());
+        }
+    }
+    tags
+}
+
+/// The value to put in `ANTHROPIC_AUTH_TOKEN` for a launch.
+///
+/// One place builds it, so the launcher and the parser cannot disagree about
+/// the separator. `None` for both is the word the client needs and this daemon
+/// ignores.
+#[must_use]
+pub fn auth_token_value(token: Option<&str>, account: Option<&str>) -> String {
+    let mut parts = Vec::new();
+    if let Some(token) = token {
+        parts.push(format!("{TOKEN_TAG}{token}"));
+    }
+    if let Some(account) = account {
+        parts.push(format!("{ACCOUNT_TAG}{account}"));
+    }
+    if parts.is_empty() {
+        return "unused".to_owned();
+    }
+    parts.join(" ")
+}
+
+/// The tags one request carried.
+fn tags_of(headers: &axum::http::HeaderMap) -> Tags {
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(parse_tags)
+        .unwrap_or_default()
+}
+
 /// The account a launch tagged this turn with, if it tagged one.
 fn tagged_account(headers: &axum::http::HeaderMap) -> Option<String> {
-    headers
-        .get(axum::http::header::AUTHORIZATION)?
-        .to_str()
-        .ok()?
-        .strip_prefix("Bearer ")?
-        .strip_prefix(ACCOUNT_TAG)
-        .map(str::to_owned)
+    tags_of(headers).account
 }
 
 async fn messages(

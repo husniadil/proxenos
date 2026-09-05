@@ -4,6 +4,36 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **One daemon, reached from other machines.** A second machine can run only
+  the proxenos CLI and be served by a daemon on the first — its accounts, its
+  quota, its tier mapping — instead of needing a daemon and credentials of its
+  own.
+- `[listen]` in config.toml: `address` (default `127.0.0.1`), `token_file`, and
+  `token`. The daemon **refuses to start** with a non-loopback `address` and no
+  token, naming both keys. With a token configured, every ingress request and
+  every control request must carry it or is refused with an
+  `authentication_error` (`api.md` §1.1). A `token_file` that is group- or
+  world-readable is refused, naming the mode and the `chmod`. Loopback with no
+  token behaves exactly as before.
+- The token travels in `ANTHROPIC_AUTH_TOKEN`, beside the launch tag, as
+  `proxenos-token:<secret> proxenos-account:<name>` — whitespace-separated, in
+  either order. A value with no token part is read exactly as it was before,
+  including one holding a space.
+- `POST /control` serves the §3 vocabulary over HTTP on the daemon's own port,
+  behind the same token. Same dispatch, same results, same error codes as the
+  socket; the socket is unchanged. No method was added, renamed or removed.
+- `PROXENOS_DAEMON` puts the CLI in client mode: every verb dials that daemon
+  over HTTP, `proxenos exec` points the client it starts at it, and `status`
+  carries `daemon_at` (absent for a local daemon). The token comes from
+  `PROXENOS_TOKEN` or `PROXENOS_TOKEN_FILE` — never a flag, never argv.
+- Refused in client mode, each saying to run it on the daemon's host: `run`,
+  `start`, `accounts login`, `accounts add-key`, `supervisor *`. `stop` is
+  allowed. `settings` is refused where a token is configured — the document
+  would carry the secret on stdout; `env` prints the base URL and the line that
+  sets the token from `$PROXENOS_TOKEN` rather than the token itself.
+
 ## [0.20.0]
 
 - `tiers set` takes `--as ACCOUNT` to pin a tier — the table form config.toml

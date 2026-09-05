@@ -13,15 +13,34 @@ the stability rules in §6 apply to them.
 
 ## 1. Ingress
 
-The daemon binds `127.0.0.1` and refuses any other address. It performs no
-authentication: every caller reaching the socket is already a local process
-running as the user.
+The daemon binds `127.0.0.1` by default and performs no authentication there:
+every caller reaching the socket is already a local process running as the
+user. **It binds any other address only with a token configured** — `[listen]`
+in §4 — and refuses to start with a non-loopback `listen.address` and no token,
+naming both keys. With a token configured, every request to the ingress and to
+§3's HTTP control endpoint must carry it, or is refused with an
+`authentication_error` (§1.1).
 
-`ANTHROPIC_AUTH_TOKEN` must be set for Claude Code's own sake. Its value is
-ignored, with one carve-out: a value of `proxenos-account:<name>` is a launch
-tag (`exec --account`, §2.3) naming the stored account that session's turns
-are made as. The tag is a name, never a secret, and the credential it resolves
-to never leaves the daemon.
+`ANTHROPIC_AUTH_TOKEN` must be set for Claude Code's own sake, and it is the
+one header the client offers, so **both the token and the launch tag travel in
+it**:
+
+| Value | Meaning |
+|---|---|
+| anything (`unused`) | ignored, on a daemon with no token configured |
+| `proxenos-account:<name>` | the launch tag `exec --account` (§2.3) travels as, naming the stored account that session's turns are made as |
+| `proxenos-token:<secret>` | this daemon's token |
+| `proxenos-token:<secret> proxenos-account:<name>` | both, whitespace-separated, in either order |
+
+A value that does **not** contain a `proxenos-token:` part is read exactly as
+it was before tokens existed: the whole string, tag prefix stripped, is the
+account name. That is not tidiness — an account name may hold a space, and
+splitting a value that was never multi-part would silently truncate it. Only a
+value that announces a token is parsed as parts.
+
+The tag is a name, never a secret, and the credential it resolves to never
+leaves the daemon. The token *is* a secret: it never appears in argv, in a log
+line, or in what `status`, `env` or `settings` print (§2.2).
 
 | Endpoint | Purpose |
 |---|---|
@@ -57,8 +76,14 @@ The ingress imposes **no size limit** on a request body. A real turn — a full
 system prompt and a large tool set — runs past the extractor's 2 MB default, and
 the backend's own limit is the real one. A 413 from the door is worse than a
 large body: it is not an Anthropic error shape, so the client reads it as
-retryable and loops on it, the turn never reaching the backend. The daemon is
-loopback-only, so the only sender is the user's own client.
+retryable and loops on it, the turn never reaching the backend. The sender is
+the user's own client on this machine, or — where a token is configured — one
+holding that token.
+
+**The token is compared in constant time.** Short-circuiting on the first
+differing byte turns a comparison into an oracle: a caller who can time it
+recovers the secret one byte at a time. A missing token and a wrong one get the
+same sentence, for the same reason.
 
 ### 1.1 Errors
 
@@ -187,6 +212,10 @@ Every verb except `run`, `start`, `record`, `supervisor`, `doctor`, and the two
 `accounts` verbs that add an account operates through the control socket (§3)
 against a running daemon. Those bring a daemon up, run one of their own, touch
 the machine, or need credentials rather than a socket.
+
+**And that socket need not be on this machine.** With `PROXENOS_DAEMON` set,
+every verb that goes through the control vocabulary goes over HTTP to a daemon
+elsewhere instead — §2.7.
 
 **One sub-verb per thing an operator does, each naming its account
 positionally.** The surface before this used flags as actions — `--use`,
@@ -1064,6 +1093,85 @@ replaced by the build on disk. `stop` asks the daemon to go and reports what it
 saw afterwards; under a supervisor what it sees is the new build answering.
 Without one, nothing comes back and `stop` says that too.
 
+### 2.7 Client mode
+
+A second machine runs only this CLI and is served by a daemon on the first. It
+holds no accounts, no credentials, and no configuration of its own: every verb
+that goes through the control vocabulary goes over §3's HTTP transport instead
+of the local socket, and `exec` points the client it starts at that daemon.
+
+| Variable | Meaning |
+|---|---|
+| `PROXENOS_DAEMON` | the daemon's base URL, e.g. `https://macbook.tailnet:8787`. Set, this CLI is a client; unset or empty, everything is exactly as before |
+| `PROXENOS_TOKEN` | the token that daemon's `listen.token` names |
+| `PROXENOS_TOKEN_FILE` | a file holding it instead. Read only where `PROXENOS_TOKEN` is unset or empty |
+
+**A URL, not a host.** The scheme decides whether the hop is encrypted, and a
+daemon reached over anything but a private network wants `https` in front of
+it. This project terminates no TLS itself — put a reverse proxy or a private
+overlay network in front of it — so `http://` is honest about what it is.
+
+**There is no configuration key for any of this, deliberately.** Client mode is
+a property of the machine the CLI is invoked on, and `config.toml` on that
+machine is the *daemon's* configuration shape — a client that read `port` and
+`[tiers]` out of it would be reading settings nothing on that machine applies.
+An environment variable is also the only form a per-shell or per-pane choice
+can take, which is how a second daemon gets tried without editing a file.
+
+**The token is never an argument.** There is no `--token` flag on any verb,
+because argv is visible in `ps` to every process on the machine.
+
+`status` carries **`daemon_at`** in client mode — the URL this CLI dialed — so a
+front-end can show "connected to macbook". It is **absent** for a local daemon
+rather than null: a daemon reporting its own address would be reporting a
+loopback URL that means nothing to whoever asked. The daemon does not know what
+address the caller reached it on, so this field is added by the CLI, which does.
+
+**Refused in client mode**, each with a sentence naming the URL and saying to
+run it on that host:
+
+| Verb | Why |
+|---|---|
+| `run`, `start` | bind a port on the machine they are typed on. Aimed elsewhere they would start a *second* daemon here |
+| `accounts login` | runs the owning program's own login and reads the profile it wrote (`proxy-behavior.md` §8.4). Both happen on this machine; the daemon would never see the result |
+| `accounts add-key` | writes a credential file the daemon reads. Written here, nothing reads it |
+| `supervisor *` | writes, reads, and reports on a launchd unit on this machine |
+
+**`stop` is allowed**, and that is a decision rather than an oversight. It is a
+control method like any other; the daemon acts on it itself, and an operator who
+can already move that daemon's serving account over the same transport can stop
+it too. What client mode cannot do is start it again, which is what the sentence
+`stop` prints says.
+
+Everything else works: `status`, `accounts`, `accounts use`, `accounts rename`,
+`accounts remove`, `models`, `tiers`, `tiers set`, `effort`, `usage`, `reload`,
+`record`, `env`, `exec`, `statusline`. `doctor` is unaffected — it runs in the
+CLI against the fixture corpus and never needed a daemon.
+
+**`--persist` writes the configuration on the daemon's machine**, which is
+correct and worth saying out loud: the file it changes is the one that daemon
+starts from, and there is no file on this side for it to have meant instead.
+
+**What `exec` sets.** `ANTHROPIC_BASE_URL` becomes the URL this CLI dialed
+rather than the daemon's own loopback answer, and `ANTHROPIC_AUTH_TOKEN` carries
+the token, beside the `--account` tag where one was given —
+`proxenos-token:<secret> proxenos-account:<name>` (§1). Both are set on the
+child, never printed.
+
+**What `env` and `settings` do instead.** `env` rewrites the base URL and
+**leaves the auth-token export out entirely**, printing instead the one line
+that sets it from the variable this process already read:
+
+```sh
+export ANTHROPIC_AUTH_TOKEN="proxenos-token:$PROXENOS_TOKEN"
+```
+
+Those exports are what an operator pastes into a shell, and into that shell's
+history. `settings` is **refused** in client mode with a token: that document is
+one blob a client reads whole, so it would either carry the secret on stdout or
+be a document that does not work. `exec` is the client-mode launcher, and it
+sets both halves without printing either.
+
 ---
 
 ---
@@ -1093,6 +1201,24 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 | `cross_account_tiers.set` | `{"enabled": bool}` — consent for pinned tiers. **Always persisted**, unlike the setters above: consent is the operator changing what the daemon is, and a grant that evaporated at restart would leave the file refusing a mapping the operator permitted. Granting applies to the next call, not the next restart; revoking is refused by name while any tier still pins an account, because the write would produce a file the daemon refuses to start from | yes |
 | `config.reload` | re-reads config.toml into the running daemon and answers `{"reloaded": [...], "needs_restart": [...]}`. It applies `[profiles]`, the tier mapping and the effort ceiling — the mapping through the same checked path a switch takes, except that a tier naming a model the catalog does not carry is **marked rather than refused**, since a reload is the move an operator has left after a daemon came up with one marked — and names what it did not: `instructions`, `client`, `transport`, `upstream`, `port`. Nothing is fetched. A file that does not parse is refused with the parse error and the daemon keeps what it was running on It also carries `serving` — who serves turns afterwards, `null` where the file took the serving profile away — and `remaining`, how many accounts are left, so that case is reported here rather than found out from a refused turn | no — added after v0.12 |
 | `doctor` | probe results | no — `doctor` runs in the CLI, which is where `--live` can be given credentials without a daemon already holding them |
+
+**The same vocabulary is served over HTTP, at `POST /control` on the daemon's
+own port.** One JSON-RPC request per body — HTTP already frames it, so the
+socket's newline framing is not repeated — and one response object back. Below
+that it is the same call: the same dispatch, the same result, the same error
+code, so **no method can behave one way over the socket and another over
+HTTP**. A JSON-RPC-level failure is still a 200 carrying an `error` member,
+which is what the protocol says and what the socket does; the status codes this
+endpoint uses are about reaching it at all.
+
+It is gated by the same token the ingress is (§1) — it carries
+`accounts.remove` and `accounts.select`, so an open one would be worse than an
+open ingress — and where **no** token is configured it serves loopback callers
+only. That second case cannot arise from a reachable network, since a daemon
+with no token binds loopback and nothing else (§4), and the endpoint states the
+rule rather than relying on it: an unknown peer is treated as remote.
+
+The socket is unchanged and stays the local path. §2.7 is the CLI side.
 
 **Where the socket lives.** `$PROXENOS_HOME/proxenos.sock` when that variable
 is set, else `$TMPDIR/proxenos.sock`. The home is what isolates a daemon from
@@ -1463,6 +1589,13 @@ effort = "low"
 [accounts.spare.tiers]
 opus = "..."
 
+# Optional. Where the daemon listens, and the token it demands. The default is
+# loopback with no token, which is the posture this project shipped with.
+[listen]
+address    = "0.0.0.0"
+token_file = "/Users/me/.config/proxenos/token"
+# token    = "a-long-random-string"
+
 [transport]
 websocket   = true
 compression = true
@@ -1705,6 +1838,32 @@ error says so when they do not.
 
 ---
 
+**`[listen]` is the one table that can hold a secret, and that is stated rather
+than left to be discovered.** §4 opens by saying credentials are never stored
+here, and `listen.token` is a deliberate exception to it. The rest of that rule
+stands and is a different rule: `[profiles]` names a *directory*, and the
+subscription grant it points at is borrowed from the program that owns it and
+never copied here. The token is not a credential for anything upstream — it
+buys access to this daemon and nothing else, it is minted by the operator, and
+rotating it costs one edit and one restart. It is written down because there is
+nowhere else for it to be: it is the thing that decides whether this daemon
+answers at all, so it has to be readable before anything else this daemon does.
+
+`token_file` is the better half of the pair and the one to prefer. A secret in
+a file of its own can be `0600`, can be rotated without editing configuration,
+and can be excluded from whatever backs up or syncs a config directory. It is
+**refused when the file is group- or world-readable**, naming the mode and the
+`chmod` that fixes it — a token anybody on the machine can read is not one, and
+the failure is otherwise silent: the daemon comes up, the token works, and
+every other account on the box has it. Stating the token twice — both keys — is
+refused rather than resolved: an operator with a stale `token` beside a live
+file has two answers and no way to tell which one the daemon took.
+
+**`address` and the token are one decision, resolved together before anything
+binds.** A non-loopback address with no token is refused at startup, naming both
+keys. `port` stays at the top level rather than moving into this table: it
+shipped there, and §6 forbids moving a key.
+
 ## 5. Limitations
 
 Stated because each is permanent under the current design, not because they are
@@ -1770,6 +1929,16 @@ The CLI verb set, the control-socket method names, the configuration keys, and
 the error-type vocabulary are semver-bound. A shipped name is never repurposed or
 removed within a major version; only new ones are added.
 
+**Names bound by this release.** Configuration: `listen.address`,
+`listen.token`, `listen.token_file`. Environment: `PROXENOS_DAEMON`,
+`PROXENOS_TOKEN`, `PROXENOS_TOKEN_FILE`. Ingress: the auth-token tag
+`proxenos-token:` and the endpoint `POST /control`. The `status` field
+`daemon_at` is a field, so §6's rule about added fields governs it: a caller
+that needs it checks for it, and its absence means a local daemon.
+
+**No method name was added, renamed or removed.** The HTTP transport carries
+the same eighteen; that is the point of it.
+
 **Before 1.0 that rule has one deliberate exception, and it closes on its own.**
 Semantic versioning does not bind a zero major, and nothing outside this
 project's own CLI has ever spoken the socket — the CLI and the daemon are one
@@ -1831,3 +2000,21 @@ OpenAI. All trademarks belong to their owners.
 No telemetry is collected or transmitted. Credentials never appear in process
 arguments or logs. Configuration and credential files are created with
 restrictive permissions.
+
+**Loopback without a token, or beyond it with one.** The daemon binds
+`127.0.0.1` and authenticates nothing by default, which is safe because every
+caller is already a local process running as the user. Binding any other
+address removes that assumption, so it is allowed only with a token configured
+and is refused at startup otherwise (§1, §4). Nothing else changes with the
+token: it decides who may ask, not what is served.
+
+**What the token is and is not.** It gates this daemon. It is not a credential
+for any upstream, it authorizes no spending of its own, and a holder of it can
+do exactly what a local caller could — serve turns on the accounts this daemon
+holds, and move its settings. Anyone who can reach the port and holds it is,
+for every purpose here, the operator. Rotate it by editing `listen.token_file`
+and restarting.
+
+**This project terminates no TLS.** A daemon reachable beyond loopback should
+sit behind a private overlay network or a reverse proxy that does. Over plain
+`http://` the token crosses the wire in a header, and so does every turn.

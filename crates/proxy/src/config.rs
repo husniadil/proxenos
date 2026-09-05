@@ -164,6 +164,25 @@ fable  = "gpt-5.6-sol"
 # [accounts.spare.tiers]
 # opus = "gpt-5.5"
 
+# Where the daemon listens, and what it demands from a caller.
+#
+# The default binds loopback and asks for nothing, which is the posture this
+# project shipped with: every caller is already a local process running as the
+# user. Binding anything else serves other machines, and then a token is
+# REQUIRED — the daemon refuses to start with a non-loopback `address` and no
+# token, naming both keys, rather than putting somebody's accounts on the
+# network.
+#
+# `token_file` is the better half of the pair: a file this daemon reads at
+# startup, which must be `0600`. `token` puts the secret in this file, which is
+# the one secret config.toml is allowed to hold — see docs/api.md §4 for why
+# that exception exists and what it costs.
+#
+# [listen]
+# address    = "0.0.0.0"
+# token_file = "/Users/me/.config/proxenos/token"
+# token      = "a-long-random-string"
+
 [transport]
 websocket   = true
 
@@ -324,6 +343,15 @@ pub struct Config {
     pub tiers: Tiers,
     #[serde(default)]
     pub transport: TransportConfig,
+    /// Where the daemon listens, and the token it demands.
+    ///
+    /// A table of its own rather than keys on `[transport]`: that table is
+    /// about how this proxy reaches the *backend* — the websocket and the
+    /// compression on it — and a listen address filed there would read as a
+    /// property of the upstream connection. `port` stays where it is, at the
+    /// top level, because it shipped there and §6 forbids moving a key.
+    #[serde(default)]
+    pub listen: ListenConfig,
     /// A ceiling on reasoning effort, for operators who care what a turn costs.
     ///
     /// The client cannot choose this: it does not know whose quota it is
@@ -961,6 +989,7 @@ impl Default for Config {
             cross_account_tiers: false,
             tiers: Tiers::default(),
             transport: TransportConfig::default(),
+            listen: ListenConfig::default(),
             effort: None,
             instructions: InstructionsConfig::default(),
             client: ClientConfig::default(),
@@ -1082,6 +1111,168 @@ impl Default for TransportConfig {
             compression: true,
         }
     }
+}
+
+/// The default listen address: loopback, and nothing else.
+pub const DEFAULT_LISTEN: &str = "127.0.0.1";
+
+/// `docs/api.md` §4 — where the daemon listens, and what it demands.
+///
+/// Two keys, and the pairing between them is the whole point: an address
+/// beyond loopback without a token is refused at startup, by name. Loopback
+/// with no token is the posture this project shipped with and is unchanged.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListenConfig {
+    /// The address to bind. Unset is `127.0.0.1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// The token every caller must present, read from this file.
+    ///
+    /// The better half of the pair: a secret in a file of its own can be
+    /// `0600` and can be rotated without editing configuration. Refused when
+    /// the file is group- or world-readable, because a token that anybody on
+    /// the machine can read is not one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_file: Option<std::path::PathBuf>,
+    /// The token, written here.
+    ///
+    /// The one secret this file is allowed to hold, and a deliberate exception
+    /// to §4's rule that it holds none — stated in the doc rather than left to
+    /// be discovered. `token_file` is preferred; this exists because an
+    /// operator who has already accepted a LAN-open daemon should not need a
+    /// second file to make it safe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+/// What the daemon actually binds, and what it demands from a caller.
+///
+/// Resolved once, at startup, before anything binds. Held as one value so no
+/// caller can read the address without the token beside it — the two are one
+/// decision and reading them apart is how a non-loopback bind loses its guard.
+#[derive(Debug, Clone)]
+pub struct Listen {
+    pub address: std::net::IpAddr,
+    /// `None` is the shipped posture: loopback, and no authentication.
+    pub token: Option<String>,
+}
+
+impl Listen {
+    /// Whether this address is reachable only from this machine.
+    #[must_use]
+    pub fn is_loopback(&self) -> bool {
+        self.address.is_loopback()
+    }
+}
+
+impl Config {
+    /// Resolve the listen address and the token, or say why neither can stand.
+    ///
+    /// **The refusal is the feature.** A daemon bound past loopback with no
+    /// token hands every stored account to anyone who can reach the port, and
+    /// nothing about a healthy `status` would say so. It names both keys,
+    /// because an operator who set one is one key away from the posture they
+    /// meant.
+    pub fn resolve_listen(&self) -> Result<Listen, ProxyError> {
+        let stated = self.listen.address.as_deref().unwrap_or(DEFAULT_LISTEN);
+        let address: std::net::IpAddr = stated.parse().map_err(|_| {
+            ProxyError::invalid_request(format!(
+                "`listen.address = \"{stated}\"` is not an IP address. Write `127.0.0.1` for \
+                 loopback only, or an address of this machine to serve others."
+            ))
+        })?;
+
+        let token = self.listen_token()?;
+        if !address.is_loopback() && token.is_none() {
+            return Err(ProxyError::invalid_request(format!(
+                "`listen.address = \"{stated}\"` reaches past this machine and no token is \
+                 configured, so every stored account would be served to anyone who can reach \
+                 the port. Set `listen.token_file` (a 0600 file holding the secret) or \
+                 `listen.token`, or bind `127.0.0.1`."
+            )));
+        }
+
+        Ok(Listen { address, token })
+    }
+
+    /// The token, from whichever key states it.
+    ///
+    /// `token_file` wins where both are written, and the two disagreeing is
+    /// refused rather than resolved: an operator with a stale `token` beside a
+    /// live file has two answers and no way to tell which one the daemon took.
+    fn listen_token(&self) -> Result<Option<String>, ProxyError> {
+        let from_file = self
+            .listen
+            .token_file
+            .as_deref()
+            .map(read_token_file)
+            .transpose()?;
+        match (from_file, self.listen.token.as_deref()) {
+            (Some(file), Some(_)) => Err(ProxyError::invalid_request(format!(
+                "`listen.token_file` and `listen.token` are both set and this daemon cannot \
+                 tell which one you meant. Remove one. (The file holds {} bytes.)",
+                file.len()
+            ))),
+            (Some(file), None) => Ok(Some(file)),
+            (None, Some(inline)) => Ok(Some(non_empty(inline, "listen.token")?)),
+            (None, None) => Ok(None),
+        }
+    }
+}
+
+/// Read a token from a file, refusing one anybody else on the machine can read.
+///
+/// A secret in a readable file is not a secret, and the failure is silent: the
+/// daemon comes up, the token works, and every other account on the box has
+/// it. Refused by name instead, with the command that fixes it.
+fn read_token_file(path: &std::path::Path) -> Result<String, ProxyError> {
+    let raw = std::fs::read_to_string(path).map_err(|error| {
+        ProxyError::invalid_request(format!(
+            "could not read `listen.token_file` at {}: {error}",
+            path.display()
+        ))
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)
+            .map_err(|error| {
+                ProxyError::invalid_request(format!(
+                    "could not read the permissions of {}: {error}",
+                    path.display()
+                ))
+            })?
+            .permissions()
+            .mode()
+            & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(ProxyError::invalid_request(format!(
+                "`listen.token_file` at {} is mode {mode:04o}, readable by somebody other than \
+                 you. A token anybody on this machine can read is not one: `chmod 600 {}`.",
+                path.display(),
+                path.display()
+            )));
+        }
+    }
+
+    non_empty(
+        raw.trim(),
+        &format!("listen.token_file ({})", path.display()),
+    )
+}
+
+/// A token that is present but empty is a mistake, not a token.
+fn non_empty(value: &str, key: &str) -> Result<String, ProxyError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(ProxyError::invalid_request(format!(
+            "`{key}` is empty. Write the secret, or remove the key to serve loopback with no \
+             authentication."
+        )));
+    }
+    Ok(trimmed.to_owned())
 }
 
 /// One tier, resolved.

@@ -39,11 +39,17 @@ use std::sync::Arc;
 /// operator who edited `port` believing it took effect, and the whole point of
 /// the verb is that the daemon keeps running.
 pub(crate) async fn reload() -> Result<()> {
-    let result = control::call(&control::default_path(), "config.reload", None).await?;
+    let result = control::ask("config.reload", None).await?;
     println!("{}", proxenos::render::reloaded_config(&result));
     Ok(())
 }
 
+/// **Allowed in client mode**, unlike the other lifetime verbs (`api.md` §2).
+/// `start` and `run` bind a port on the machine they are typed on, so aiming
+/// them at a daemon elsewhere is meaningless; `stop` is a control method like
+/// any other, the daemon acts on it itself, and an operator who can already
+/// switch that daemon's account can stop it too. What it cannot do from here
+/// is start it again — which is what the sentence it prints says.
 pub(crate) async fn stop() -> Result<()> {
     let before = answering().await;
     // Read from the daemon that is about to go, because it is the only one
@@ -51,7 +57,7 @@ pub(crate) async fn stop() -> Result<()> {
     // process, and on a supervised machine it is often not answering yet.
     let supervision = before.as_ref().and_then(|now| now.supervised);
 
-    let result = match control::call(&control::default_path(), "shutdown", None).await {
+    let result = match control::ask("shutdown", None).await {
         Ok(result) => result,
         // The chicken and the egg, stated rather than papered over. This verb
         // exists to replace a daemon older than the binary asking, and it
@@ -140,6 +146,7 @@ pub(crate) enum Capture {
 }
 
 pub(crate) async fn run(args: RunArgs) -> Result<()> {
+    control::Endpoint::resolve()?.refuse_remote("run")?;
     run_with(args, Capture::Nothing).await
 }
 
@@ -178,6 +185,7 @@ fn already_running(now: &Answering) -> String {
 pub(crate) async fn start(args: StartArgs) -> Result<()> {
     use anyhow::Context;
 
+    control::Endpoint::resolve()?.refuse_remote("start")?;
     let socket = control::default_path();
     if let Some(now) = answering().await {
         println!("{}", already_running(&now));
@@ -332,9 +340,24 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
         None => tracing::info!("reasoning effort is whatever the client asks for"),
     }
 
-    let listener = daemon::bind(port).await?;
+    // §1 — the address and the token are one decision, resolved together and
+    // before anything binds: a daemon that reaches past loopback with no token
+    // hands every stored account to whoever can reach the port, and nothing
+    // about a healthy `status` would say so.
+    let listen = config.resolve_listen()?;
+    let listener = daemon::bind_at(listen.address, port).await?;
     let addr = listener.local_addr()?;
-    tracing::info!(%addr, "listening");
+    // The address and whether a token is demanded, never the token itself.
+    tracing::info!(
+        %addr,
+        authenticated = listen.token.is_some(),
+        "listening"
+    );
+    if !listen.is_loopback() {
+        tracing::info!(
+            "bound past loopback; every request must carry the configured token (`api.md` §1)"
+        );
+    }
 
     let tokens = Arc::new(proxenos::auth::grants::Grants::new(
         Arc::clone(&credentials) as Arc<dyn proxenos::auth::store::CredentialStore>,
@@ -472,6 +495,10 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
         sessions: Arc::clone(&sessions),
         config_path: Some(proxenos::config::config_path()),
     };
+    // One state, two transports. Cloned rather than rebuilt: every field is an
+    // `Arc`, so the socket and the HTTP endpoint read and move exactly the same
+    // things and no method can behave differently over one than the other.
+    let http_control_state = control_state.clone();
     let socket_path = control::default_path();
     tokio::spawn(async move {
         if let Err(error) = control::serve(&socket_path, control_state).await {
@@ -565,8 +592,19 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
     // Whichever comes first: the listener stopping on its own, or a stop asked
     // for over the socket. An in-flight turn is cut — a person typing `stop`
     // means it, and the client's own retry handles a dropped connection.
+    // §3 — the same vocabulary the socket carries, over HTTP, so a CLI on
+    // another machine reaches every verb. The socket is unchanged and stays
+    // the local path.
+    let router = proxenos::ingress::serving_router(
+        state,
+        proxenos::ingress::Access {
+            token: listen.token.clone(),
+            control: Some(http_control_state),
+        },
+    );
+
     tokio::select! {
-        result = daemon::serve(listener, state) => result?,
+        result = daemon::serve_router(listener, router) => result?,
         () = shutdown.wait() => tracing::info!("stopping, as asked over the control socket"),
     }
     Ok(())

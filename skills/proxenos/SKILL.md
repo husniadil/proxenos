@@ -95,6 +95,30 @@ proxenos env               # the exports, for a shell you want to configure by h
 `claude-api` skill is disabled for sessions through the proxy; a reviewer that does
 not need it is unaffected.
 
+## A daemon on another machine
+
+If `PROXENOS_DAEMON` is set in the environment, this CLI is a **client** of a
+daemon on another machine and every verb above already goes there. Nothing to do
+differently: `proxenos exec` points the client it starts at that daemon, and
+`proxenos status` prints a `daemon at <url>` line so you can tell.
+
+```sh
+export PROXENOS_DAEMON=https://macbook.tailnet:8787
+export PROXENOS_TOKEN=...        # or PROXENOS_TOKEN_FILE=/path/to/token (0600)
+proxenos status                  # says where the daemon is
+proxenos exec claude --model gpt-5.6-sol --effort high
+```
+
+What is refused in client mode, because it acts on the daemon's own machine:
+`run`, `start`, `accounts login`, `accounts add-key`, `supervisor`. Each says so
+and names the host to run it on. `stop` works and stops the daemon **for
+everyone on that machine** — ask the operator first. `proxenos settings` is
+refused too: the document would carry the token; use `proxenos exec`.
+
+Never pass the token as a command-line argument — there is no flag for it, and
+argv is visible to every process on the machine. `proxenos env` deliberately
+does not print it.
+
 ## Limits
 
 - Effort is a ceiling, not a floor: a turn runs at the lower of `--effort` and the
