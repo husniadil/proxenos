@@ -4,6 +4,18 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- `proxenos tiers` and `proxenos effort` read the two settings a running daemon
+  can be handed, and `tiers set TIER MODEL` / `effort set LEVEL` change them
+  through `tiers.set` and `effort.set` — socket methods the daemon has
+  answered since v0.1 with no verb that reached them. Each sends exactly what
+  was typed: `--account` names an account's own section, `--persist` writes
+  config.toml, and neither is assumed. `effort set none` removes the ceiling.
+  `--json` prints the socket's own payload. A second caller of this project
+  now exists (agamemnon's launcher), and it is a caller of the CLI, which is
+  why the door is a verb and not a socket client.
+
 ## [0.18.2]
 
 - `accounts list --json` and `status.auth.accounts` carry `unreadable` on a

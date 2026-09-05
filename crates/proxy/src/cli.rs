@@ -54,6 +54,19 @@ pub enum Command {
     /// the daemon again belongs to whatever supervises it. What happened is
     /// reported from what was observed afterwards.
     Stop,
+    /// The tier mapping: read it, or point one tier at a model.
+    ///
+    /// The socket has carried `tiers` and `tiers.set` since v0.1, and until
+    /// this verb the only door onto them was the daemon's own front-end.
+    /// Every other program that wants to change a mapping on a running
+    /// daemon is a caller of this CLI, not of the socket, and a method with
+    /// no verb is a method it cannot reach.
+    Tiers(TiersArgs),
+    /// The effort ceiling: read it, or set it.
+    ///
+    /// The pair of `tiers`, for the other setting a running daemon can be
+    /// handed without a restart.
+    Effort(EffortArgs),
     /// Run a command with this proxy's configuration applied.
     ///
     /// Named for what it does rather than what it launches: a launcher that
@@ -74,6 +87,74 @@ pub enum Command {
     /// platform this implements is not the only one it will be asked about, and
     /// a verb named after an implementation cannot grow a second one.
     Supervisor(SupervisorArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct TiersArgs {
+    #[command(subcommand)]
+    pub action: Option<TiersAction>,
+    /// Print the socket's own payload instead of the table.
+    #[arg(long, global = true)]
+    pub json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TiersAction {
+    /// Point one tier at a model. The default is to read the mapping.
+    ///
+    /// One tier per call, because a set is partial: naming one tier changes
+    /// that tier and no other. The model is validated against the catalog of
+    /// the account being changed, and a model that catalog does not carry is
+    /// refused rather than written. A pinned tier — one served as another
+    /// account — needs the operator's consent in config.toml and is not
+    /// spelled here.
+    Set(SetTierArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct SetTierArgs {
+    /// The tier: opus, sonnet, haiku, or fable.
+    pub tier: String,
+    /// The model id the tier resolves to.
+    pub model: String,
+    /// Write that account's own section instead of the shared table. An
+    /// account that is not serving turns takes the write and applies nothing,
+    /// which needs --persist to mean anything.
+    #[arg(long)]
+    pub account: Option<String>,
+    /// Write the change into config.toml as well. Without it the change lasts
+    /// until the daemon stops, and the answer says which it was.
+    #[arg(long)]
+    pub persist: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct EffortArgs {
+    #[command(subcommand)]
+    pub action: Option<EffortAction>,
+    /// Print the socket's own payload instead of the line.
+    #[arg(long, global = true)]
+    pub json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum EffortAction {
+    /// Set the ceiling, or remove it with `none`. The default is to read it.
+    Set(SetEffortArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct SetEffortArgs {
+    /// low, medium, high, or none to remove the ceiling. Under an account,
+    /// none removes that account's override and the shared ceiling applies
+    /// again; the answer reports the ceiling that results.
+    pub level: String,
+    /// Write that account's own section instead of the shared line.
+    #[arg(long)]
+    pub account: Option<String>,
+    /// Write the change into config.toml as well.
+    #[arg(long)]
+    pub persist: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -379,6 +460,66 @@ mod tests {
     fn stop_parses_as_a_verb_of_its_own() {
         let cli = Cli::try_parse_from(["proxenos", "stop"]).unwrap();
         assert!(matches!(cli.command, Command::Stop));
+    }
+
+    /// The mapping is read bare and set with `set TIER MODEL`; `--json` is
+    /// accepted on either side of the sub-verb, since a caller printing the
+    /// payload does not care which verb it is on.
+    #[test]
+    fn tiers_reads_bare_and_sets_one_tier() {
+        let cli = Cli::try_parse_from(["proxenos", "tiers", "--json"]).unwrap();
+        let Command::Tiers(args) = cli.command else {
+            panic!("tiers should parse");
+        };
+        assert!(args.action.is_none());
+        assert!(args.json);
+
+        let cli = Cli::try_parse_from([
+            "proxenos",
+            "tiers",
+            "set",
+            "opus",
+            "gpt-5.6-sol",
+            "--account",
+            "spare",
+            "--persist",
+            "--json",
+        ])
+        .unwrap();
+        let Command::Tiers(args) = cli.command else {
+            panic!("tiers set should parse");
+        };
+        assert!(args.json);
+        let Some(TiersAction::Set(set)) = args.action else {
+            panic!("set should parse");
+        };
+        assert_eq!(
+            (set.tier.as_str(), set.model.as_str()),
+            ("opus", "gpt-5.6-sol")
+        );
+        assert_eq!(set.account.as_deref(), Some("spare"));
+        assert!(set.persist);
+
+        assert!(Cli::try_parse_from(["proxenos", "tiers", "set", "opus"]).is_err());
+    }
+
+    #[test]
+    fn effort_reads_bare_and_sets_a_level() {
+        let cli = Cli::try_parse_from(["proxenos", "effort"]).unwrap();
+        let Command::Effort(args) = cli.command else {
+            panic!("effort should parse");
+        };
+        assert!(args.action.is_none());
+
+        let cli = Cli::try_parse_from(["proxenos", "effort", "set", "none", "--persist"]).unwrap();
+        let Command::Effort(args) = cli.command else {
+            panic!("effort set should parse");
+        };
+        let Some(EffortAction::Set(set)) = args.action else {
+            panic!("set should parse");
+        };
+        assert_eq!(set.level, "none");
+        assert!(set.persist);
     }
 
     /// Backgrounding is a verb, and the flag that used to spell it is gone

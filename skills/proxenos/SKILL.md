@@ -32,7 +32,9 @@ proxenos exec --account work-codex claude --model gpt-5.6-sol --effort high
   `opus`, `sonnet`, `haiku`) which the daemon maps via `[tiers]` in its config.
 - `--effort` is honoured per request, capped by the `effort` ceiling in
   `~/.config/proxenos/config.toml`. If the ceiling is `low`, asking for `high` gets
-  `low`; check `proxenos status` first.
+  `low`; check `proxenos effort` first. `proxenos effort set high` raises it on the
+  running daemon until it stops (`--persist` writes the file), and
+  `proxenos tiers set opus gpt-5.6-sol` repoints one tier the same way.
 
 Non-interactive works the same way: `proxenos exec --account work-codex claude -p
 "..." --model gpt-5.6-sol`.

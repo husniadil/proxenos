@@ -52,6 +52,68 @@ pub fn reloaded_config(result: &Value) -> String {
     lines.join("\n")
 }
 
+/// The mapping as a table, with a tier the catalog cannot honour marked.
+///
+/// The same `TIER MODEL` columns `models` prints in the other direction, so
+/// the two listings read against each other.
+pub fn tiers(result: &Value) -> String {
+    let missing: Vec<&str> = field(result, "missing_tiers")
+        .and_then(Value::as_array)
+        .map(|values| values.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let mut lines = vec!["TIER    MODEL".to_owned()];
+    if let Some(map) = field(result, "tiers").and_then(Value::as_object) {
+        for (tier, model) in map {
+            let model = model.as_str().unwrap_or_default();
+            let mark = if missing.contains(&tier.as_str()) {
+                "  (not in this account's catalog)"
+            } else {
+                ""
+            };
+            lines.push(format!("{tier:<7} {model}{mark}"));
+        }
+    }
+    lines.join("\n")
+}
+
+/// What a set did: the tier's new model, and whether it outlives the daemon.
+pub fn tier_set(tier: &str, result: &Value) -> String {
+    let model = field(result, "tiers")
+        .and_then(|tiers| tiers.get(tier))
+        .and_then(Value::as_str)
+        .unwrap_or("?");
+    format!("{tier} → {model}\n{}", scope(result))
+}
+
+/// The ceiling in force, read from `status`.
+pub fn effort(status: &Value) -> String {
+    match field(status, "effort_ceiling").and_then(Value::as_str) {
+        Some(ceiling) => format!("effort ceiling: {ceiling}"),
+        None => "no effort ceiling; each request's own effort stands".to_owned(),
+    }
+}
+
+/// What an `effort set` did: the ceiling that results, which is not always
+/// the one asked for, and whether it outlives the daemon.
+pub fn effort_set(result: &Value) -> String {
+    let ceiling = match field(result, "effort").and_then(Value::as_str) {
+        Some(ceiling) => format!("effort ceiling: {ceiling}"),
+        None => "no effort ceiling".to_owned(),
+    };
+    format!("{ceiling}\n{}", scope(result))
+}
+
+/// The daemon's own sentence about where a change landed, and for whom.
+fn scope(result: &Value) -> String {
+    let detail = field(result, "detail")
+        .and_then(Value::as_str)
+        .unwrap_or("in effect until the daemon stops");
+    match field(result, "account").and_then(Value::as_str) {
+        Some(account) => format!("for account {account}: {detail}"),
+        None => detail.to_owned(),
+    }
+}
+
 pub fn status(result: &Value) -> String {
     status_at(result, now())
 }

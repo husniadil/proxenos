@@ -140,6 +140,19 @@ proxenos settings   the same configuration, as one settings document
 proxenos exec       run a command with that configuration applied
 proxenos reload     re-read config.toml into the running daemon
 proxenos stop       ask the running daemon to stop
+proxenos tiers      the tier mapping as `TIER MODEL`, a tier the catalog
+                    cannot honour marked (--json prints the `tiers` payload)
+  tiers set        TIER MODEL [--account NAME] [--persist]
+                    point one tier at a model, through `tiers.set` (§3) with
+                    exactly what was typed: no account means the shared
+                    table, no --persist means until the daemon stops, and
+                    the answer says which. One tier per call, because a set
+                    is partial. The pinned form is not spelled here
+proxenos effort     the effort ceiling in force, read from `status`
+  effort set       low|medium|high|none [--account NAME] [--persist]
+                    set the ceiling through `effort.set` (§3); `none` is the
+                    word for null, and the answer reports the ceiling that
+                    results rather than the one asked for
 proxenos doctor     probe backend capabilities (--live answers from the real one)
 proxenos usage      what quota is left (--refresh asks, per account), as a
                     header table: `NAME PROVIDER USED RESETS SOURCE AS OF`,

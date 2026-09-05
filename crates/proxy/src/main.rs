@@ -31,6 +31,8 @@ async fn main() -> Result<()> {
         Command::Settings => commands::launch::print_settings().await,
         Command::Reload => commands::daemon::reload().await,
         Command::Stop => commands::daemon::stop().await,
+        Command::Tiers(args) => commands::policy::tiers(args).await,
+        Command::Effort(args) => commands::policy::effort(args).await,
         Command::Exec(args) => commands::launch::exec(args).await,
         Command::Doctor(args) => commands::doctor::doctor(args).await,
         Command::Usage(args) => commands::inspect::print_usage(args).await,

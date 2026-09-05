@@ -7,6 +7,7 @@ pub(crate) mod daemon;
 pub(crate) mod doctor;
 pub(crate) mod inspect;
 pub(crate) mod launch;
+pub(crate) mod policy;
 pub(crate) mod record;
 pub(crate) mod supervisor;
 
