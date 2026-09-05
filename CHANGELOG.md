@@ -4,6 +4,17 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.23.1]
+
+- **`inspect` on Linux refuses an empty environment rather than reading it as
+  "not through proxenos".** A zombie or a kernel thread hands over a readable
+  `/proc/<pid>/environ` with nothing in it; macOS already treated the same
+  shape as an environment that could not be read (§2.8), and Linux now does
+  too.
+- **`PROXENOS_DAEMON` with a user name or password in it is refused**, naming
+  the two variables a token belongs in. Left alone, it would have ridden into
+  every child's `ANTHROPIC_BASE_URL` and back out of `inspect`.
+
 ## [0.23.0]
 
 - **`proxenos inspect <pid>` says whether a process was started through this

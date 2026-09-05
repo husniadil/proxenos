@@ -140,6 +140,18 @@ impl Endpoint {
         else {
             return Ok(Self::Local(default_path()));
         };
+        // A user name or password in the URL would ride into every child's
+        // `ANTHROPIC_BASE_URL` and back out of `inspect`; the token has two
+        // variables of its own, and a URL is not one of them.
+        let parsed = url::Url::parse(&url).map_err(|error| {
+            ProxyError::invalid_request(format!("{DAEMON_URL_VAR} is not a URL: {error}"))
+        })?;
+        if !parsed.username().is_empty() || parsed.password().is_some() {
+            return Err(ProxyError::invalid_request(format!(
+                "{DAEMON_URL_VAR} carries a user name or password; a token goes in \
+                 {TOKEN_VAR} or {TOKEN_FILE_VAR}, never in the URL"
+            )));
+        }
         Ok(Self::Remote {
             url: url.trim_end_matches('/').to_owned(),
             token: token_from_environment()?,

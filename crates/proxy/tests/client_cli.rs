@@ -513,6 +513,28 @@ fn stop_is_allowed_in_client_mode() {
     );
 }
 
+/// A URL with a user name or password in it is refused before anything is
+/// dialed: it would ride into a child's base URL and out of `inspect`.
+#[test]
+fn a_daemon_url_carrying_credentials_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let output = run(
+        dir.path(),
+        Some("http://me:s3cret@127.0.0.1:1"),
+        &["status"],
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("user name or password"), "{stderr}");
+    assert!(stderr.contains("PROXENOS_TOKEN"), "{stderr}");
+    assert!(
+        !stderr.contains("s3cret"),
+        "the refusal must not echo it: {stderr}"
+    );
+}
+
 /// A daemon that does not answer is one sentence naming the address, not a
 /// connection error from somewhere inside reqwest.
 #[test]

@@ -44,11 +44,17 @@ fn environment_of(pid: u32) -> Result<String> {
     if !directory.exists() {
         anyhow::bail!("no process {pid} is running");
     }
-    std::fs::read(directory.join("environ"))
+    let text = std::fs::read(directory.join("environ"))
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .map_err(|error| {
             anyhow::anyhow!("the environment of process {pid} could not be read: {error}")
-        })
+        })?;
+    // Readable and empty is what a zombie or a kernel thread hands over: an
+    // environment that could not be read, not one that says nothing (§2.8).
+    if !proxenos::process::carries_environment(&text) {
+        anyhow::bail!("the environment of process {pid} could not be read: it is empty");
+    }
+    Ok(text)
 }
 
 /// The same, where the environment is only readable through `ps`.
