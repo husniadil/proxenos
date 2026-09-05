@@ -432,6 +432,23 @@ pub fn auth_token_value(token: Option<&str>, account: Option<&str>) -> String {
     parts.join(" ")
 }
 
+/// The mapping a request's model names: a tier by its name, else the id a
+/// tier resolves to.
+///
+/// A client is handed the routing table's ids at launch (`/v1/models`), and
+/// a newer client resolves a tier name to that id before sending, so the body
+/// carries `gpt-…` where it once carried `sonnet`. The tier that owns the id
+/// still decides who pays: without this, a pinned tier's id on a daemon whose
+/// serving account relays was relayed as the serving account, to a provider
+/// that had never heard of it. Two tiers of the first provider sharing an id
+/// is ordinary; the first decides, as it always has for the translating path.
+fn mapping_for<'a>(mappings: &'a [ModelMapping], model: &str) -> Option<&'a ModelMapping> {
+    mappings
+        .iter()
+        .find(|mapping| mapping.requested == model)
+        .or_else(|| mappings.iter().find(|mapping| mapping.upstream == model))
+}
+
 /// The tags one request carried.
 fn tags_of(headers: &axum::http::HeaderMap) -> Tags {
     headers
@@ -512,10 +529,7 @@ async fn messages(
             match claimed {
                 Some(account) => Some(account),
                 None => {
-                    let pinned = policy
-                        .models()
-                        .iter()
-                        .find(|mapping| mapping.requested == routed.model)
+                    let pinned = mapping_for(policy.models(), &routed.model)
                         .and_then(|mapping| mapping.account.clone());
                     match relay.relaying_account(pinned.as_deref()) {
                         Ok(name) => name,
@@ -612,10 +626,7 @@ async fn messages(
         }
     };
 
-    let routed = policy
-        .models()
-        .iter()
-        .find(|mapping| mapping.requested == request.model);
+    let routed = mapping_for(policy.models(), &request.model);
 
     // §7.1 — a tier the catalog cannot serve is refused here, one turn at a
     // time, rather than at the daemon's start. Starting is what the other

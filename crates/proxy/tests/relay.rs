@@ -745,6 +745,49 @@ async fn a_pinned_first_provider_tier_still_translates_while_the_relay_account_s
     assert!(seen.lock().unwrap().bodies.is_empty());
 }
 
+/// The same pin, asked for by the id the tier resolves to rather than by the
+/// tier's name.
+///
+/// A client is handed the routing table's ids at launch (`/v1/models`), and a
+/// newer client resolves `opus` to that id before sending. The tier that owns
+/// the id still decides who pays: before this, the id fell through to the
+/// serving account and was relayed to a provider that had never heard of it.
+#[tokio::test]
+async fn a_pinned_tier_asked_for_by_its_id_still_translates_as_the_pin() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(FileStore::new(dir.path().join("credentials.json")));
+    store
+        .add(
+            &grant("serving-token", "serving-refresh", "acct_serving"),
+            Some("codex"),
+        )
+        .unwrap();
+    store
+        .add_key("relay", "relay-key-value", Provider::Anthropic)
+        .unwrap();
+    store.select("relay").unwrap();
+
+    let (base, seen) = daemon(
+        Arc::clone(&store),
+        vec![
+            tier("sonnet", "claude-sonnet-5", None),
+            tier("opus", "gpt-5.6-terra", Some("codex")),
+        ],
+        false,
+    )
+    .await;
+
+    // Named by id: still the pinned tier's turn, on the translating path,
+    // whose transport points nowhere. The relay saw nothing.
+    let response = turn(
+        &base,
+        "{\"max_tokens\":64,\"model\":\"gpt-5.6-terra\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":true}",
+    )
+    .await;
+    assert_ne!(response.status(), 200);
+    assert!(seen.lock().unwrap().bodies.is_empty());
+}
+
 /// §9.1 — a catalog is one provider's menu, so a relay-bound tier is not
 /// measured against it.
 ///
