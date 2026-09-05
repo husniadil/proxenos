@@ -156,6 +156,14 @@ port = 8787
 # A tier may also pin an account: `haiku = { account = "spare", model = "..." }`
 # serves that tier's turns as `spare` whatever account serves the rest. Gated by
 # `cross_account_tiers` above.
+#
+# A tier may state the effort the client starts its model at:
+# `opus = { model = "...", effort = "high" }`. It reaches the client in the
+# launch settings as that model's own effort (`proxenos settings` shows it), so
+# a session that names no effort runs opus at high and, say, sonnet at low. A
+# session's `--effort` outranks it, and the ceiling above still caps what
+# arrives. Two tiers on one model must agree on its effort. Both keys may sit in
+# one table: `haiku = { account = "spare", model = "...", effort = "low" }`.
 [tiers]
 opus   = "gpt-5.6-terra"
 sonnet = "gpt-5.6-luna"
@@ -1019,39 +1027,57 @@ impl Default for Config {
     }
 }
 
-/// One tier's value: a model id, or a model id pinned to another account.
+/// One tier's value: a model id, or a table naming the model with what goes
+/// with it.
 ///
 /// The bare string is the form every configuration has always used and keeps
-/// its meaning — the serving account. The table form is the cross-account one,
-/// gated by `cross_account_tiers`.
+/// its meaning — the serving account, at whatever effort the client asks. The
+/// table form adds an account the tier is pinned to (the cross-account form,
+/// gated by `cross_account_tiers`), an effort the client starts the model at,
+/// or both.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum TierValue {
     Model(String),
-    Pinned(PinnedTier),
+    Table(TierTable),
 }
 
-/// `{ account = "...", model = "..." }` — this tier's turns are served as that
-/// account, whatever account serves the rest of the session.
+/// `{ model = "...", account = "...", effort = "..." }`, the last two optional.
+///
+/// `account` pins the tier: its turns are served as that account, whatever
+/// account serves the rest of the session. `effort` is the level the client
+/// starts this tier's model at, delivered in the launch settings (§2.2) as the
+/// client's own per-model effort — a session's `--effort` still outranks it,
+/// and the ceiling still caps what arrives.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct PinnedTier {
-    pub account: String,
+pub struct TierTable {
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 impl TierValue {
     fn model(&self) -> &str {
         match self {
             Self::Model(model) => model,
-            Self::Pinned(pinned) => &pinned.model,
+            Self::Table(table) => &table.model,
         }
     }
 
     fn account(&self) -> Option<&str> {
         match self {
             Self::Model(_) => None,
-            Self::Pinned(pinned) => Some(&pinned.account),
+            Self::Table(table) => table.account.as_deref(),
+        }
+    }
+
+    fn effort(&self) -> Option<&str> {
+        match self {
+            Self::Model(_) => None,
+            Self::Table(table) => table.effort.as_deref(),
         }
     }
 }
@@ -1371,6 +1397,64 @@ pub struct ResolvedTier {
     /// whole point: one retired model marks one tier, and the other three keep
     /// serving.
     pub missing: Option<String>,
+    /// The effort the client starts this tier's model at, where the entry
+    /// states one: a recognized level, checked at resolution. Delivered in
+    /// the launch settings; never applied to a request here, where the
+    /// ceiling is the only thing that touches effort.
+    pub effort: Option<String>,
+}
+
+/// §2.2 — the per-model effort the client starts each tier's model at, as the
+/// client's own `modelSettings` document.
+///
+/// Keyed by the id the client sends, which is the tier's upstream model: the
+/// environment names it as the tier's default, and the client resolves the
+/// alias before it looks the effort up. `None` where no tier states one, so
+/// an empty policy adds no key to the document. Delivered beside the client
+/// policy, never written to a file this proxy does not own.
+pub fn model_settings(tiers: &[ResolvedTier]) -> Option<serde_json::Value> {
+    let mut map = serde_json::Map::new();
+    for tier in tiers {
+        if let Some(effort) = &tier.effort {
+            map.insert(
+                tier.model.clone(),
+                serde_json::json!({ "effortLevel": effort }),
+            );
+        }
+    }
+    if map.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(map))
+    }
+}
+
+/// Two tiers on one model must agree on its effort, or state none.
+///
+/// The client keys effort by model, not by tier, so `opus` at `high` and
+/// `fable` at `medium` on the same id would deliver one of the two and keep
+/// quiet about it. Refused by name instead, here and at `tiers.set`.
+pub fn check_effort_conflicts(tiers: &[ResolvedTier]) -> Result<(), ProxyError> {
+    for (index, tier) in tiers.iter().enumerate() {
+        let Some(effort) = &tier.effort else {
+            continue;
+        };
+        if let Some(other) = tiers.iter().take(index).find(|other| {
+            other.model == tier.model && other.effort.as_ref().is_some_and(|e| e != effort)
+        }) {
+            return Err(ProxyError::invalid_request(format!(
+                "tiers `{}` and `{}` both map to `{}` with different efforts ({} and {}). \
+                 The client keeps one effort per model, so give them the same one, or \
+                 state it on one tier only.",
+                other.tier,
+                tier.tier,
+                tier.model,
+                other.effort.as_deref().unwrap_or_default(),
+                effort
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// What each tier maps to when the configuration says nothing.
@@ -1494,6 +1578,9 @@ impl Tiers {
                         || value
                             .account()
                             .is_some_and(|account| account.trim().is_empty())
+                        || value
+                            .effort()
+                            .is_some_and(|effort| effort.trim().is_empty())
                 })
             })
             .map(|(tier, _)| *tier)
@@ -1525,11 +1612,26 @@ impl Tiers {
             )));
         }
 
+        // An effort is checked where it is read, naming the tier: written
+        // `effort = "cheap"`, the operator meant something, and a daemon that
+        // started anyway would deliver nothing and say nothing.
+        for (tier, value) in &entries {
+            if let Some(effort) = value.as_ref().and_then(|value| value.effort()) {
+                parse_effort(effort).map_err(|error| {
+                    ProxyError::invalid_request(format!("tier `{tier}`: {}", error.message))
+                })?;
+            }
+        }
+
         let resolved: Vec<ResolvedTier> = entries
             .iter()
             .map(|(tier, value)| ResolvedTier {
                 tier,
                 defaulted: value.is_none(),
+                effort: value
+                    .as_ref()
+                    .and_then(|value| value.effort())
+                    .map(str::to_owned),
                 // Nothing has met a catalog yet. Marking is what the catalog
                 // does to a resolved mapping, not something resolution knows.
                 missing: None,
@@ -1548,6 +1650,8 @@ impl Tiers {
                 ),
             })
             .collect();
+
+        check_effort_conflicts(&resolved)?;
 
         // §7.2 — a `[1m]` marker makes the client believe it has roughly four
         // times the headroom it has, and auto-compaction would never fire

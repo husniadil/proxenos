@@ -4,6 +4,23 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.24.0]
+
+- **A tier may state the effort the client starts its model at.** `opus =
+  { model = "…", effort = "high" }` in `[tiers]` (or an account's own table),
+  `proxenos tiers set opus … --effort high`, or `{"model": …, "effort": …}`
+  over `tiers.set`. It reaches the client in the launch settings (§2.2) as
+  that model's own effort — `modelSettings.<id>.effortLevel`, keyed by the
+  upstream id the client names once the environment has resolved the tier —
+  so a session that names no effort runs, say, opus at high and sonnet at
+  low. Measured against Claude Code 2.1.259: the client honours the key for a
+  second-provider id, a session's `--effort` still outranks it, and the
+  daemon's ceiling still caps what arrives. An unrecognized level is refused
+  naming the tier, at startup and at `tiers.set`; two tiers on one model must
+  agree on its effort, because the client keeps one per model. `tiers` and
+  `status` report the effort in the table form; the bare string keeps its
+  meaning. `PinnedTier` is now `TierTable`, whose `account` is optional.
+
 ## [0.23.3]
 
 - **A named usage window survives a snapshot from the other source.** The

@@ -684,6 +684,7 @@ fn run_environment(probe: &probe::Probe) -> Outcome {
             "gpt-5.6-terra",
         ])
         .map(|(tier, model)| crate::config::ResolvedTier {
+            effort: None,
             tier,
             model: model.to_owned(),
             account: None,

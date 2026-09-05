@@ -123,12 +123,19 @@ pub async fn dispatch(
             let named = named_account(params, &accounts)?;
             let tiers = launch_mapping(state, &accounts, named.as_deref())?;
             let serving = named.or_else(|| serving_name_of(&accounts));
+            let mut settings = state.config.client.settings(any_tier_translates(
+                &tiers,
+                &accounts,
+                serving.as_deref(),
+            ));
+            // §2.2 — each tier's own effort, keyed by the model the client
+            // will name; no key where no tier states one.
+            if let Some(per_model) = crate::config::model_settings(&tiers) {
+                settings.insert("modelSettings".to_owned(), per_model);
+            }
             Ok(json!({
                 "variables": environment(state, &accounts, &tiers, serving.as_deref()),
-                "settings": state
-                    .config
-                    .client
-                    .settings(any_tier_translates(&tiers, &accounts, serving.as_deref())),
+                "settings": settings,
             }))
         }
         "usage" => Ok(usage(state)),
@@ -565,10 +572,20 @@ fn tier_map(state: &ControlState) -> Value {
     let mut map = serde_json::Map::new();
     for tier in state.policy.get().tiers().iter() {
         // The same two shapes the configuration takes: a string for the
-        // serving account, an object where the tier pins another one.
-        let value = match &tier.account {
-            Some(account) => json!({ "account": account, "model": tier.model }),
-            None => Value::from(tier.model.clone()),
+        // serving account at the client's own effort, an object where the
+        // tier pins another account or states an effort.
+        let value = if tier.account.is_none() && tier.effort.is_none() {
+            Value::from(tier.model.clone())
+        } else {
+            let mut table = serde_json::Map::new();
+            if let Some(account) = &tier.account {
+                table.insert("account".to_owned(), Value::from(account.clone()));
+            }
+            table.insert("model".to_owned(), Value::from(tier.model.clone()));
+            if let Some(effort) = &tier.effort {
+                table.insert("effort".to_owned(), Value::from(effort.clone()));
+            }
+            Value::Object(table)
         };
         map.insert(tier.tier.to_owned(), value);
     }
@@ -1068,39 +1085,54 @@ fn set_tiers(state: &ControlState, params: Option<&Value>) -> Result<Value, Prox
     let mut tiers = snapshot.tiers().to_vec();
 
     // Each value in the same two forms the configuration file takes: a model
-    // id, or `{ account, model }` pinning the tier to another account.
-    let mut changes: Vec<(&String, String, Option<String>)> = Vec::new();
+    // id, or `{ model, account?, effort? }` — the account the tier is pinned
+    // to, the effort the client starts its model at.
+    let mut changes: Vec<(&String, String, Option<String>, Option<String>)> = Vec::new();
     for (name, value) in requested {
-        let (model, pin) = match value {
-            Value::String(model) => (model.clone(), None),
-            Value::Object(pinned) => {
-                let field = |field: &str| {
-                    pinned.get(field).and_then(Value::as_str).ok_or_else(|| {
-                        ProxyError::invalid_request(format!(
-                            "a pinned tier is {{\"account\": …, \"model\": …}}; \
-                             `{name}` is missing `{field}`"
-                        ))
-                    })
+        let (model, pin, effort) = match value {
+            Value::String(model) => (model.clone(), None, None),
+            Value::Object(table) => {
+                let field = |field: &str| -> Result<Option<String>, ProxyError> {
+                    match table.get(field) {
+                        None => Ok(None),
+                        Some(Value::String(value)) => Ok(Some(value.clone())),
+                        Some(_) => Err(ProxyError::invalid_request(format!(
+                            "`{field}` for `{name}` must be a string"
+                        ))),
+                    }
                 };
-                (
-                    field("model")?.to_owned(),
-                    Some(field("account")?.to_owned()),
-                )
+                let model = field("model")?.ok_or_else(|| {
+                    ProxyError::invalid_request(format!(
+                        "a tier table is {{\"model\": …}} with an optional \"account\" and \
+                         \"effort\"; `{name}` is missing `model`"
+                    ))
+                })?;
+                (model, field("account")?, field("effort")?)
             }
             _ => {
                 return Err(ProxyError::invalid_request(format!(
                     "the value for `{name}` must be a model id, or \
-                     {{\"account\": …, \"model\": …}}"
+                     {{\"model\": …, \"account\": …, \"effort\": …}}"
                 )));
             }
         };
 
         // A blank is a mistake rather than a preference — the same rule the
         // configuration applies, for the same reason.
-        if model.trim().is_empty() || pin.as_deref().is_some_and(|pin| pin.trim().is_empty()) {
+        if model.trim().is_empty()
+            || pin.as_deref().is_some_and(|pin| pin.trim().is_empty())
+            || effort
+                .as_deref()
+                .is_some_and(|effort| effort.trim().is_empty())
+        {
             return Err(ProxyError::invalid_request(format!(
                 "the model for `{name}` is blank; a tier cannot be unset, only pointed elsewhere"
             )));
+        }
+        if let Some(effort) = &effort {
+            crate::config::parse_effort(effort).map_err(|error| {
+                ProxyError::invalid_request(format!("tier `{name}`: {}", error.message))
+            })?;
         }
 
         // The write-time half of the consent gate. The startup half refuses
@@ -1129,11 +1161,13 @@ fn set_tiers(state: &ControlState, params: Option<&Value>) -> Result<Value, Prox
 
         entry.model = model.clone();
         entry.account = pin.clone();
+        entry.effort = effort.clone();
         // Set by the operator, so the catalog may never overrule it — the same
         // meaning `defaulted` carries when the mapping comes from the file.
         entry.defaulted = false;
-        changes.push((name, model, pin));
+        changes.push((name, model, pin, effort));
     }
+    crate::config::check_effort_conflicts(&tiers)?;
 
     let (target, applies_now) = write_target(state, params)?;
 
@@ -1181,7 +1215,7 @@ fn set_tiers(state: &ControlState, params: Option<&Value>) -> Result<Value, Prox
     let persisted = if persist {
         write_config(state, |document| {
             let mut document = document.to_owned();
-            for (name, model, pin) in &changes {
+            for (name, model, pin, effort) in &changes {
                 // Written where the value is read from. An account section
                 // shadows the shared table for the tiers it names (§4), so a
                 // change written to the shared one would be in force on this
@@ -1196,6 +1230,7 @@ fn set_tiers(state: &ControlState, params: Option<&Value>) -> Result<Value, Prox
                     name,
                     model,
                     pin.as_deref(),
+                    effort.as_deref(),
                 )?;
             }
             Ok(document)

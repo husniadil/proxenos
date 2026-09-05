@@ -970,3 +970,92 @@ fn the_example_mentions_every_key_the_parser_accepts() {
         );
     }
 }
+
+/// A tier may state the effort the client starts its model at:
+/// `opus = { model = "...", effort = "high" }` — the table form without an
+/// account, which needs no consent. The level is checked at resolution and
+/// carried on the tier, and §2.8 turns the mapping into the client's own
+/// per-model document, keyed by the model the client will name.
+#[test]
+fn a_tier_states_an_effort_in_table_form() {
+    let config: Config = toml::from_str(
+        r#"
+        [tiers]
+        opus   = { model = "gpt-5.6-terra", effort = "high" }
+        sonnet = "gpt-5.6-terra"
+        haiku  = "gpt-5.4-mini"
+        fable  = "gpt-5.4-mini"
+        "#,
+    )
+    .expect("the table form parses without an account");
+
+    let resolved = config
+        .tiers
+        .resolve(proxenos::config::CrossAccountTiers::Refused)
+        .expect("an effort needs no consent");
+
+    let opus = resolved.iter().find(|tier| tier.tier == "opus").unwrap();
+    assert_eq!(opus.effort.as_deref(), Some("high"));
+    assert_eq!(opus.account, None);
+    assert_eq!(
+        proxenos::config::model_settings(&resolved),
+        Some(serde_json::json!({ "gpt-5.6-terra": { "effortLevel": "high" } }))
+    );
+    let bare = Tiers {
+        opus: Some("gpt-5.6-terra".into()),
+        ..config.tiers
+    }
+    .resolve(proxenos::config::CrossAccountTiers::Refused)
+    .unwrap();
+    assert_eq!(proxenos::config::model_settings(&bare), None);
+}
+
+/// `effort = "cheap"` meant something; a daemon that started anyway would
+/// deliver nothing and say nothing. Refused naming the tier and the levels.
+#[test]
+fn an_unrecognized_effort_is_refused_naming_the_tier() {
+    let config: Config = toml::from_str(
+        r#"
+        [tiers]
+        sonnet = { model = "gpt-5.6-terra", effort = "cheap" }
+        "#,
+    )
+    .unwrap();
+
+    let error = config
+        .tiers
+        .resolve(proxenos::config::CrossAccountTiers::Refused)
+        .expect_err("an unrecognized effort should fail");
+    assert!(error.message.contains("sonnet"), "{}", error.message);
+    assert!(error.message.contains("cheap"), "{}", error.message);
+    assert!(error.message.contains("xhigh"), "{}", error.message);
+}
+
+/// The client keeps one effort per model. Two tiers on one model that disagree
+/// would deliver one of the two and keep quiet, so they are refused by name;
+/// two that agree, or one that states nothing, are fine.
+#[test]
+fn two_tiers_on_one_model_must_agree_on_its_effort() {
+    let parse = |document: &str| toml::from_str::<Config>(document).unwrap().tiers;
+    let error = parse(
+        r#"
+        [tiers]
+        opus  = { model = "gpt-5.6-terra", effort = "high" }
+        fable = { model = "gpt-5.6-terra", effort = "medium" }
+        "#,
+    )
+    .resolve(proxenos::config::CrossAccountTiers::Refused)
+    .expect_err("two efforts on one model should fail");
+    assert!(error.message.contains("opus"), "{}", error.message);
+    assert!(error.message.contains("fable"), "{}", error.message);
+
+    parse(
+        r#"
+        [tiers]
+        opus  = { model = "gpt-5.6-terra", effort = "high" }
+        fable = "gpt-5.6-terra"
+        "#,
+    )
+    .resolve(proxenos::config::CrossAccountTiers::Refused)
+    .expect("one stated effort on a shared model is fine");
+}

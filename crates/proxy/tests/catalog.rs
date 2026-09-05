@@ -478,6 +478,7 @@ use proxenos::config::ResolvedTier;
 
 fn tier(name: &'static str, model: &str, defaulted: bool) -> ResolvedTier {
     ResolvedTier {
+        effort: None,
         tier: name,
         model: model.to_owned(),
         defaulted,

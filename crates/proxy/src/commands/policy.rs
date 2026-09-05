@@ -57,10 +57,20 @@ pub(crate) async fn tiers(args: cli::TiersArgs) -> Result<()> {
         consented = Some(answer);
     }
 
-    // The same two shapes the file takes: a model id, or the pinned table.
-    let value = match &set.as_account {
-        Some(account) => json!({ "account": account, "model": set.model }),
-        None => Value::String(set.model.clone()),
+    // The same two shapes the file takes: a model id, or the table with what
+    // goes with it.
+    let value = if set.as_account.is_none() && set.effort.is_none() {
+        Value::String(set.model.clone())
+    } else {
+        let mut table = serde_json::Map::new();
+        if let Some(account) = &set.as_account {
+            table.insert("account".to_owned(), json!(account));
+        }
+        table.insert("model".to_owned(), json!(set.model));
+        if let Some(effort) = &set.effort {
+            table.insert("effort".to_owned(), json!(effort));
+        }
+        Value::Object(table)
     };
     let params = with_scope(
         json!({ "tiers": { set.tier.clone(): value } }),

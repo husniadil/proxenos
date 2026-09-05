@@ -162,6 +162,13 @@ pub struct SetTierArgs {
     /// naming this flag.
     #[arg(long, requires = "as_account")]
     pub allow_cross_account: bool,
+    /// The effort the client starts this tier's model at: none, minimal, low,
+    /// medium, high, xhigh or max. Delivered in the launch settings as that
+    /// model's own effort; a session's --effort outranks it and the ceiling
+    /// still caps it. Omitted, the tier carries none — a set replaces the
+    /// tier's whole value.
+    #[arg(long, value_name = "LEVEL")]
+    pub effort: Option<String>,
     /// Write the change into config.toml as well. Without it the change lasts
     /// until the daemon stops, and the answer says which it was.
     #[arg(long)]
@@ -574,6 +581,27 @@ mod tests {
         };
         assert_eq!(set.as_account.as_deref(), Some("spare"));
         assert!(set.allow_cross_account);
+        assert!(set.effort.is_none());
+
+        let cli = Cli::try_parse_from([
+            "proxenos",
+            "tiers",
+            "set",
+            "opus",
+            "claude-opus-4-8",
+            "--effort",
+            "high",
+        ])
+        .unwrap();
+        let Command::Tiers(TiersArgs {
+            action: Some(TiersAction::Set(set)),
+            ..
+        }) = cli.command
+        else {
+            panic!("tiers set should parse");
+        };
+        assert_eq!(set.effort.as_deref(), Some("high"));
+        assert!(!set.allow_cross_account);
 
         assert!(
             Cli::try_parse_from([

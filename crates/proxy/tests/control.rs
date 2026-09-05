@@ -38,6 +38,7 @@ fn id_token(claims: Value) -> String {
 fn tiers() -> Vec<ResolvedTier> {
     vec![
         ResolvedTier {
+            effort: None,
             defaulted: false,
             missing: None,
             account: None,
@@ -45,6 +46,7 @@ fn tiers() -> Vec<ResolvedTier> {
             model: "gpt-5.6-terra".to_owned(),
         },
         ResolvedTier {
+            effort: None,
             defaulted: false,
             missing: None,
             account: None,
@@ -52,6 +54,7 @@ fn tiers() -> Vec<ResolvedTier> {
             model: "gpt-5.6-terra".to_owned(),
         },
         ResolvedTier {
+            effort: None,
             defaulted: false,
             missing: None,
             account: None,
@@ -59,6 +62,7 @@ fn tiers() -> Vec<ResolvedTier> {
             model: "gpt-5.4-mini".to_owned(),
         },
         ResolvedTier {
+            effort: None,
             defaulted: false,
             missing: None,
             account: None,
@@ -354,6 +358,7 @@ impl Harness {
         let tiers: Vec<ResolvedTier> = ["opus", "sonnet", "haiku", "fable"]
             .into_iter()
             .map(|tier| ResolvedTier {
+                effort: None,
                 defaulted: false,
                 missing: None,
                 account: None,
@@ -4208,6 +4213,7 @@ async fn an_all_relay_mapping_states_no_window_and_no_long_context_flag() {
         ["opus", "sonnet", "haiku", "fable"]
             .into_iter()
             .map(|tier| ResolvedTier {
+                effort: None,
                 defaulted: false,
                 missing: None,
                 account: None,
@@ -4287,6 +4293,7 @@ sonnet = "claude-sonnet-5"
     ]
     .into_iter()
     .map(|(tier, model)| ResolvedTier {
+        effort: None,
         defaulted: false,
         missing: None,
         account: None,
@@ -4346,6 +4353,7 @@ fn a_first_provider_mapping() -> Vec<ResolvedTier> {
     ]
     .into_iter()
     .map(|(tier, model)| ResolvedTier {
+        effort: None,
         defaulted: false,
         missing: None,
         account: None,
@@ -4702,6 +4710,7 @@ async fn a_mixed_mapping_states_no_window_and_keeps_the_long_context_flag() {
         &dir,
         vec![
             ResolvedTier {
+                effort: None,
                 defaulted: false,
                 missing: None,
                 account: None,
@@ -4709,6 +4718,7 @@ async fn a_mixed_mapping_states_no_window_and_keeps_the_long_context_flag() {
                 model: "gpt-5.6-terra".to_owned(),
             },
             ResolvedTier {
+                effort: None,
                 defaulted: false,
                 missing: None,
                 account: None,
@@ -4716,6 +4726,7 @@ async fn a_mixed_mapping_states_no_window_and_keeps_the_long_context_flag() {
                 model: "gpt-5.6-terra".to_owned(),
             },
             ResolvedTier {
+                effort: None,
                 defaulted: false,
                 missing: None,
                 account: None,
@@ -4723,6 +4734,7 @@ async fn a_mixed_mapping_states_no_window_and_keeps_the_long_context_flag() {
                 model: "gpt-5.4-mini".to_owned(),
             },
             ResolvedTier {
+                effort: None,
                 defaulted: false,
                 missing: None,
                 account: Some("relay".to_owned()),
@@ -4809,10 +4821,11 @@ async fn a_switch_is_not_refused_over_a_pinned_tiers_model() {
         "acct_one".to_owned(),
         proxenos::config::AccountConfig {
             tiers: proxenos::config::Tiers {
-                haiku: Some(proxenos::config::TierValue::Pinned(
-                    proxenos::config::PinnedTier {
-                        account: "acct_two".to_owned(),
+                haiku: Some(proxenos::config::TierValue::Table(
+                    proxenos::config::TierTable {
+                        account: Some("acct_two".to_owned()),
                         model: "a-model-this-catalog-has-not".to_owned(),
+                        effort: None,
                     },
                 )),
                 ..proxenos::config::Tiers::default()
@@ -6592,4 +6605,86 @@ async fn reloading_overrules_a_defaulted_model_the_catalog_lacks() {
             tier.model
         );
     }
+}
+
+/// §2.8 — a tier's effort reaches the client as its own per-model setting,
+/// keyed by the model the client will name, beside the policy the launch
+/// already carries. `tiers` reports it in the table form the file takes, and
+/// setting the bare form again takes the key out of the document.
+#[tokio::test]
+async fn a_tiers_effort_rides_the_launch_settings_as_model_settings() {
+    let harness = Harness::start().await;
+    harness
+        .call_with(
+            "tiers.set",
+            json!({ "tiers": { "opus": { "model": "gpt-5.4-mini", "effort": "high" } } }),
+        )
+        .await
+        .unwrap();
+
+    let tiers = harness.call("tiers").await.unwrap();
+    assert_eq!(
+        tiers["tiers"]["opus"],
+        json!({ "model": "gpt-5.4-mini", "effort": "high" })
+    );
+    let env = harness.call("env").await.unwrap();
+    assert_eq!(
+        env["settings"]["modelSettings"],
+        json!({ "gpt-5.4-mini": { "effortLevel": "high" } })
+    );
+
+    harness
+        .call_with("tiers.set", json!({ "tiers": { "opus": "gpt-5.4-mini" } }))
+        .await
+        .unwrap();
+    let env = harness.call("env").await.unwrap();
+    assert!(
+        env["settings"].get("modelSettings").is_none(),
+        "{}",
+        env["settings"]
+    );
+    assert_eq!(
+        harness.call("tiers").await.unwrap()["tiers"]["opus"],
+        json!("gpt-5.4-mini")
+    );
+}
+
+/// An effort the client would not recognize is refused naming the tier, and
+/// two tiers on one model that disagree are refused naming both — the client
+/// keeps one effort per model, and a silent choice between the two is the
+/// failure this refuses.
+#[tokio::test]
+async fn an_unrecognized_or_conflicting_tier_effort_is_refused_by_name() {
+    let harness = Harness::start().await;
+    let error = harness
+        .call_with(
+            "tiers.set",
+            json!({ "tiers": { "opus": { "model": "gpt-5.4-mini", "effort": "cheap" } } }),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.contains("opus"), "{error}");
+    assert!(error.contains("cheap"), "{error}");
+
+    harness
+        .call_with(
+            "tiers.set",
+            json!({ "tiers": { "opus": { "model": "gpt-5.4-mini", "effort": "high" } } }),
+        )
+        .await
+        .unwrap();
+    let error = harness
+        .call_with(
+            "tiers.set",
+            json!({ "tiers": { "fable": { "model": "gpt-5.4-mini", "effort": "medium" } } }),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.contains("opus"), "{error}");
+    assert!(error.contains("fable"), "{error}");
+    // The refused set moved nothing.
+    assert_eq!(
+        harness.call("tiers").await.unwrap()["tiers"]["fable"],
+        json!("gpt-5.4-mini")
+    );
 }

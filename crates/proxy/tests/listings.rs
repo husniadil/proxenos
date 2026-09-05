@@ -133,6 +133,7 @@ fn state(dir: &std::path::Path) -> (ControlState, Arc<Counting>) {
                 // A real mapping, because an empty one short-circuits the
                 // question the accounts are listed to answer.
                 vec![proxenos::config::ResolvedTier {
+                    effort: None,
                     defaulted: false,
                     missing: None,
                     account: None,

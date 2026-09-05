@@ -66,13 +66,18 @@ pub fn tiers(result: &Value) -> String {
         .map(|map| {
             map.iter()
                 .map(|(tier, value)| {
-                    let (model, pinned) = tier_value(value);
+                    let (model, pinned, effort) = tier_value(value);
                     let state = if missing.contains(&tier.as_str()) {
                         "not in this account's catalog".to_owned()
                     } else {
-                        pinned
-                            .map(|account| format!("as {account}"))
-                            .unwrap_or_default()
+                        let mut parts = Vec::with_capacity(2);
+                        if let Some(account) = pinned {
+                            parts.push(format!("as {account}"));
+                        }
+                        if let Some(effort) = effort {
+                            parts.push(format!("effort {effort}"));
+                        }
+                        parts.join(", ")
                     };
                     (tier.clone(), model, state)
                 })
@@ -110,37 +115,38 @@ pub fn tiers(result: &Value) -> String {
     lines.join("\n")
 }
 
-/// A tier's value in either of the two shapes the file takes: the model, and
-/// the account it is pinned to where it is.
-fn tier_value(value: &Value) -> (String, Option<String>) {
+/// A tier's value in either of the two shapes the file takes: the model, the
+/// account it is pinned to where it is, and the effort it states where it does.
+fn tier_value(value: &Value) -> (String, Option<String>, Option<String>) {
     match (value.as_str(), value.as_object()) {
-        (Some(model), _) => (model.to_owned(), None),
-        (None, Some(pinned)) => (
-            pinned
-                .get("model")
-                .and_then(Value::as_str)
-                .unwrap_or("?")
-                .to_owned(),
-            pinned
-                .get("account")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-        ),
-        _ => ("?".to_owned(), None),
+        (Some(model), _) => (model.to_owned(), None, None),
+        (None, Some(table)) => {
+            let text = |key: &str| table.get(key).and_then(Value::as_str).map(str::to_owned);
+            (
+                text("model").unwrap_or_else(|| "?".to_owned()),
+                text("account"),
+                text("effort"),
+            )
+        }
+        _ => ("?".to_owned(), None, None),
     }
 }
 
 /// What a set did: the tier's new model, the account it is pinned to where
-/// it is, and whether it outlives the daemon.
+/// it is, the effort it states where it does, and whether it outlives the
+/// daemon.
 pub fn tier_set(tier: &str, result: &Value) -> String {
-    let (model, pinned) = field(result, "tiers")
+    let (model, pinned, effort) = field(result, "tiers")
         .and_then(|tiers| tiers.get(tier))
         .map(tier_value)
-        .unwrap_or_else(|| ("?".to_owned(), None));
+        .unwrap_or_else(|| ("?".to_owned(), None, None));
     let pin = pinned
         .map(|account| format!(" as {account}"))
         .unwrap_or_default();
-    format!("{tier} → {model}{pin}\n{}", scope(result))
+    let effort = effort
+        .map(|effort| format!(", effort {effort}"))
+        .unwrap_or_default();
+    format!("{tier} → {model}{pin}{effort}\n{}", scope(result))
 }
 
 /// What granting or revoking consent did.

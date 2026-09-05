@@ -34,7 +34,7 @@ websocket = true
 
 #[test]
 fn setting_a_tier_changes_one_value_and_nothing_else() {
-    let written = edit::set_tier(DOCUMENT, None, "sonnet", "gpt-5.4-mini", None).unwrap();
+    let written = edit::set_tier(DOCUMENT, None, "sonnet", "gpt-5.4-mini", None, None).unwrap();
 
     assert!(written.contains(r#"sonnet = "gpt-5.4-mini""#));
     // Every comment survives, including the one explaining the tier that was
@@ -58,7 +58,7 @@ fn setting_a_tier_changes_one_value_and_nothing_else() {
 /// defaulted.
 #[test]
 fn a_tier_the_file_never_stated_is_added_inside_its_table() {
-    let written = edit::set_tier(DOCUMENT, None, "fable", "gpt-5.6-sol", None).unwrap();
+    let written = edit::set_tier(DOCUMENT, None, "fable", "gpt-5.6-sol", None, None).unwrap();
 
     let tiers = written.find("[tiers]").unwrap();
     let transport = written.find("[transport]").unwrap();
@@ -79,8 +79,15 @@ fn a_tier_the_file_never_stated_is_added_inside_its_table() {
 /// line where one exists, so the file cannot end up with both forms live.
 #[test]
 fn a_pinned_tier_is_written_in_table_form() {
-    let written =
-        edit::set_tier(DOCUMENT, None, "haiku", "claude-haiku-4-5", Some("spare")).unwrap();
+    let written = edit::set_tier(
+        DOCUMENT,
+        None,
+        "haiku",
+        "claude-haiku-4-5",
+        Some("spare"),
+        None,
+    )
+    .unwrap();
 
     let parsed: toml::Value = toml::from_str(&written).unwrap();
     assert_eq!(
@@ -101,7 +108,8 @@ fn a_pinned_tier_is_written_in_table_form() {
 /// A file with no `[tiers]` table at all gains one.
 #[test]
 fn a_file_without_the_table_gains_it() {
-    let written = edit::set_tier("port = 8787\n", None, "opus", "gpt-5.6-terra", None).unwrap();
+    let written =
+        edit::set_tier("port = 8787\n", None, "opus", "gpt-5.6-terra", None, None).unwrap();
 
     assert_eq!(
         toml::from_str::<toml::Value>(&written).unwrap()["tiers"]["opus"].as_str(),
@@ -247,7 +255,7 @@ fn removing_a_ceiling_from_a_file_that_never_had_one_adds_nothing_under_a_table(
 fn a_quoted_account_header_is_the_same_table() {
     let document = "[accounts.\"spare\".tiers]\nopus = \"old\"\n";
 
-    let written = edit::set_tier(document, Some("spare"), "opus", "new", None).unwrap();
+    let written = edit::set_tier(document, Some("spare"), "opus", "new", None, None).unwrap();
 
     let parsed: toml::Value = toml::from_str(&written).unwrap();
     assert_eq!(
@@ -270,4 +278,43 @@ fn a_quoted_account_header_is_the_same_table_for_the_ceiling() {
 
     let parsed: toml::Value = toml::from_str(&written).unwrap();
     assert_eq!(parsed["accounts"]["spare"]["effort"].as_str(), Some("low"));
+}
+
+/// An effort is written in the table form the file reads back, with or
+/// without a pin — account first, as the shipped example writes a pin.
+#[test]
+fn an_effort_is_written_in_table_form() {
+    let written =
+        edit::set_tier(DOCUMENT, None, "opus", "gpt-5.6-terra", None, Some("high")).unwrap();
+    let parsed: toml::Value = toml::from_str(&written).unwrap();
+    assert_eq!(
+        parsed["tiers"]["opus"]["model"].as_str(),
+        Some("gpt-5.6-terra"),
+        "{written}"
+    );
+    assert_eq!(
+        parsed["tiers"]["opus"]["effort"].as_str(),
+        Some("high"),
+        "{written}"
+    );
+    assert!(
+        parsed["tiers"]["opus"].get("account").is_none(),
+        "{written}"
+    );
+
+    let written = edit::set_tier(
+        DOCUMENT,
+        None,
+        "haiku",
+        "claude-haiku-4-5",
+        Some("spare"),
+        Some("low"),
+    )
+    .unwrap();
+    assert!(
+        written.contains(
+            r#"haiku  = { account = "spare", model = "claude-haiku-4-5", effort = "low" }"#
+        ),
+        "{written}"
+    );
 }

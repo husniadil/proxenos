@@ -88,6 +88,7 @@ fn grant(access: &str, refresh: &str, account_id: &str) -> Credentials {
 
 fn tier(name: &'static str, model: &str, account: Option<&str>) -> ResolvedTier {
     ResolvedTier {
+        effort: None,
         defaulted: false,
         missing: None,
         account: account.map(str::to_owned),

@@ -195,7 +195,7 @@ proxenos stop       ask the running daemon to stop
 proxenos tiers      the tier mapping as `TIER MODEL`, a tier the catalog
                     cannot honour marked (--json prints the `tiers` payload)
   tiers set        TIER MODEL [--account NAME] [--persist]
-                   [--as ACCOUNT [--allow-cross-account]]
+                   [--as ACCOUNT [--allow-cross-account]] [--effort LEVEL]
                     point one tier at a model, through `tiers.set` (§3) with
                     exactly what was typed: no account means the shared
                     table, no --persist means until the daemon stops, and
@@ -205,7 +205,11 @@ proxenos tiers      the tier mapping as `TIER MODEL`, a tier the catalog
                     consent and is refused without it, naming the flag;
                     `--allow-cross-account` grants that consent first, in the
                     same breath, through `cross_account_tiers.set` (always
-                    written), and a consent already given is left alone
+                    written), and a consent already given is left alone.
+                    `--effort` states the effort the client starts the
+                    tier's model at, delivered in the launch settings
+                    (§2.2); omitted, the tier carries none, since a set
+                    replaces the tier's whole value
   tiers cross-account on|off
                     grant or revoke consent for pinned tiers; `off` is
                     refused while any tier still pins an account
@@ -832,7 +836,8 @@ they had to learn twice. `env` renders shell exports and nothing else.
   "permissions": { "deny": ["Skill(claude-api)"] },
   "disableClaudeAiConnectors": true,
   "remoteControlAtStartup": false,
-  "attribution": { "commit": "" }
+  "attribution": { "commit": "" },
+  "modelSettings": { "<mapped>": { "effortLevel": "high" } }
 }
 ```
 
@@ -840,9 +845,24 @@ they had to learn twice. `env` renders shell exports and nothing else.
 `ANTHROPIC_*` in its environment, reading only a settings file holding this
 document's `env` block, still reached the proxy. It needs no `eval`.
 
-The `permissions`, `disableClaudeAiConnectors`, `remoteControlAtStartup`, and
-`attribution` keys are absent from the *document* when nothing is configured, rather than present and empty. An empty
-deny list merged over a real one is how a rule disappears.
+The `permissions`, `disableClaudeAiConnectors`, `remoteControlAtStartup`,
+`attribution`, and `modelSettings` keys are absent from the *document* when
+nothing is configured, rather than present and empty. An empty deny list merged
+over a real one is how a rule disappears.
+
+**`modelSettings` is the tier mapping's effort, in the client's own terms.** A
+tier that states an effort (§4: `opus = { model = "…", effort = "high" }`)
+becomes one entry, keyed by the tier's upstream model — the id the client
+names, since the `ANTHROPIC_DEFAULT_<TIER>_MODEL` line above resolves the
+alias before the client looks the effort up — with the effort as that model's
+`effortLevel`. Measured against Claude Code 2.1.259 through a stand-in
+endpoint: the client sends the stated effort for a second-provider id, a
+session started with `--effort` sends that instead, and an id with no entry
+sends the client's default. The daemon's ceiling (§4) still caps what arrives;
+this key only decides what a session that names nothing asks for. Two tiers
+on one model must agree on its effort, since the client keeps one per model,
+and are refused by name where they do not. It is resolved for the same account
+as the rest of the document.
 
 **The payload behind it is the other way round.** The `env` method's `settings`
 field is always present, an empty object when there is no policy, because
@@ -1381,7 +1401,7 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 | `env` | the §2.2 block: `variables`, and `settings` always present. `{"account": name}` answers for a session served as that account rather than as the selection — the mapping, the window, and the client policy all resolved for it, which is what `exec --account` launches with; a name the store does not hold is refused by name | yes — `{"account": name}` added after v0.15.1 |
 | `shutdown` | `{"stopping": true, "version": ...}`, then the process goes once the answer is written | yes |
 | `record.start` / `record.stop` | fixture capture | yes — `{"mode": "ingress"}` by default, `"upstream"` must be named because it bills every turn that follows |
-| `tiers.set` | tier mapping, validated against the catalog and in effect until the daemon stops; `{"account": name}` writes that account's section instead of the shared table. A tier's value takes the same two forms the file does — a model id, or `{"account": …, "model": …}` pinning the tier to another account. The pinned form needs `cross_account_tiers = true` and is refused by name without it, and its model is excluded from catalog validation: the catalog is the serving account's menu and cannot speak for the pinned one | yes |
+| `tiers.set` | tier mapping, validated against the catalog and in effect until the daemon stops; `{"account": name}` writes that account's section instead of the shared table. A tier's value takes the same two forms the file does — a model id, or `{"model": …, "account": …, "effort": …}` with the last two optional: `account` pins the tier to another account, `effort` states the level the client starts the model at (§2.2). The pinned form needs `cross_account_tiers = true` and is refused by name without it, and its model is excluded from catalog validation: the catalog is the serving account's menu and cannot speak for the pinned one. An unrecognized effort is refused naming the tier; two tiers on one model with different efforts are refused naming both | yes |
 | `effort.set` | the effort ceiling, or `null` to remove it; in effect until the daemon stops; `{"account": name}` as for `tiers.set` | yes |
 | `cross_account_tiers.set` | `{"enabled": bool}` — consent for pinned tiers. **Always persisted**, unlike the setters above: consent is the operator changing what the daemon is, and a grant that evaporated at restart would leave the file refusing a mapping the operator permitted. Granting applies to the next call, not the next restart; revoking is refused by name while any tier still pins an account, because the write would produce a file the daemon refuses to start from | yes |
 | `config.reload` | re-reads config.toml into the running daemon and answers `{"reloaded": [...], "needs_restart": [...]}`. It applies `[profiles]`, the tier mapping and the effort ceiling — the mapping through the same checked path a switch takes, except that a tier naming a model the catalog does not carry is **marked rather than refused**, since a reload is the move an operator has left after a daemon came up with one marked — and names what it did not: `instructions`, `client`, `transport`, `upstream`, `port`. Nothing is fetched. A file that does not parse is refused with the parse error and the daemon keeps what it was running on It also carries `serving` — who serves turns afterwards, `null` where the file took the serving profile away — and `remaining`, how many accounts are left, so that case is reported here rather than found out from a refused turn | no — added after v0.12 |
@@ -1970,6 +1990,15 @@ traffic across accounts' quotas, which is a decision the operator owns, so its
 absence refuses the daemon at startup rather than falling back to the serving
 account. Falling back would spend the wrong account's quota invisibly. The
 bare-string form is ungated and keeps the meaning it has always had.
+
+The same table may state the effort the client starts the tier's model at:
+`opus = { model = "…", effort = "high" }`, with or without `account`. It is
+checked at startup — an unrecognized level refuses the daemon naming the tier,
+and two tiers on one model must agree, because the client keeps one effort per
+model — and delivered in the launch settings as that model's own effort (§2.2).
+It is the effort a session asks for when it names none; the ceiling above is
+what caps every request whatever it asked for, and the two compose: a tier at
+`high` under a `medium` ceiling is served at `medium`.
 
 The pin decides which credential authenticates: every upstream request that tier
 produces goes up as the pinned account, and unpinned tiers are unchanged. A pin

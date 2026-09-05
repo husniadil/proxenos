@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 fn tier(name: &'static str, model: &str) -> ResolvedTier {
     ResolvedTier {
+        effort: None,
         defaulted: false,
         missing: None,
         account: None,
@@ -104,6 +105,7 @@ fn a_concurrent_set_never_reverts_the_field_it_did_not_touch() {
 #[test]
 fn the_routing_table_carries_the_pinned_account() {
     let pinned = ResolvedTier {
+        effort: None,
         defaulted: false,
         missing: None,
         account: Some("spare".to_owned()),

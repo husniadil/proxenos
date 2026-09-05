@@ -47,6 +47,7 @@ fn grant(access: &str, refresh: &str, account_id: &str) -> Credentials {
 
 fn tier(name: &'static str, model: &str, account: Option<&str>) -> ResolvedTier {
     ResolvedTier {
+        effort: None,
         defaulted: false,
         missing: None,
         account: account.map(str::to_owned),
@@ -602,6 +603,7 @@ sonnet = "gpt-5.4-mini"
 /// The same tier, marked as the catalog marks one it cannot serve.
 fn missing_tier(name: &'static str, model: &str, reason: &str) -> ResolvedTier {
     ResolvedTier {
+        effort: None,
         missing: Some(reason.to_owned()),
         ..tier(name, model, None)
     }

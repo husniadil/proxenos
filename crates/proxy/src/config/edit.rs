@@ -35,6 +35,7 @@ pub fn set_tier(
     tier: &str,
     model: &str,
     pin: Option<&str>,
+    effort: Option<&str>,
 ) -> Result<String, ProxyError> {
     if !crate::config::TIER_NAMES.contains(&tier) {
         return Err(ProxyError::invalid_request(format!(
@@ -43,9 +44,20 @@ pub fn set_tier(
         )));
     }
 
-    let rendered = match pin {
-        Some(pin) => format!("{{ account = \"{pin}\", model = \"{model}\" }}"),
-        None => format!("\"{model}\""),
+    // The bare string where nothing goes with the model; the table form,
+    // account first as the file's own example writes it, where something does.
+    let rendered = if pin.is_none() && effort.is_none() {
+        format!("\"{model}\"")
+    } else {
+        let mut fields = Vec::with_capacity(3);
+        if let Some(pin) = pin {
+            fields.push(format!("account = \"{pin}\""));
+        }
+        fields.push(format!("model = \"{model}\""));
+        if let Some(effort) = effort {
+            fields.push(format!("effort = \"{effort}\""));
+        }
+        format!("{{ {} }}", fields.join(", "))
     };
 
     let header = match account {
