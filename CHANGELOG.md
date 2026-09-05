@@ -4,6 +4,32 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **A tokened daemon shut its own machine out.** Setting `listen.address` to a
+  reachable address moved the only listener there, so nothing answered on
+  `127.0.0.1` any more — and every local Claude Code session carries
+  `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`, with no token to present even
+  if one had answered. Turning the remote door on cut off every session on the
+  daemon's own machine. Fixed: the daemon now opens **two doors** over one
+  state — `127.0.0.1`, always bound and asking nothing, and the stated address,
+  where every request must carry the token. With `listen.address` at its
+  loopback default there is one door and nothing differs from v0.20.0.
+- The token is a property of the **door**, not of the peer: nothing reads a
+  request's source address to decide whether it needs one. A peer-keyed guard
+  cannot be exercised from one machine, and behind a reverse proxy every
+  request arrives from loopback — where it would exempt everyone. `/control`'s
+  own peer check is gone for the same reason; it answered the wrong question
+  once a tokened daemon had a legitimately open loopback door.
+- `POST /control` is served on both doors, guarded on the remote one, so
+  `proxenos status` keeps working on the daemon's own machine.
+- A wildcard `listen.address` (`0.0.0.0`, `::`) is refused by name: it already
+  covers `127.0.0.1`, so the two doors cannot both be bound, and what happens
+  if you try differs by platform. A token configured beside a loopback
+  `listen.address` guards nothing and is now reported at `WARN` rather than
+  ignored in silence.
+- The `listening` log line names both addresses and which one demands a token.
+
 ## [0.21.0]
 
 - **One daemon, reached from other machines.** A second machine can run only

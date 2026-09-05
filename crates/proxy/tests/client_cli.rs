@@ -341,6 +341,53 @@ fn exec_carries_the_token_beside_the_account_tag() {
     );
 }
 
+/// **Local callers need no token, and a token in the environment does not
+/// make one appear.** The loopback door asks nothing (`api.md` §1), so a local
+/// `exec` is exactly what it was before tokens existed — asserted here rather
+/// than read off the code, because the failure it guards against is a local
+/// session shut out of its own daemon.
+#[test]
+fn a_local_exec_carries_no_token_even_with_one_in_the_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    // Four calls: `env`, `models`, `accounts` for the serving line, and the
+    // socket has to stay up across all of them.
+    let (_asked, server) = local_stand_in(&dir.path().join("proxenos.sock"), 4);
+
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"));
+    let output = command
+        .args(["exec", "/usr/bin/env"])
+        .env("PROXENOS_HOME", dir.path())
+        .env("TMPDIR", dir.path())
+        // Set, and deliberately ignored: without PROXENOS_DAEMON this CLI is
+        // local, and a local daemon's loopback door demands nothing.
+        .env("PROXENOS_TOKEN", TOKEN)
+        .env_remove("PROXENOS_DAEMON")
+        .output()
+        .expect("the binary should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "exec failed: {stdout}");
+    assert!(
+        stdout.contains("ANTHROPIC_BASE_URL=http://127.0.0.1:8787"),
+        "a local launch keeps the daemon's own base URL: {stdout}"
+    );
+    assert!(
+        stdout.contains("ANTHROPIC_AUTH_TOKEN=unused"),
+        "a local launch sends the word the client needs and this daemon ignores: {stdout}"
+    );
+    // Scoped to what this claims. `PROXENOS_TOKEN` is in the child's
+    // environment because the child INHERITS this process's — that is a
+    // variable the operator exported, not something the launcher put there —
+    // so the assertion is that nothing the launcher sets carries it.
+    for line in stdout.lines().filter(|line| line.starts_with("ANTHROPIC_")) {
+        assert!(
+            !line.contains(TOKEN),
+            "a local launch must not put the token in {line}"
+        );
+    }
+    drop(server);
+}
+
 /// `env` prints the remote base URL and never the token: these exports are
 /// what an operator pastes into a shell, and a shell's history.
 #[test]

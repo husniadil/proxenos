@@ -13,13 +13,39 @@ the stability rules in §6 apply to them.
 
 ## 1. Ingress
 
-The daemon binds `127.0.0.1` by default and performs no authentication there:
-every caller reaching the socket is already a local process running as the
-user. **It binds any other address only with a token configured** — `[listen]`
-in §4 — and refuses to start with a non-loopback `listen.address` and no token,
-naming both keys. With a token configured, every request to the ingress and to
-§3's HTTP control endpoint must carry it, or is refused with an
-`authentication_error` (§1.1).
+**Two doors, one daemon.** The daemon always binds `127.0.0.1:<port>` and asks
+nothing of a caller reaching it: every one of them is already a local process
+running as the user. Where `listen.address` (§4) names a reachable address, that
+is opened as a **second** listener over the same state, and **every request
+arriving on it — ingress and §3's HTTP control endpoint alike — must carry the
+token**, or is refused with an `authentication_error` (§1.1). A non-loopback
+`listen.address` with no token refuses to start, naming both keys.
+
+| Door | Address | Asks for the token |
+|---|---|---|
+| loopback | `127.0.0.1:<port>` — always bound | no, ever |
+| remote | `<listen.address>:<port>` — only where one is stated | yes, on every request |
+
+With `listen.address` left at its loopback default there is **one** door, and
+nothing about this daemon differs from a build that had never heard of tokens.
+
+**The token belongs to the door, not to the caller.** Which listener a request
+arrived on is what decides whether it needs one; nothing anywhere reads the
+peer address to decide it. Two reasons, and the second is the one that would
+have bitten:
+
+- A guard keyed on the peer address cannot be tested from one machine, so the
+  posture it implements is the one nobody ever exercises.
+- Behind a reverse proxy or an overlay-network daemon, **every** request
+  arrives from loopback. A peer-keyed exemption would exempt the internet.
+
+**Why the loopback door is unconditional**, rather than moving to the stated
+address: an `exec` launch bakes `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`
+into the client it starts, and a local launch has no token to present (a local
+CLI is not in client mode, so it holds none — §2.7). A daemon that rebound
+itself would cut off every session already running on its own machine the
+moment a token was configured, and each would fail with a 401 it could do
+nothing about.
 
 `ANTHROPIC_AUTH_TOKEN` must be set for Claude Code's own sake, and it is the
 one header the client offers, so **both the token and the launch tag travel in
@@ -77,8 +103,8 @@ system prompt and a large tool set — runs past the extractor's 2 MB default, a
 the backend's own limit is the real one. A 413 from the door is worse than a
 large body: it is not an Anthropic error shape, so the client reads it as
 retryable and loops on it, the turn never reaching the backend. The sender is
-the user's own client on this machine, or — where a token is configured — one
-holding that token.
+the user's own client on this machine, or one that got past the remote door's
+token.
 
 **The token is compared in constant time.** Short-circuiting on the first
 differing byte turns a comparison into an oracle: a caller who can time it
@@ -1211,12 +1237,18 @@ HTTP**. A JSON-RPC-level failure is still a 200 carrying an `error` member,
 which is what the protocol says and what the socket does; the status codes this
 endpoint uses are about reaching it at all.
 
-It is gated by the same token the ingress is (§1) — it carries
-`accounts.remove` and `accounts.select`, so an open one would be worse than an
-open ingress — and where **no** token is configured it serves loopback callers
-only. That second case cannot arise from a reachable network, since a daemon
-with no token binds loopback and nothing else (§4), and the endpoint states the
-rule rather than relying on it: an unknown peer is treated as remote.
+**It is served on both doors, and guarded on the same one the ingress is**
+(§1). On the remote door every request carries the token — this endpoint holds
+`accounts.remove` and `accounts.select`, so an unguarded one on a reachable
+address would be worse than an unguarded ingress. On the loopback door it asks
+nothing, which is what keeps `proxenos status` working on the daemon's own
+machine: a local CLI holds no token and has none to present.
+
+The handler itself reads **nothing** about who is calling. It once checked the
+peer address; with two doors that check answers the wrong question — a tokened
+daemon's loopback door is legitimately open and would have failed it — and the
+right question is settled when the router is built. A peer check left in beside
+a door check is an invitation to reason from the wrong one, so it is gone.
 
 The socket is unchanged and stays the local path. §2.7 is the CLI side.
 
@@ -1589,10 +1621,11 @@ effort = "low"
 [accounts.spare.tiers]
 opus = "..."
 
-# Optional. Where the daemon listens, and the token it demands. The default is
-# loopback with no token, which is the posture this project shipped with.
+# Optional. A second door beside the loopback one, and the token it demands.
+# The default is loopback alone with no token — the posture this project
+# shipped with.
 [listen]
-address    = "0.0.0.0"
+address    = "100.64.0.2"
 token_file = "/Users/me/.config/proxenos/token"
 # token    = "a-long-random-string"
 
@@ -1864,6 +1897,26 @@ binds.** A non-loopback address with no token is refused at startup, naming both
 keys. `port` stays at the top level rather than moving into this table: it
 shipped there, and §6 forbids moving a key.
 
+**`address` names the door to ADD, not the address to move to.** `127.0.0.1` is
+bound whatever this says, and a stated address is a second listener beside it
+(§1). "Bind the tailnet address" therefore means *that address **and**
+loopback*, which is what keeps the daemon's own machine working.
+
+**A wildcard is refused by name.** `0.0.0.0` and `::` already cover
+`127.0.0.1`, so the two doors cannot both be bound — and what happens if you
+try is platform-dependent, which is worse than a refusal. Measured on macOS
+15: with `SO_REUSEADDR` the BSDs let `0.0.0.0:P` and `127.0.0.1:P` both bind
+and hand a loopback connection to the more specific socket, while Linux refuses
+the second bind outright. One of those is an unguarded posture arrived at by
+accident and the other is a daemon that will not start, and neither says which
+it is. Write the address other machines reach this one on.
+
+**A token beside a loopback `address` guards nothing, and the daemon says so**
+at startup, at `WARN`. There is no remote door for it to guard and the loopback
+door asks for nothing, so the key is doing nothing — which is the shape this
+project refuses to leave silent. It is not an error: moving an address back to
+loopback for an afternoon should not mean deleting the token to do it.
+
 ## 5. Limitations
 
 Stated because each is permanent under the current design, not because they are
@@ -2001,12 +2054,20 @@ No telemetry is collected or transmitted. Credentials never appear in process
 arguments or logs. Configuration and credential files are created with
 restrictive permissions.
 
-**Loopback without a token, or beyond it with one.** The daemon binds
-`127.0.0.1` and authenticates nothing by default, which is safe because every
-caller is already a local process running as the user. Binding any other
-address removes that assumption, so it is allowed only with a token configured
-and is refused at startup otherwise (§1, §4). Nothing else changes with the
-token: it decides who may ask, not what is served.
+**Loopback without a token, the stated address with one — two doors, one
+daemon.** `127.0.0.1` is always bound and always authenticates nothing, which
+is safe because every caller reaching it is already a local process running as
+the user. A reachable `listen.address` opens a second listener beside it whose
+every request must carry the token, and a non-loopback address with no token is
+refused at startup (§1, §4). Nothing else changes with the token: it decides
+who may ask, not what is served.
+
+**The token is a property of the door, not of the peer.** Nothing reads a
+request's source address to decide whether it needs one. That is deliberate on
+two counts: a peer-keyed guard cannot be exercised from a single machine, so it
+would be the untested half of the posture; and behind a reverse proxy or an
+overlay-network daemon every request arrives from loopback, where a peer-keyed
+exemption would exempt everyone.
 
 **What the token is and is not.** It gates this daemon. It is not a credential
 for any upstream, it authorizes no spending of its own, and a holder of it can

@@ -95,12 +95,20 @@ move in both, in the same commit as the change that moved it.
    surface as terminal. The proxy does not build a second retry loop on top of
    the client's.
 
-6. **Loopback without a token, or beyond it with one. No telemetry.** The
-   daemon binds `127.0.0.1` and authenticates nothing by default, so every
-   caller is already a local process running as the user. Binding any other
-   address removes that assumption, so it is allowed only with a token
-   configured (`[listen]`, `api.md` §4) and is **refused at startup**
-   otherwise, naming both keys. `ANTHROPIC_AUTH_TOKEN` must be set for Claude
+6. **Two doors, one daemon: loopback without a token, the stated address with
+   one. No telemetry.** `127.0.0.1` is **always** bound and always
+   authenticates nothing, so every caller reaching it is already a local
+   process running as the user — that claim is literally true of this door and
+   is what keeps the daemon's own machine working, since every local session's
+   `ANTHROPIC_BASE_URL` names it and a local launch holds no token. A
+   reachable `listen.address` (`[listen]`, `api.md` §4) opens a **second**
+   listener beside it, over the same state, where every request must carry the
+   token; a non-loopback address with no token is **refused at startup**,
+   naming both keys, and a wildcard is refused because it cannot be split into
+   two doors. **The token belongs to the door, not to the peer** — nothing
+   reads a request's source address to decide, because a peer-keyed guard is
+   untestable from one machine and exempts everyone behind a reverse proxy.
+   `ANTHROPIC_AUTH_TOKEN` must be set for Claude
    Code's sake, and it is the one header the client offers, so it carries both
    things this daemon reads out of it: `proxenos-account:<name>`, the launch
    tag `exec --account` travels as, and `proxenos-token:<secret>`, the token —

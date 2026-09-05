@@ -1,9 +1,18 @@
-//! `docs/api.md` §1 and §3 — the token on the ingress, and the control
-//! vocabulary over HTTP.
+//! `docs/api.md` §1 and §3 — the two doors, and the control vocabulary over
+//! HTTP.
 //!
-//! Both halves are real: a real axum router, a real reqwest client. Nothing
-//! reaches the network, and no turn is ever served — every assertion here is
-//! about who gets past the door.
+//! **The token is a property of the door, not of the peer.** A daemon told to
+//! bind a reachable address opens two listeners over one state: the loopback
+//! door, which asks nothing, and the remote door, which demands the token from
+//! every request. Both are real axum routers here, driven by a real reqwest
+//! client, and — this is the point — **both are bound on 127.0.0.1 in these
+//! tests**. Nothing about which door a request reached is inferred from where
+//! it came from, so both postures are assertable from one machine. A guard
+//! keyed on the peer address could not be tested this way, and would fail
+//! behind a proxy for the same reason.
+//!
+//! Nothing reaches the network, and no turn is ever served — every assertion
+//! here is about who gets past which door.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
@@ -13,6 +22,7 @@ use proxenos::auth::store::FileStore;
 use proxenos::control::handler::ControlState;
 use proxenos::ingress::Access;
 use proxenos::ingress::AppState;
+use proxenos::ingress::Door;
 use proxenos::ingress::ModelMapping;
 use proxenos::ingress::serving_router;
 use proxenos::upstream::http::HttpTransport;
@@ -23,7 +33,12 @@ use std::sync::Arc;
 const TOKEN: &str = "a-long-random-string";
 
 struct Harness {
-    base: String,
+    /// The loopback door: `127.0.0.1:<port>`, asking nothing. Every local
+    /// `proxenos exec` session's `ANTHROPIC_BASE_URL` points here.
+    loopback: String,
+    /// The remote door: the stated address, demanding the token. Bound on
+    /// loopback here so both doors can be asserted from one machine.
+    remote: Option<String>,
     client: reqwest::Client,
     /// The §3 socket, serving the SAME `ControlState` the HTTP endpoint does —
     /// the same `Arc`s, not a second daemon that happens to agree. Parity
@@ -107,40 +122,64 @@ impl Harness {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 
-        let router = serving_router(
-            state,
+        // One state, two doors. The routers are built from the same `Arc`s,
+        // so a change through either reaches the other — anything else would
+        // be two daemons that happen to agree.
+        let loopback = serve(serving_router(
+            state.clone(),
             Access {
-                token: token.map(str::to_owned),
-                control: Some(control),
+                door: Door::Loopback,
+                control: Some(control.clone()),
             },
-        );
+        ))
+        .await;
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            let _ = proxenos::daemon::serve_router(listener, router).await;
-        });
+        let remote = match token {
+            None => None,
+            Some(token) => Some(
+                serve(serving_router(
+                    state,
+                    Access {
+                        door: Door::Remote {
+                            token: token.to_owned(),
+                        },
+                        control: Some(control),
+                    },
+                ))
+                .await,
+            ),
+        };
 
         Self {
-            base: format!("http://{addr}"),
+            loopback,
+            remote,
             client: reqwest::Client::new(),
             socket,
             _dir: dir,
         }
     }
 
-    async fn get(&self, path: &str, auth: Option<&str>) -> reqwest::Response {
-        let mut request = self.client.get(format!("{}{path}", self.base));
+    /// The remote door's base URL. Only a harness given a token has one.
+    fn remote(&self) -> &str {
+        self.remote
+            .as_deref()
+            .expect("this harness was started without a token, so it has no remote door")
+    }
+
+    /// A turn-surface request at a named door.
+    async fn get(&self, base: &str, path: &str, auth: Option<&str>) -> reqwest::Response {
+        let mut request = self.client.get(format!("{base}{path}"));
         if let Some(auth) = auth {
             request = request.bearer_auth(auth);
         }
         request.send().await.expect("the request should arrive")
     }
 
-    async fn control(&self, method: &str, auth: Option<&str>) -> reqwest::Response {
+    /// A control request at a named door.
+    async fn control(&self, base: &str, method: &str, auth: Option<&str>) -> reqwest::Response {
         let mut request = self
             .client
-            .post(format!("{}/control", self.base))
+            .post(format!("{base}/control"))
             .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": method }));
         if let Some(auth) = auth {
             request = request.bearer_auth(auth);
@@ -149,14 +188,24 @@ impl Harness {
     }
 }
 
-/// A configured token is demanded of every turn-surface request, and the
+/// Bind one door on loopback and serve it, returning its base URL.
+async fn serve(router: axum::Router) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = proxenos::daemon::serve_router(listener, router).await;
+    });
+    format!("http://{addr}")
+}
+
+/// The remote door demands the token of every turn-surface request, and the
 /// refusal is an Anthropic error shape — a bare 401 from a middleware is not
 /// something the client's retry logic can act on (§1.1).
 #[tokio::test]
-async fn the_ingress_refuses_a_request_with_no_token() {
+async fn the_remote_door_refuses_a_request_with_no_token() {
     let harness = Harness::start(Some(TOKEN)).await;
 
-    let response = harness.get("/v1/models", None).await;
+    let response = harness.get(harness.remote(), "/v1/models", None).await;
 
     assert_eq!(response.status(), 401);
     let body: Value = response.json().await.unwrap();
@@ -166,24 +215,32 @@ async fn the_ingress_refuses_a_request_with_no_token() {
 
 /// And of a request carrying the wrong one.
 #[tokio::test]
-async fn the_ingress_refuses_the_wrong_token() {
+async fn the_remote_door_refuses_the_wrong_token() {
     let harness = Harness::start(Some(TOKEN)).await;
 
     let response = harness
-        .get("/v1/models", Some("proxenos-token:not-the-secret"))
+        .get(
+            harness.remote(),
+            "/v1/models",
+            Some("proxenos-token:not-the-secret"),
+        )
         .await;
 
     assert_eq!(response.status(), 401);
 }
 
-/// A value that is a bare account tag carries no token, so it is refused too.
-/// The tag is a name and was never a credential.
+/// A value that is a bare account tag carries no token, so the remote door
+/// refuses it too. The tag is a name and was never a credential.
 #[tokio::test]
 async fn an_account_tag_alone_is_not_a_token() {
     let harness = Harness::start(Some(TOKEN)).await;
 
     let response = harness
-        .get("/v1/models", Some("proxenos-account:work"))
+        .get(
+            harness.remote(),
+            "/v1/models",
+            Some("proxenos-account:work"),
+        )
         .await;
 
     assert_eq!(response.status(), 401);
@@ -192,16 +249,22 @@ async fn an_account_tag_alone_is_not_a_token() {
 /// The token gets in, and so does the token beside an account tag — the two
 /// travel in the one header the client offers.
 #[tokio::test]
-async fn the_token_is_accepted_alone_and_beside_an_account_tag() {
+async fn the_remote_door_accepts_the_token_alone_and_beside_an_account_tag() {
     let harness = Harness::start(Some(TOKEN)).await;
+    let remote = harness.remote();
 
     let alone = harness
-        .get("/v1/models", Some(&format!("proxenos-token:{TOKEN}")))
+        .get(
+            remote,
+            "/v1/models",
+            Some(&format!("proxenos-token:{TOKEN}")),
+        )
         .await;
     assert_eq!(alone.status(), 200);
 
     let tagged = harness
         .get(
+            remote,
             "/v1/models",
             Some(&format!("proxenos-token:{TOKEN} proxenos-account:work")),
         )
@@ -210,6 +273,7 @@ async fn the_token_is_accepted_alone_and_beside_an_account_tag() {
 
     let reversed = harness
         .get(
+            remote,
             "/v1/models",
             Some(&format!("proxenos-account:work proxenos-token:{TOKEN}")),
         )
@@ -217,48 +281,135 @@ async fn the_token_is_accepted_alone_and_beside_an_account_tag() {
     assert_eq!(reversed.status(), 200);
 }
 
-/// A daemon with no token configured is the posture this project shipped with,
-/// and it is untouched: nothing is demanded, and a value the client sent is
-/// ignored exactly as before.
+/// **The regression this shape exists to prevent.** A tokened daemon used to
+/// have one door, so turning the token on shut its own machine out: every
+/// local session's `ANTHROPIC_BASE_URL` is `http://127.0.0.1:<port>`, and a
+/// local `exec` has no token to present. The loopback door asks nothing, token
+/// configured or not.
 #[tokio::test]
-async fn a_daemon_with_no_token_demands_nothing() {
+async fn the_loopback_door_asks_nothing_even_when_a_token_is_configured() {
+    let harness = Harness::start(Some(TOKEN)).await;
+
+    // What a local `proxenos exec` session actually sends.
+    assert_eq!(
+        harness
+            .get(&harness.loopback, "/v1/models", Some("unused"))
+            .await
+            .status(),
+        200
+    );
+    // And a caller sending nothing at all.
+    assert_eq!(
+        harness
+            .get(&harness.loopback, "/v1/models", None)
+            .await
+            .status(),
+        200
+    );
+    // A wrong token is not a refusal here either: this door does not read it.
+    assert_eq!(
+        harness
+            .get(
+                &harness.loopback,
+                "/v1/models",
+                Some("proxenos-token:not-the-secret")
+            )
+            .await
+            .status(),
+        200
+    );
+}
+
+/// The account tag still works at the loopback door with a token configured —
+/// the value is read for the tag, and only the remote door reads it for a
+/// token.
+#[tokio::test]
+async fn the_loopback_door_still_reads_an_account_tag() {
+    let harness = Harness::start(Some(TOKEN)).await;
+
+    assert_eq!(
+        harness
+            .get(
+                &harness.loopback,
+                "/v1/models",
+                Some("proxenos-account:work")
+            )
+            .await
+            .status(),
+        200
+    );
+}
+
+/// A daemon with no token configured has one door, and it is the loopback one:
+/// the posture this project shipped with, untouched.
+#[tokio::test]
+async fn a_daemon_with_no_token_has_one_door_and_it_demands_nothing() {
     let harness = Harness::start(None).await;
 
-    assert_eq!(harness.get("/v1/models", None).await.status(), 200);
+    assert!(
+        harness.remote.is_none(),
+        "no token configured means no remote door"
+    );
     assert_eq!(
-        harness.get("/v1/models", Some("unused")).await.status(),
+        harness
+            .get(&harness.loopback, "/v1/models", None)
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(
+        harness
+            .get(&harness.loopback, "/v1/models", Some("unused"))
+            .await
+            .status(),
         200
     );
 }
 
 /// §3 — the control vocabulary answers over HTTP, in the same JSON-RPC shape
-/// the socket uses.
+/// the socket uses. Served on both doors.
 #[tokio::test]
-async fn control_answers_over_http() {
+async fn control_answers_over_http_on_both_doors() {
     let harness = Harness::start(Some(TOKEN)).await;
 
-    let response = harness
-        .control("status", Some(&format!("proxenos-token:{TOKEN}")))
-        .await;
-
-    assert_eq!(response.status(), 200);
-    let body: Value = response.json().await.unwrap();
-    assert_eq!(body["jsonrpc"], "2.0");
-    assert_eq!(body["result"]["port"], 8787);
+    for (door, auth) in [
+        (harness.loopback.clone(), None),
+        (
+            harness.remote().to_owned(),
+            Some(format!("proxenos-token:{TOKEN}")),
+        ),
+    ] {
+        let response = harness.control(&door, "status", auth.as_deref()).await;
+        assert_eq!(response.status(), 200, "at {door}");
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["jsonrpc"], "2.0");
+        assert_eq!(body["result"]["port"], 8787);
+    }
 }
 
-/// The control endpoint is behind the same token as the turn surface. It
-/// carries `accounts.remove` and `accounts.select`; an open one would be worse
-/// than an open ingress.
+/// The control endpoint is behind the same door the turn surface is. It
+/// carries `accounts.remove` and `accounts.select`, so an unguarded one on a
+/// reachable address would be worse than an unguarded ingress.
 #[tokio::test]
-async fn control_over_http_refuses_a_request_with_no_token() {
+async fn control_at_the_remote_door_refuses_a_request_with_no_token() {
     let harness = Harness::start(Some(TOKEN)).await;
 
-    let response = harness.control("status", None).await;
+    let response = harness.control(harness.remote(), "status", None).await;
 
     assert_eq!(response.status(), 401);
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["error"]["type"], "authentication_error");
+}
+
+/// And the loopback door's control endpoint asks nothing, which is how
+/// `proxenos status` keeps working on the daemon's own machine.
+#[tokio::test]
+async fn control_at_the_loopback_door_asks_nothing() {
+    let harness = Harness::start(Some(TOKEN)).await;
+
+    let response = harness.control(&harness.loopback, "status", None).await;
+
+    assert_eq!(response.status(), 200);
 }
 
 /// An unknown method keeps its JSON-RPC code over HTTP, because "this daemon
@@ -269,6 +420,7 @@ async fn an_unknown_method_keeps_its_code_over_http() {
 
     let body: Value = harness
         .control(
+            harness.remote(),
             "definitely.not.a.method",
             Some(&format!("proxenos-token:{TOKEN}")),
         )
@@ -287,34 +439,81 @@ async fn an_unknown_method_keeps_its_code_over_http() {
     );
 }
 
-/// A daemon with no token serves the control vocabulary to loopback callers.
-/// It cannot be reached from anywhere else — `resolve_listen` refuses that
-/// combination — and the endpoint states the rule rather than relying on it.
-#[tokio::test]
-async fn control_over_http_serves_a_loopback_caller_with_no_token() {
-    let harness = Harness::start(None).await;
-
-    let response = harness.control("status", None).await;
-
-    assert_eq!(response.status(), 200);
-}
-
 /// The token never appears in what the daemon says about itself. `status` is
-/// what a front-end prints and what an operator pastes into an issue.
+/// what a front-end prints and what an operator pastes into an issue — and it
+/// is reachable without the token at the loopback door, which is precisely
+/// where a leak would be handed to a local process that had not earned it.
 #[tokio::test]
 async fn the_token_is_absent_from_status_and_env() {
     let harness = Harness::start(Some(TOKEN)).await;
-    let auth = format!("proxenos-token:{TOKEN}");
 
     for method in ["status", "env", "tiers", "accounts", "usage"] {
         let body = harness
-            .control(method, Some(&auth))
+            .control(&harness.loopback, method, None)
             .await
             .text()
             .await
             .unwrap();
         assert!(!body.contains(TOKEN), "`{method}` leaked the token: {body}");
     }
+}
+
+/// §3 — every documented method answers identically over both transports.
+///
+/// The state is shared, so this is not two daemons agreeing: it is one
+/// daemon's vocabulary reached two ways. `shutdown` is left out because it
+/// releases the run loop, and asking twice is not a question with one answer.
+#[tokio::test]
+async fn every_method_answers_the_same_over_both_transports() {
+    use proxenos::control::protocol::METHODS;
+
+    let harness = Harness::start(None).await;
+
+    for method in METHODS {
+        if method == "shutdown" {
+            continue;
+        }
+
+        let over_socket = proxenos::control::call(&harness.socket, method, None).await;
+        let over_http = proxenos::control::call_http(&harness.loopback, None, method, None).await;
+
+        match (over_socket, over_http) {
+            (Ok(socket), Ok(http)) => assert_eq!(socket, http, "`{method}` differs by transport"),
+            (Err(socket), Err(http)) => {
+                assert_eq!(
+                    (socket.message, socket.status),
+                    (http.message, http.status),
+                    "`{method}` fails differently by transport"
+                );
+            }
+            (socket, http) => panic!(
+                "`{method}` succeeded on one transport and failed on the other: \
+                 socket {socket:?}, http {http:?}"
+            ),
+        }
+    }
+}
+
+/// A method reaching one door moves the daemon the other door reports on:
+/// one state, two doors.
+#[tokio::test]
+async fn a_setter_at_the_remote_door_moves_what_the_loopback_door_reports() {
+    let harness = Harness::start(Some(TOKEN)).await;
+
+    let answer = proxenos::control::call_http(
+        harness.remote(),
+        Some(TOKEN),
+        "effort.set",
+        Some(json!({ "effort": "low" })),
+    )
+    .await
+    .expect("the setter should answer");
+    assert_eq!(answer["effort"], "low");
+
+    let status = proxenos::control::call_http(&harness.loopback, None, "status", None)
+        .await
+        .expect("status should answer");
+    assert_eq!(status["effort_ceiling"], "low");
 }
 
 /// The tag grammar, as a pure function. A value with no token part is read
@@ -372,62 +571,4 @@ fn the_launch_value_round_trips_through_the_parser() {
         auth_token_value(None, Some("work")),
         "proxenos-account:work"
     );
-}
-
-/// §3 — every documented method answers identically over both transports.
-///
-/// The state is shared, so this is not two daemons agreeing: it is one
-/// daemon's vocabulary reached two ways. `shutdown` is left out because it
-/// releases the run loop, and asking twice is not a question with one answer.
-#[tokio::test]
-async fn every_method_answers_the_same_over_both_transports() {
-    use proxenos::control::protocol::METHODS;
-
-    let harness = Harness::start(None).await;
-
-    for method in METHODS {
-        if method == "shutdown" {
-            continue;
-        }
-
-        let over_socket = proxenos::control::call(&harness.socket, method, None).await;
-        let over_http = proxenos::control::call_http(&harness.base, None, method, None).await;
-
-        match (over_socket, over_http) {
-            (Ok(socket), Ok(http)) => assert_eq!(socket, http, "`{method}` differs by transport"),
-            (Err(socket), Err(http)) => {
-                assert_eq!(
-                    (socket.message, socket.status),
-                    (http.message, http.status),
-                    "`{method}` fails differently by transport"
-                );
-            }
-            (socket, http) => panic!(
-                "`{method}` succeeded on one transport and failed on the other: \
-                 socket {socket:?}, http {http:?}"
-            ),
-        }
-    }
-}
-
-/// The setters move the daemon over HTTP, not merely answer about it — the
-/// same policy the ingress routes turns from.
-#[tokio::test]
-async fn a_setter_over_http_moves_the_running_daemon() {
-    let harness = Harness::start(Some(TOKEN)).await;
-
-    let answer = proxenos::control::call_http(
-        &harness.base,
-        Some(TOKEN),
-        "effort.set",
-        Some(json!({ "effort": "low" })),
-    )
-    .await
-    .expect("the setter should answer");
-    assert_eq!(answer["effort"], "low");
-
-    let status = proxenos::control::call_http(&harness.base, Some(TOKEN), "status", None)
-        .await
-        .expect("status should answer");
-    assert_eq!(status["effort_ceiling"], "low");
 }

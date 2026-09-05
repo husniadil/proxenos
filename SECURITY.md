@@ -10,18 +10,32 @@ helps; a working exploit is not required.
 
 ## Posture
 
-**Loopback without a token, or beyond it with one.** The daemon binds
-`127.0.0.1` by default and authenticates nothing there, which is safe precisely
-because every caller reaching the socket is already a local process running as
-the user. Binding any other address removes that assumption, so it is allowed
-only with a token configured (`[listen]`, `docs/api.md` §4) and the daemon
-**refuses to start** with a non-loopback address and no token.
+**Two doors, one daemon.** `127.0.0.1` is always bound and always authenticates
+nothing, which is safe precisely because every caller reaching that listener is
+already a local process running as the user. A reachable `listen.address`
+(`[listen]`, `docs/api.md` §4) opens a **second** listener beside it, where
+every request — turns and the control vocabulary alike — must carry the token.
+The daemon **refuses to start** with a non-loopback address and no token, and
+refuses a wildcard address, which cannot be split into two doors.
 
-`ANTHROPIC_AUTH_TOKEN` must be set for the client's sake. On a daemon with no
-token its value is ignored — it is not a credential and protects nothing. On one
-with a token it is where that token travels, as `proxenos-token:<secret>`, and
-the token is compared in constant time: a short-circuiting comparison is an
-oracle that gives up the secret a byte at a time.
+**The token is a property of the door, not of the peer.** Nothing reads a
+request's source address to decide whether it needs one. A peer-keyed guard
+cannot be exercised from a single machine, and behind a reverse proxy or an
+overlay-network daemon every request arrives from loopback — where a peer-keyed
+exemption would exempt everyone.
+
+**What this means for threat modelling.** Anything that can open a TCP
+connection to `127.0.0.1:<port>` on the daemon's machine is inside the trust
+boundary and always has been: local processes are the callers this daemon was
+built for. Adding a remote door does not narrow that; it adds a guarded way in
+from elsewhere.
+
+`ANTHROPIC_AUTH_TOKEN` must be set for the client's sake. At the loopback door
+its value is ignored except for the account tag — it is not a credential and
+protects nothing there. At the remote door it is where the token travels, as
+`proxenos-token:<secret>`, and the token is compared in constant time: a
+short-circuiting comparison is an oracle that gives up the secret a byte at a
+time.
 
 **What the token is.** It gates this daemon and nothing else. Anyone holding it
 who can reach the port can do what a local caller could — serve turns on the

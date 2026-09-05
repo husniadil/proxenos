@@ -9,6 +9,10 @@
 use proxenos::config::Config;
 use proxenos::config::ListenConfig;
 
+/// A concrete address that is not loopback. A wildcard is refused (see below),
+/// so every non-loopback case here names an address the way an operator has to.
+const REACHABLE: &str = "10.11.12.13";
+
 fn with_listen(listen: ListenConfig) -> Config {
     Config {
         listen,
@@ -34,13 +38,13 @@ fn the_default_is_loopback_with_no_token() {
 #[test]
 fn binding_past_loopback_without_a_token_is_refused_by_name() {
     let error = with_listen(ListenConfig {
-        address: Some("0.0.0.0".to_owned()),
+        address: Some(REACHABLE.to_owned()),
         ..ListenConfig::default()
     })
     .resolve_listen()
     .expect_err("a non-loopback address with no token should refuse");
 
-    assert!(error.message.contains("0.0.0.0"), "{}", error.message);
+    assert!(error.message.contains(REACHABLE), "{}", error.message);
     assert!(
         error.message.contains("listen.token_file"),
         "the refusal should name the preferred key: {}",
@@ -57,7 +61,7 @@ fn binding_past_loopback_without_a_token_is_refused_by_name() {
 #[test]
 fn binding_past_loopback_with_a_token_is_allowed() {
     let listen = with_listen(ListenConfig {
-        address: Some("0.0.0.0".to_owned()),
+        address: Some(REACHABLE.to_owned()),
         token: Some("a-long-random-string".to_owned()),
         ..ListenConfig::default()
     })
@@ -78,7 +82,7 @@ fn a_token_file_is_read_and_trimmed() {
     restrict(&path);
 
     let listen = with_listen(ListenConfig {
-        address: Some("0.0.0.0".to_owned()),
+        address: Some(REACHABLE.to_owned()),
         token_file: Some(path),
         ..ListenConfig::default()
     })
@@ -176,14 +180,14 @@ fn the_table_parses_from_toml() {
         r#"
 port = 8787
 [listen]
-address = "0.0.0.0"
+address = "10.11.12.13"
 token   = "a-long-random-string"
 "#,
     )
     .expect("the table should parse");
 
     let listen = config.resolve_listen().expect("it should resolve");
-    assert_eq!(listen.address.to_string(), "0.0.0.0");
+    assert_eq!(listen.address.to_string(), "10.11.12.13");
     assert_eq!(listen.token.as_deref(), Some("a-long-random-string"));
 }
 
@@ -203,4 +207,70 @@ fn restrict(path: &std::path::Path) {
     }
     #[cfg(not(unix))]
     let _ = path;
+}
+
+/// **The two doors, as a plan.** A reachable address opens a second listener
+/// beside the loopback one, and the token belongs to that second door. The
+/// pair travels together so no caller can read the address without the token
+/// that guards it.
+#[test]
+fn a_reachable_address_opens_a_remote_door_carrying_the_token() {
+    let listen = with_listen(ListenConfig {
+        address: Some(REACHABLE.to_owned()),
+        token: Some("the-secret".to_owned()),
+        ..ListenConfig::default()
+    })
+    .resolve_listen()
+    .unwrap();
+
+    let (address, token) = listen.remote_door().expect("a reachable address opens one");
+    assert_eq!(address.to_string(), REACHABLE);
+    assert_eq!(token, "the-secret");
+}
+
+/// A loopback address opens one door and it is the loopback one. A token
+/// written beside it demands nothing, because there is no door for it to
+/// guard — the daemon says so at startup rather than leaving it silent.
+#[test]
+fn a_loopback_address_opens_no_remote_door_even_with_a_token() {
+    let listen = with_listen(ListenConfig {
+        token: Some("the-secret".to_owned()),
+        ..ListenConfig::default()
+    })
+    .resolve_listen()
+    .unwrap();
+
+    assert!(listen.is_loopback());
+    assert!(listen.remote_door().is_none());
+    assert!(
+        listen.token_guards_nothing(),
+        "a token with no remote door should be reported, not ignored in silence"
+    );
+}
+
+/// A wildcard address cannot be split into two doors, and is refused by name.
+///
+/// Measured on this machine: with `SO_REUSEADDR` the BSDs let `0.0.0.0:P` and
+/// `127.0.0.1:P` both bind and hand a loopback connection to the more specific
+/// socket, while Linux refuses the second bind outright. A posture that is one
+/// thing on macOS and another on Linux is not a posture, so neither is relied
+/// on: the operator writes the address they meant.
+#[test]
+fn a_wildcard_address_is_refused_by_name() {
+    for wildcard in ["0.0.0.0", "::"] {
+        let error = with_listen(ListenConfig {
+            address: Some(wildcard.to_owned()),
+            token: Some("the-secret".to_owned()),
+            ..ListenConfig::default()
+        })
+        .resolve_listen()
+        .expect_err("a wildcard should refuse");
+
+        assert!(error.message.contains(wildcard), "{}", error.message);
+        assert!(
+            error.message.contains("127.0.0.1"),
+            "it should say the loopback door is opened anyway: {}",
+            error.message
+        );
+    }
 }

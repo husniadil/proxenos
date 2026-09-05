@@ -367,15 +367,18 @@ precisely because every caller reaching the socket is already a local process
 running as the user. `ANTHROPIC_AUTH_TOKEN` must be set for Claude Code's sake
 and its value is ignored.
 
-**Binding any other address needs a token, and the daemon refuses to start
-without one.** `[listen]` in config.toml takes an `address` and a `token_file`
-(or `token`); with a token configured, every request — turns and the control
-vocabulary alike — must carry it as `proxenos-token:<secret>` in
-`ANTHROPIC_AUTH_TOKEN`. That is what lets a second machine run only the CLI and
-be served by this daemon: `PROXENOS_DAEMON` and `PROXENOS_TOKEN`, and every verb
-goes there. This project terminates no TLS, so put a private overlay network or
-a reverse proxy in front of anything reachable beyond loopback. `docs/api.md`
-§1, §2.7, §4 and §7.
+**A reachable address is a second door, and it needs a token.** `[listen]` in
+config.toml takes an `address` and a `token_file` (or `token`). `127.0.0.1`
+stays bound and stays open to local callers whatever that says; the stated
+address is a second listener where every request — turns and the control
+vocabulary alike — must carry the token as `proxenos-token:<secret>` in
+`ANTHROPIC_AUTH_TOKEN`. The daemon refuses to start with a reachable address and
+no token. That is what lets a second machine run only the CLI and be served by
+this daemon: `PROXENOS_DAEMON` and `PROXENOS_TOKEN`, and every verb goes there,
+while sessions on the daemon's own machine carry on through the loopback door.
+This project terminates no TLS, so put a private overlay network or a reverse
+proxy in front of anything reachable beyond loopback. `docs/api.md` §1, §2.7,
+§4 and §7.
 
 Credentials live in a file created `0600`, never in the configuration file,
 never in process arguments, and never in logs. Nothing is collected and nothing

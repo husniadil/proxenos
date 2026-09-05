@@ -115,6 +115,11 @@ and names the host to run it on. `stop` works and stops the daemon **for
 everyone on that machine** — ask the operator first. `proxenos settings` is
 refused too: the document would carry the token; use `proxenos exec`.
 
+On the daemon's own machine nothing changes: that daemon always keeps a
+loopback door open that asks for no token, so a plain local `proxenos exec` and
+a plain local `proxenos status` work exactly as they always did — do not set
+`PROXENOS_TOKEN` there expecting it to be needed.
+
 Never pass the token as a command-line argument — there is no flag for it, and
 argv is visible to every process on the machine. `proxenos env` deliberately
 does not print it.

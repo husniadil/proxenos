@@ -345,17 +345,45 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
     // hands every stored account to whoever can reach the port, and nothing
     // about a healthy `status` would say so.
     let listen = config.resolve_listen()?;
-    let listener = daemon::bind_at(listen.address, port).await?;
-    let addr = listener.local_addr()?;
-    // The address and whether a token is demanded, never the token itself.
-    tracing::info!(
-        %addr,
-        authenticated = listen.token.is_some(),
-        "listening"
-    );
-    if !listen.is_loopback() {
-        tracing::info!(
-            "bound past loopback; every request must carry the configured token (`api.md` §1)"
+
+    // **The loopback door is opened unconditionally.** It is where every local
+    // session already points — an `exec` launch bakes
+    // `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>` into the client it starts —
+    // so a daemon that moved this listener to a reachable address instead of
+    // adding one would cut off every session on its own machine the moment a
+    // token was configured, and none of them could present one.
+    let loopback = daemon::bind(port).await?;
+    let local_addr = loopback.local_addr()?;
+
+    // And the remote door beside it, where the configuration opens one. The
+    // address and the token arrive together (`Listen::remote_door`), so this
+    // cannot bind the one without the other.
+    let remote = match listen.remote_door() {
+        None => None,
+        Some((address, token)) => {
+            let listener = daemon::bind_at(address, port).await?;
+            Some((listener, token.to_owned()))
+        }
+    };
+
+    // Both addresses, and which one demands a token — never the token itself.
+    match &remote {
+        Some((listener, _)) => tracing::info!(
+            loopback = %local_addr,
+            remote = %listener.local_addr()?,
+            "listening on two doors; the remote one demands the configured token (`api.md` §1)"
+        ),
+        None => tracing::info!(loopback = %local_addr, "listening"),
+    }
+
+    // A setting that does nothing is the shape this project refuses to leave
+    // silent. Not an error: moving an address back to loopback for an
+    // afternoon should not mean deleting the token to do it.
+    if listen.token_guards_nothing() {
+        tracing::warn!(
+            "a token is configured but no door demands it: `listen.address` is loopback, and \
+             the loopback door asks for nothing. Set `listen.address` to the address other \
+             machines reach this one on."
         );
     }
 
@@ -479,7 +507,7 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
     let sessions = Arc::new(proxenos::session::SessionStore::new());
 
     let control_state = proxenos::control::handler::ControlState {
-        port: addr.port(),
+        port: local_addr.port(),
         policy: Arc::clone(&policy),
         catalog: Arc::clone(&catalog),
         credentials: Arc::clone(&credentials),
@@ -595,17 +623,42 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
     // §3 — the same vocabulary the socket carries, over HTTP, so a CLI on
     // another machine reaches every verb. The socket is unchanged and stays
     // the local path.
-    let router = proxenos::ingress::serving_router(
-        state,
+    //
+    // One router per door over one state. `AppState` and `ControlState` are
+    // both clones of `Arc`s, so a change through either door moves the daemon
+    // both doors report on.
+    let local = proxenos::ingress::serving_router(
+        state.clone(),
         proxenos::ingress::Access {
-            token: listen.token.clone(),
-            control: Some(http_control_state),
+            door: proxenos::ingress::Door::Loopback,
+            control: Some(http_control_state.clone()),
         },
     );
+    let guarded = remote.map(|(listener, token)| {
+        let router = proxenos::ingress::serving_router(
+            state,
+            proxenos::ingress::Access {
+                door: proxenos::ingress::Door::Remote { token },
+                control: Some(http_control_state),
+            },
+        );
+        (listener, router)
+    });
 
-    tokio::select! {
-        result = daemon::serve_router(listener, router) => result?,
-        () = shutdown.wait() => tracing::info!("stopping, as asked over the control socket"),
+    // Either door stopping ends the daemon, and so does a stop over the
+    // socket. A daemon still serving one door after the other fell over would
+    // be a daemon half doing its job, reported as healthy by whichever half
+    // somebody asked.
+    match guarded {
+        None => tokio::select! {
+            result = daemon::serve_router(loopback, local) => result?,
+            () = shutdown.wait() => tracing::info!("stopping, as asked over the control socket"),
+        },
+        Some((listener, router)) => tokio::select! {
+            result = daemon::serve_router(loopback, local) => result?,
+            result = daemon::serve_router(listener, router) => result?,
+            () = shutdown.wait() => tracing::info!("stopping, as asked over the control socket"),
+        },
     }
     Ok(())
 }

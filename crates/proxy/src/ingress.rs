@@ -1,9 +1,10 @@
 //! `docs/api.md` §1 — the Anthropic Messages surface.
 //!
-//! The daemon binds loopback and authenticates nothing by default: every caller
-//! reaching the socket is already a local process running as the user. It binds
-//! anything else only with a token configured, and then every request carries
-//! it — `serving_router` and `require_token` below.
+//! The daemon binds loopback and authenticates nothing there: every caller
+//! reaching that listener is already a local process running as the user. Told
+//! to bind a reachable address, it opens that as a SECOND door — same state,
+//! same router, plus `require_token` — and leaves the loopback one exactly as
+//! it was. `Door` and `serving_router` below.
 
 use crate::error::ProxyError;
 use crate::estimate::Estimator;
@@ -121,9 +122,9 @@ pub fn router(state: AppState) -> Router {
         // well past that. The refusal was worse than the size: a plain-text 413
         // from the extractor is not an Anthropic error shape, so the client read
         // it as a retryable failure and looped on it, the turn never reaching
-        // the backend. The backend's own limit is the real one; the daemon is
-        // loopback-only, so nothing but the user's own client can send here
-        // anyway (§6).
+        // the backend. The backend's own limit is the real one; the sender is
+        // the user's own client on this machine, or one that got past the
+        // remote door's token (§6).
         .layer(DefaultBodyLimit::disable())
         .with_state(state)
 }
@@ -132,57 +133,76 @@ async fn not_found() -> Response {
     ProxyError::not_found("unknown endpoint").into_response()
 }
 
+/// Which door a router is built for (`api.md` §1).
+///
+/// **The token is a property of the door, not of the peer.** A daemon told to
+/// bind a reachable address opens two listeners over one state, and which one
+/// a request arrived on is what decides whether it needs a token — never the
+/// address the request appears to come from. Keying on the peer would be
+/// untestable from a single machine, and would be wrong the moment anything
+/// stood in front of the daemon: behind a reverse proxy every request is
+/// loopback, so a peer-keyed exemption exempts the whole internet.
+pub enum Door {
+    /// `127.0.0.1` — every caller reaching this listener is already a local
+    /// process running as the user, so nothing is asked of it. Always open,
+    /// token configured or not: turning the token on used to shut the daemon's
+    /// own machine out, because every local session's `ANTHROPIC_BASE_URL` is
+    /// this address and a local launch has no token to present.
+    Loopback,
+    /// A stated address, reachable from other machines. Every request must
+    /// carry the token.
+    ///
+    /// The token is held here rather than beside the door, so a remote door
+    /// **cannot be constructed without one**. The invariant that made the
+    /// startup refusal necessary is the same one, and this is where the type
+    /// system can hold it.
+    Remote { token: String },
+}
+
 /// What the daemon's own router carries beyond the turn surface.
 ///
 /// One value rather than two arguments, so a caller cannot build a router that
-/// exposes the control vocabulary and forgets the guard: both halves of the
-/// posture arrive together or not at all.
+/// exposes the control vocabulary and forgets which door it is on: both halves
+/// of the posture arrive together or not at all.
 pub struct Access {
-    /// The token every request must carry, where one is configured. `None` is
-    /// the shipped loopback posture — no authentication, and `/control` open
-    /// to a loopback caller only.
-    pub token: Option<String>,
+    /// Which door this router answers on, and — for the remote one — the token
+    /// it demands.
+    pub door: Door,
     /// The §3 vocabulary, served over HTTP at `POST /control`. `None` leaves
     /// the endpoint absent, which is what a probe or a test wants.
+    ///
+    /// Served on **both** doors, guarded on the remote one by the same layer
+    /// the turn surface is: `proxenos status` has to keep working on the
+    /// daemon's own machine, and it has no token to present there.
     pub control: Option<crate::control::handler::ControlState>,
 }
 
-/// The router the daemon actually serves: the turn surface, the control
-/// endpoint, and the token guard over both.
+/// One door's router: the turn surface, the control endpoint, and — on the
+/// remote door — the token guard over both.
+///
+/// Called once per door, over one shared `AppState` and one shared
+/// `ControlState`. Both are cheap clones of `Arc`s, so the two doors are two
+/// ways into one daemon rather than two daemons that happen to agree.
 ///
 /// `router` stays as it is — it is what the probes and the ingress tests want,
-/// and neither has a token or a control state to give.
+/// and neither has a door or a control state to give.
 pub fn serving_router(state: AppState, access: Access) -> Router {
-    let token = access.token.map(std::sync::Arc::<str>::from);
-
     let mut router = router(state);
     if let Some(control) = access.control {
         router = router.merge(
             Router::new()
                 .route("/control", post(control_over_http))
-                .with_state(ControlOverHttp {
-                    control,
-                    // Read here rather than from the guard below, because the
-                    // guard is absent in exactly the case this has to know
-                    // about: no token configured at all.
-                    authenticated: token.is_some(),
-                }),
+                .with_state(control),
         );
     }
 
-    match token {
-        Some(token) => router.layer(axum::middleware::from_fn_with_state(token, require_token)),
-        None => router,
+    match access.door {
+        Door::Loopback => router,
+        Door::Remote { token } => router.layer(axum::middleware::from_fn_with_state(
+            std::sync::Arc::<str>::from(token),
+            require_token,
+        )),
     }
-}
-
-/// Everything `POST /control` reads.
-#[derive(Clone)]
-struct ControlOverHttp {
-    control: crate::control::handler::ControlState,
-    /// Whether a token is configured at all. A daemon with none serves
-    /// loopback callers only, and this endpoint is the one that has to say so.
-    authenticated: bool,
 }
 
 /// Refuse a request that does not carry the daemon's token (`api.md` §1).
@@ -243,31 +263,18 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 /// A JSON-RPC-level failure is still a 200 carrying an `error` member, which
 /// is what the protocol says and what the socket does. The status codes this
 /// endpoint uses are about reaching it at all.
+///
+/// **It reads nothing about who is calling.** It once checked the peer address
+/// and refused a non-loopback caller on a daemon with no token; with two doors
+/// that check answers the wrong question — the loopback door of a *tokened*
+/// daemon is legitimately open and would have failed it — and the right
+/// question is already answered by which listener the request arrived on. A
+/// peer check left in beside a door check is an invitation to reason from the
+/// wrong one.
 async fn control_over_http(
-    State(state): State<ControlOverHttp>,
+    State(state): State<crate::control::handler::ControlState>,
     request: axum::extract::Request,
 ) -> Response {
-    // Read off the request rather than extracted, because the extractor is
-    // infallible only where the server was built with connect info — and a
-    // handler that panics on a router assembled without it is a worse answer
-    // than one that treats an unknown peer as remote.
-    let peer = request
-        .extensions()
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .copied();
-    // Unreachable while `resolve_listen` holds — a daemon with no token binds
-    // loopback and nothing else can reach it — and stated anyway, because the
-    // two rules live in different files and only one of them is enforced here.
-    // An unknown peer is treated as remote: this is the direction to fail in.
-    let loopback = peer.is_some_and(|peer| peer.ip().is_loopback());
-    if !state.authenticated && !loopback {
-        return ProxyError::authentication(
-            "this daemon has no token configured, so the control vocabulary is served to \
-             loopback callers only. Set `listen.token_file` on the daemon's machine.",
-        )
-        .into_response();
-    }
-
     let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
         Ok(body) => body,
         Err(error) => {
@@ -278,7 +285,7 @@ async fn control_over_http(
         }
     };
     let line = String::from_utf8_lossy(&body);
-    Json(crate::control::answer(&state.control, &line).await).into_response()
+    Json(crate::control::answer(&state, &line).await).into_response()
 }
 
 /// The mapped models, in the Anthropic list shape.

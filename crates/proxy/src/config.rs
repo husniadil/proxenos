@@ -168,10 +168,16 @@ fable  = "gpt-5.6-sol"
 #
 # The default binds loopback and asks for nothing, which is the posture this
 # project shipped with: every caller is already a local process running as the
-# user. Binding anything else serves other machines, and then a token is
-# REQUIRED — the daemon refuses to start with a non-loopback `address` and no
-# token, naming both keys, rather than putting somebody's accounts on the
-# network.
+# user.
+#
+# An `address` other than loopback opens a SECOND door rather than moving the
+# first: `127.0.0.1` stays bound and stays open to local callers, and the
+# stated address demands the token from every request. That is why a token is
+# REQUIRED there — the daemon refuses to start with a non-loopback `address`
+# and no token, naming both keys, rather than putting somebody's accounts on
+# the network. Write the address other machines reach this one on; a wildcard
+# (`0.0.0.0`) is refused, since it already covers `127.0.0.1` and the two doors
+# could not both be bound.
 #
 # `token_file` is the better half of the pair: a file this daemon reads at
 # startup, which must be `0600`. `token` puts the secret in this file, which is
@@ -179,7 +185,7 @@ fable  = "gpt-5.6-sol"
 # that exception exists and what it costs.
 #
 # [listen]
-# address    = "0.0.0.0"
+# address    = "100.64.0.2"
 # token_file = "/Users/me/.config/proxenos/token"
 # token      = "a-long-random-string"
 
@@ -1154,7 +1160,11 @@ pub struct ListenConfig {
 #[derive(Debug, Clone)]
 pub struct Listen {
     pub address: std::net::IpAddr,
-    /// `None` is the shipped posture: loopback, and no authentication.
+    /// The token the remote door demands. `None` is the shipped posture: the
+    /// loopback door alone, and no authentication anywhere.
+    ///
+    /// Never what the LOOPBACK door asks for — that door asks for nothing,
+    /// whatever this holds. `remote_door` is the pairing that matters.
     pub token: Option<String>,
 }
 
@@ -1163,6 +1173,38 @@ impl Listen {
     #[must_use]
     pub fn is_loopback(&self) -> bool {
         self.address.is_loopback()
+    }
+
+    /// The second door, where the configuration opens one: the address to bind
+    /// and the token it demands.
+    ///
+    /// **The loopback door is opened unconditionally and is not described
+    /// here** — it is the daemon's own port on its own machine, always
+    /// present, always asking nothing. This answers the other question: is
+    /// there a door onto the network, and what guards it.
+    ///
+    /// The pair travels together because a caller that could read the address
+    /// without the token would be one line away from binding it unguarded.
+    /// `resolve_listen` has already proved the token is there.
+    #[must_use]
+    pub fn remote_door(&self) -> Option<(std::net::IpAddr, &str)> {
+        if self.is_loopback() {
+            return None;
+        }
+        self.token.as_deref().map(|token| (self.address, token))
+    }
+
+    /// Whether a token is configured that no door demands.
+    ///
+    /// A token beside a loopback address guards nothing: there is no remote
+    /// door, and the loopback door asks nothing by design. That is a setting
+    /// doing nothing, which is the shape this project refuses to leave silent
+    /// — the daemon says so at startup. It is not an error: an operator moving
+    /// an address back to loopback for an afternoon should not have to delete
+    /// their token to do it.
+    #[must_use]
+    pub fn token_guards_nothing(&self) -> bool {
+        self.is_loopback() && self.token.is_some()
     }
 }
 
@@ -1183,13 +1225,30 @@ impl Config {
             ))
         })?;
 
+        // A wildcard cannot be split into two doors, so it is refused rather
+        // than bound. Measured: with `SO_REUSEADDR` the BSDs let `0.0.0.0:P`
+        // and `127.0.0.1:P` both bind and hand a loopback connection to the
+        // more specific socket, while Linux refuses the second bind outright.
+        // Either way the operator gets a posture they did not choose — an
+        // unguarded door on macOS by accident, a daemon that will not start on
+        // Linux — and neither failure says which it is.
+        if address.is_unspecified() {
+            return Err(ProxyError::invalid_request(format!(
+                "`listen.address = \"{stated}\"` is a wildcard, and this daemon opens two doors \
+                 — `127.0.0.1` for local callers, which asks for no token, and the stated \
+                 address, which demands one. A wildcard already covers `127.0.0.1`, so the two \
+                 cannot both be bound: write the address other machines reach this one on."
+            )));
+        }
+
         let token = self.listen_token()?;
         if !address.is_loopback() && token.is_none() {
             return Err(ProxyError::invalid_request(format!(
                 "`listen.address = \"{stated}\"` reaches past this machine and no token is \
                  configured, so every stored account would be served to anyone who can reach \
                  the port. Set `listen.token_file` (a 0600 file holding the secret) or \
-                 `listen.token`, or bind `127.0.0.1`."
+                 `listen.token` — the token guards that door only, and `127.0.0.1` keeps \
+                 asking for nothing — or bind `127.0.0.1` alone."
             )));
         }
 

@@ -6,18 +6,20 @@ use crate::ingress::router;
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 
-/// Bind loopback, and only loopback.
+/// Bind loopback.
 ///
-/// The shipped posture, and what every caller that has no opinion gets: with
-/// no authentication configured, serving is safe precisely because every
-/// caller reaching the socket is already a local process running as the user.
-/// Binding beyond it is `bind_at`, and is gated on a token
+/// **The door that is always opened**, whatever `listen.address` says. Serving
+/// it without authentication is safe precisely because every caller reaching
+/// this listener is already a local process running as the user — and it has
+/// to stay open, because every local session's `ANTHROPIC_BASE_URL` names it
+/// and a local launch has no token to present. A reachable address is a second
+/// listener beside this one (`bind_at`), gated on a token
 /// (`config::Config::resolve_listen`).
 pub async fn bind(port: u16) -> Result<tokio::net::TcpListener, ProxyError> {
     bind_at(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), port).await
 }
 
-/// Bind a stated address.
+/// Bind a stated address — the remote door.
 ///
 /// **Nothing here decides whether the address is allowed.** That decision is
 /// `resolve_listen`'s, made once at startup over the configuration, because it
@@ -48,23 +50,22 @@ pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> Result
     serve_router(listener, router(state)).await
 }
 
-/// Serve a router that was already built — the daemon's own, which carries the
-/// token guard and the §3 control endpoint.
+/// Serve a router that was already built — one of the daemon's doors, which
+/// carries the §3 control endpoint and, on the remote door, the token guard.
 ///
-/// **The connection's peer address is carried into the handlers.** `/control`
-/// refuses a caller that is neither loopback nor holding a token, and it can
-/// only tell the two apart if it knows where the request came from.
+/// **No connect info.** Nothing downstream reads the peer address any more:
+/// which door a request arrived on is what decides whether it needs a token
+/// (`ingress::Door`), and that is decided when the router is built rather than
+/// per request. Carrying a peer address into handlers that must not consult it
+/// would be leaving the wrong answer within reach.
 pub async fn serve_router(
     listener: tokio::net::TcpListener,
     router: axum::Router,
 ) -> Result<(), ProxyError> {
-    axum::serve(
-        listener,
-        router.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown())
-    .await
-    .map_err(|error| ProxyError::invalid_request(format!("server stopped: {error}")))
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown())
+        .await
+        .map_err(|error| ProxyError::invalid_request(format!("server stopped: {error}")))
 }
 
 async fn shutdown() {
