@@ -4,6 +4,12 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **`claude-fable-5-1` joins the curated Anthropic menu**, with its `[1m]`
+  long-context sibling, so `models` and a tier set from a relay account can
+  name it. The menu stays curated, not fetched, as before.
+
 ## [0.21.1]
 
 - **A tokened daemon shut its own machine out.** Setting `listen.address` to a

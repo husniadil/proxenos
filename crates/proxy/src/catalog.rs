@@ -176,7 +176,9 @@ impl Catalog {
         // as part of the model id and relayed verbatim. The plain id is the
         // standard window on either path.
         let models = [
-            ("claude-fable-5", 200_000_u64),
+            ("claude-fable-5-1", 200_000_u64),
+            ("claude-fable-5-1[1m]", 1_000_000),
+            ("claude-fable-5", 200_000),
             ("claude-fable-5[1m]", 1_000_000),
             ("claude-opus-5", 200_000),
             ("claude-opus-5[1m]", 1_000_000),
