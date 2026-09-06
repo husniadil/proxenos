@@ -187,6 +187,12 @@ proxenos models     available models, as `MODEL WINDOW TIER` under a header;
                     TIER names the tiers mapping to each id, read from the
                     `tiers` method (--json prints the socket's own payload;
                     --account NAME asks for that stored account's menu)
+proxenos incidents  what the providers say about themselves: the incidents
+                    open on the status page of every provider a stored
+                    account is on, as `PROVIDER IMPACT STATUS SINCE NAME
+                    URL`, worst first; then a line per page that did not
+                    answer. Nothing open is a sentence naming the providers
+                    asked (--json prints the socket's own payload)
 proxenos env        environment for Claude Code, as shell exports
 proxenos settings   the same configuration, as one settings document
 proxenos exec       run a command with that configuration applied
@@ -1397,6 +1403,7 @@ A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
 | `models` | catalog, whether it is the fallback list, and whether it was fetched for an account other than the one it was asked about. `{"account": name}` answers for that account's menu rather than the selection's — which is the curated list where that account relays (§9.1), and is what `exec --account` measures a `--model` id against; a name the store does not hold is refused by name | yes — `{"account": name}` added after v0.16.0 |
 | `tiers` | tier mapping, plus `missing_tiers` — the tiers whose stated model this account's catalog does not carry — and `cross_account_tiers`, as `status` carries it | no — was `tiers.get`; `missing_tiers` added after v0.17.0, `cross_account_tiers` after v0.19.0 |
 | `usage` | the serving account's quota as of its last turn, or that no turn has been made, plus `models` — the ids this daemon serves — and `accounts`, one entry per stored account with its own figure, its freshness, and `unavailable` where it has none. Each account entry also carries `served_tokens`, the §6.1 tally, and an entry with no figure carries `reason` beside its `detail` — `no_turn`, `no_relayed_turn`, `metered`, `unknown_key_kind`, `not_reported` — the same fact in a word, so a renderer never matches on prose. Each window carries `used_percent`, `window_minutes`, `resets_at`, and — where the provider stated them — `status`, `surpassed_threshold`, `representative`, and `label` for a window no duration identifies. An entry whose provider states a credit balance also carries `credit` — `used_minor`, `limit_minor`, `exponent`, `currency`, `percent`, `severity` — money in the units the provider stated it in, present only where there is a balance to state. An entry whose provider states a subscription it no longer calls active also carries `subscription_status`, that provider's own word verbatim — absent where the subscription is active, which is silence | yes |
+| `incidents` | what the providers say about themselves: `incidents`, the open rows on the status page of every provider a stored account is on — each `id`, `provider`, `name`, `status` (`investigating`, `identified`, `monitoring`; a resolved row is dropped), `impact` (`none`, `minor`, `major`, `critical`), `url` and `since`, worst first — plus `providers`, the ones asked, `errors`, per provider whose page did not answer (its last list is kept beside the reason), and `checked_at`, epoch seconds of the last round, null before the first. The daemon asks each page once a minute (`[upstream].status` and `[upstream.anthropic].status`, §4); nothing on the turn path waits on it. `usage` carries the same `incidents` list, so a reader of the quota sees the provider's standing beside the figure | no |
 | `usage.refresh` | asks the backend for a figure now, **per account** — every stored account whose credential can hold one, each on its own credential and each recorded under its own name. The answer is the serving account's outcome plus `accounts`, one entry per stored account carrying either its figure or the sentence saying why it has none. Nothing about which account serves turns is read or changed | yes |
 | `env` | the §2.2 block: `variables`, and `settings` always present. `{"account": name}` answers for a session served as that account rather than as the selection — the mapping, the window, and the client policy all resolved for it, which is what `exec --account` launches with; a name the store does not hold is refused by name | yes — `{"account": name}` added after v0.15.1 |
 | `shutdown` | `{"stopping": true, "version": ...}`, then the process goes once the answer is written | yes |
@@ -1853,6 +1860,7 @@ endpoint                 = "https://..."
 websocket                = "wss://..."
 catalog                  = "https://..."
 usage                    = "https://chatgpt.com/backend-api/wham/usage"
+status                   = "https://status.openai.com/api/v2/summary.json"
 
 [upstream.key]
 endpoint = "https://..."
@@ -1862,6 +1870,7 @@ catalog  = "https://..."
 endpoint = "https://..."
 usage    = "https://..."
 profile  = "https://..."
+status   = "https://status.claude.com/api/v2/incidents/unresolved.json"
 
 # Optional. The profile directories grants are borrowed from, keyed by the
 # name the account is filed under.

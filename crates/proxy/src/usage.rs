@@ -1015,6 +1015,10 @@ pub struct UsageStore {
     /// happen. Nothing outside a test sets it.
     #[allow(clippy::type_complexity)]
     on_tally_write: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    /// What the providers' status pages last said (`incidents.rs`). Held
+    /// here because it is the same question as the rest of this store — how
+    /// the providers stand — and is reported beside the quota.
+    incidents: crate::incidents::IncidentStore,
 }
 
 /// How many times a write starts over when it finds the file changed.
@@ -1049,6 +1053,12 @@ impl UsageStore {
                 .find(|account| account.selected)
                 .map(|account| account.name)
         }))
+    }
+
+    /// The providers' own word on their incidents.
+    #[must_use]
+    pub fn incidents(&self) -> &crate::incidents::IncidentStore {
+        &self.incidents
     }
 
     /// Bind the store to whoever is serving turns.

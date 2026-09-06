@@ -52,6 +52,19 @@ pub(crate) async fn print_models(args: cli::ModelsArgs) -> Result<()> {
     Ok(())
 }
 
+/// What the providers say about themselves (§3 `incidents`): read from what
+/// the daemon last heard from their status pages, so it costs nothing to ask.
+pub(crate) async fn print_incidents(args: cli::IncidentsArgs) -> Result<()> {
+    let endpoint = control::Endpoint::resolve()?;
+    let result = control::dial(&endpoint, "incidents", None).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+    println!("{}", render::incidents(&result));
+    Ok(())
+}
+
 /// What quota is left. Reported from the snapshot the backend volunteers on
 /// each turn, so it costs nothing to ask and is as of the last turn made.
 ///

@@ -31,6 +31,9 @@ pub enum Command {
     Status(StatusArgs),
     /// Available models.
     Models(ModelsArgs),
+    /// What the providers say about themselves: the incidents open on the
+    /// status page of every provider a stored account is on.
+    Incidents(IncidentsArgs),
     /// Environment for Claude Code, as shell exports.
     Env,
     /// The same configuration as one client settings document.
@@ -369,6 +372,13 @@ pub struct ModelsArgs {
     /// account relays, this is the curated list.
     #[arg(long, value_name = "ACCOUNT")]
     pub account: Option<String>,
+    /// Print the socket's own payload instead of the table.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct IncidentsArgs {
     /// Print the socket's own payload instead of the table.
     #[arg(long)]
     pub json: bool,

@@ -478,6 +478,10 @@ pub struct UpstreamConfig {
     /// opened on a daemon that has been idle since it started.
     #[serde(default = "default_usage")]
     pub usage: String,
+    /// Where the provider states its own incidents (§3 `incidents`): a
+    /// public status page, asked for while a stored account is on it.
+    #[serde(default = "default_status")]
+    pub status: String,
     /// Where a key is spent, which is not where a grant is.
     ///
     /// A different endpoint with different billing, and the two must not be
@@ -514,6 +518,11 @@ pub struct AnthropicEndpoints {
     /// being asked for.
     #[serde(default = "default_anthropic_profile_endpoint")]
     pub profile: String,
+    /// Where this provider states its own incidents (§3 `incidents`). Its
+    /// unresolved list rather than its indicator, which goes green while a
+    /// major incident is still being monitored.
+    #[serde(default = "default_anthropic_status")]
+    pub status: String,
 }
 
 impl Default for AnthropicEndpoints {
@@ -522,6 +531,7 @@ impl Default for AnthropicEndpoints {
             endpoint: default_anthropic_endpoint(),
             usage: default_anthropic_usage_endpoint(),
             profile: default_anthropic_profile_endpoint(),
+            status: default_anthropic_status(),
         }
     }
 }
@@ -536,6 +546,10 @@ fn default_anthropic_usage_endpoint() -> String {
 
 fn default_anthropic_profile_endpoint() -> String {
     "https://api.anthropic.com/api/oauth/profile".to_owned()
+}
+
+fn default_anthropic_status() -> String {
+    crate::incidents::status_url(crate::auth::store::Provider::Anthropic).to_owned()
 }
 
 /// The endpoints an API key is spent against.
@@ -597,6 +611,10 @@ fn default_usage() -> String {
     "https://chatgpt.com/backend-api/wham/usage".to_owned()
 }
 
+fn default_status() -> String {
+    crate::incidents::status_url(crate::auth::store::Provider::Codex).to_owned()
+}
+
 impl Default for UpstreamConfig {
     fn default() -> Self {
         Self {
@@ -608,6 +626,7 @@ impl Default for UpstreamConfig {
             key: KeyEndpoints::default(),
             anthropic: AnthropicEndpoints::default(),
             usage: default_usage(),
+            status: default_status(),
         }
     }
 }

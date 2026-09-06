@@ -139,6 +139,10 @@ pub async fn dispatch(
             }))
         }
         "usage" => Ok(usage(state)),
+        // §3 — the providers' own incidents, as their status pages state
+        // them; the same list `usage` carries, on its own for a reader that
+        // wants nothing else.
+        "incidents" => Ok(state.usage.incidents().to_json()),
         "accounts.remove" => remove_account(state, params).await,
         "accounts" => accounts(state),
         "accounts.select" => select_account(state, params).await,
@@ -659,6 +663,12 @@ fn usage(state: &ControlState) -> Value {
     if let Some(object) = answer.as_object_mut() {
         object.insert("models".to_owned(), json!(served));
         object.insert("accounts".to_owned(), json!(per_account(state)));
+        // The providers' own incidents beside the quota: a figure that says
+        // headroom is left reads differently while the provider is down.
+        object.insert(
+            "incidents".to_owned(),
+            json!(state.usage.incidents().open()),
+        );
     }
     answer
 }

@@ -4,6 +4,20 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.25.0]
+
+- **The daemon reads the providers' status pages.** Once a minute, for every
+  provider a stored account is on, it asks the provider's own page for the
+  incidents it has open — Claude's unresolved list, whose global indicator
+  goes green while a major incident is still being monitored, and OpenAI's
+  summary — and keeps only what is open, in the provider's words. `proxenos
+  incidents` and the `incidents` method (§3) report them worst first, with
+  the providers asked and any page that did not answer; `usage` carries the
+  same list beside the quota. An operator watching every turn fail with a
+  529 gets the provider's sentence before deciding it is their fleet. The
+  pages are `[upstream].status` and `[upstream.anthropic].status` (§4), with
+  their defaults.
+
 ## [0.24.0]
 
 - **A tier may state the effort the client starts its model at.** `opus =

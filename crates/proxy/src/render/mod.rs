@@ -6,11 +6,13 @@
 use serde_json::Value;
 
 mod accounts;
+mod incidents;
 mod launch;
 mod status;
 mod usage;
 
 pub use accounts::*;
+pub use incidents::*;
 pub use launch::*;
 pub use status::*;
 pub use usage::*;

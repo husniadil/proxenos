@@ -529,6 +529,35 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
         sessions: Arc::clone(&sessions),
         config_path: Some(proxenos::config::config_path()),
     };
+    // The providers' status pages, asked once a minute for every provider a
+    // stored account is on (`incidents.rs`). Read by `usage` and `incidents`
+    // over the socket; nothing on the turn path waits on it.
+    {
+        let store = Arc::clone(&usage);
+        let credentials = Arc::clone(&credentials);
+        let anthropic_status = config.upstream.anthropic.status.clone();
+        let codex_status = config.upstream.status.clone();
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            loop {
+                let providers = credentials
+                    .accounts()
+                    .map(|accounts| proxenos::incidents::providers_of(&accounts))
+                    .unwrap_or_default();
+                proxenos::incidents::poll_once(
+                    store.incidents(),
+                    &providers,
+                    &client,
+                    |provider| match provider {
+                        proxenos::auth::store::Provider::Anthropic => anthropic_status.clone(),
+                        proxenos::auth::store::Provider::Codex => codex_status.clone(),
+                    },
+                )
+                .await;
+                tokio::time::sleep(proxenos::incidents::POLL).await;
+            }
+        });
+    }
     // One state, two transports. Cloned rather than rebuilt: every field is an
     // `Arc`, so the socket and the HTTP endpoint read and move exactly the same
     // things and no method can behave differently over one than the other.

@@ -491,6 +491,20 @@ async fn every_documented_method_is_answered() {
 }
 
 #[tokio::test]
+async fn incidents_are_answered_before_any_page_was_asked() {
+    let harness = Harness::start().await;
+
+    let answer = harness.call("incidents").await.unwrap();
+    assert_eq!(answer["incidents"], serde_json::json!([]));
+    assert_eq!(answer["providers"], serde_json::json!([]));
+    assert!(answer["checked_at"].is_null(), "{answer}");
+
+    // The same list rides on `usage`, beside the quota.
+    let usage = harness.call("usage").await.unwrap();
+    assert_eq!(usage["incidents"], serde_json::json!([]));
+}
+
+#[tokio::test]
 async fn an_unknown_method_is_refused_by_name() {
     let harness = Harness::start().await;
 
