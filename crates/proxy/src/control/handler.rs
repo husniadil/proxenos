@@ -122,6 +122,16 @@ pub async fn dispatch(
             // the selection's.
             let named = named_account(params, &accounts)?;
             let tiers = launch_mapping(state, &accounts, named.as_deref())?;
+            // §7.0/§7.2 — the window comes from the account that will serve
+            // this session's turns, not the one in force. A session tagged
+            // onto another account (`exec --account`) resolves its tier ids
+            // there, and their windows live in that account's catalog; read
+            // against the serving account's list they are not found and the
+            // stated window is dropped, leaving the client on its 200,000
+            // assumption. `models` already reads the named account's catalog
+            // (§7.0); the launch environment now reads the same one. Taken
+            // before `serving` consumes `named`.
+            let catalog = catalog_for(state, &accounts, named.as_deref()).await;
             let serving = named.or_else(|| serving_name_of(&accounts));
             let mut settings = state.config.client.settings(any_tier_translates(
                 &tiers,
@@ -134,7 +144,7 @@ pub async fn dispatch(
                 settings.insert("modelSettings".to_owned(), per_model);
             }
             Ok(json!({
-                "variables": environment(state, &accounts, &tiers, serving.as_deref()),
+                "variables": environment(state, &accounts, &tiers, serving.as_deref(), &catalog),
                 "settings": settings,
             }))
         }
@@ -508,35 +518,7 @@ async fn models(state: &ControlState, params: Option<&Value>) -> Result<Value, P
     }
 
     let asked = account_id_of(&stored, named.as_deref());
-    let in_force = state.catalog.current();
-    // §7.0 — a catalog is one account's menu, and the list in force is the
-    // serving account's. Asked by name about an account it was not fetched
-    // for (or holding only the fallback), fetch that account's own, as that
-    // account: a paid plan's menu and a free plan's differ, and the list in
-    // force cannot speak for either. Nothing is put in force by it — the
-    // serving account's routing keeps its list. A fetch that fails, or a
-    // daemon with no credentials to ask with, answers with what is in force,
-    // marked stale exactly as before.
-    let own = match (
-        &named,
-        in_force.is_stale_for(asked.as_deref()) || !in_force.authoritative,
-    ) {
-        (Some(name), true) => match authorizer(state) {
-            Some(authorizer) => match authorizer.authorize(Some(name)).await {
-                Ok(authorization) => state.catalog.fetch_for(&authorization).await,
-                Err(error) => {
-                    tracing::info!(%error, account = %name, "the account's catalog was not asked for");
-                    None
-                }
-            },
-            None => None,
-        },
-        _ => None,
-    };
-    let catalog = match own {
-        Some(own) => Arc::new(own),
-        None => in_force,
-    };
+    let catalog = catalog_for(state, &stored, named.as_deref()).await;
     let entries: Vec<Value> = catalog
         .selectable()
         .iter()
@@ -941,6 +923,7 @@ pub fn environment(
     accounts: &[crate::auth::store::Account],
     tiers: &[crate::config::ResolvedTier],
     serving: Option<&str>,
+    catalog: &crate::catalog::Catalog,
 ) -> Vec<(String, String)> {
     let config = configuration(state);
     let stated = |tier: &crate::config::ResolvedTier| {
@@ -953,7 +936,7 @@ pub fn environment(
         state.port,
         state.config.client.disable_connectors,
         tiers,
-        &state.catalog.current(),
+        catalog,
         accounts,
         serving,
         &stated,
@@ -1595,6 +1578,46 @@ fn serving_provider(accounts: &[crate::auth::store::Account]) -> &'static str {
 /// is a second keychain spawn (§8.4).
 fn serving_account(accounts: &[crate::auth::store::Account]) -> Option<String> {
     account_id_of(accounts, None)
+}
+
+/// The catalog to read for the account a request names.
+///
+/// The serving account's list in force, or — when that list cannot speak for
+/// the named account (it was fetched for another, or is only the fallback) —
+/// that account's own, fetched as it (§7.0). A session tagged onto another
+/// account (`exec --account`) resolves its tier ids and their windows in that
+/// account's menu, not the serving account's; `models` and the launch
+/// environment both need the same resolution, so it lives here once. Nothing
+/// is put in force by it — the serving account's routing keeps its list — and
+/// a fetch that fails, or a daemon with no credentials to ask with, answers
+/// with what is in force.
+async fn catalog_for(
+    state: &ControlState,
+    accounts: &[crate::auth::store::Account],
+    named: Option<&str>,
+) -> std::sync::Arc<crate::catalog::Catalog> {
+    let asked = account_id_of(accounts, named);
+    let in_force = state.catalog.current();
+    let own = match (
+        named,
+        in_force.is_stale_for(asked.as_deref()) || !in_force.authoritative,
+    ) {
+        (Some(name), true) => match authorizer(state) {
+            Some(authorizer) => match authorizer.authorize(Some(name)).await {
+                Ok(authorization) => state.catalog.fetch_for(&authorization).await,
+                Err(error) => {
+                    tracing::info!(%error, account = %name, "the account's catalog was not asked for");
+                    None
+                }
+            },
+            None => None,
+        },
+        _ => None,
+    };
+    match own {
+        Some(own) => std::sync::Arc::new(own),
+        None => in_force,
+    }
 }
 
 /// The same id for whichever account a method was asked about: the one it

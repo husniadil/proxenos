@@ -6,6 +6,17 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **A launch tagged onto another account states that account's context
+  window.** A session started with `exec --account <name>` resolves its tier
+  ids in that account's mapping, and the launch environment now reads that
+  account's catalog for their windows — the same catalog `models --account`
+  reads — rather than the serving account's list in force. Without this, a
+  session served by an Anthropic account but tagged onto a codex account was
+  handed the codex tier ids with no window beside them: the serving account's
+  catalog does not carry them, so `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW` were dropped and the client fell back to its
+  200,000-token assumption and compacted early. (`proxy-behavior.md` §7.2.)
+
 - **`tiers --account <name>` reads that account's own mapping.** The `tiers`
   method takes `{"account": name}` and answers with that stored account's
   section of the file as it is now, resolved the way a switch to it would —

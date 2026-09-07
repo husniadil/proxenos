@@ -3222,6 +3222,51 @@ async fn switching_between_accounts_with_different_catalogs_needs_no_config_edit
     );
 }
 
+/// The launch window is the tagged account's own, not the serving account's.
+///
+/// A session tagged onto another account (`exec --account`) resolves its tier
+/// ids in that account's mapping, and their windows live in that account's
+/// catalog. Before the env method read the same catalog `models` does, it read
+/// the serving account's list in force, did not find the tagged account's
+/// models there, and dropped the window — so the client fell back to 200,000
+/// and compacted early. Serving `acct_two`, asked as `acct_one`, the window is
+/// `acct_one`'s model's, fetched as `acct_one`: 272,000 at the default 95%
+/// effective share. (`proxy-behavior.md` §7.2.)
+#[tokio::test]
+async fn the_launch_window_is_the_tagged_accounts_own() {
+    let catalogs = CatalogServer::start().await;
+    let harness = Harness::start()
+        .await
+        .with_configuration(mapping_per_account(&["acct_one", "acct_two"]))
+        .await;
+    harness
+        .store
+        .add(&grant("acct_one", "a-one"), None)
+        .unwrap();
+    harness
+        .store
+        .add(&grant("acct_two", "a-two"), None)
+        .unwrap();
+    harness.store.select("acct_two").unwrap();
+    let harness = harness.with_catalog_source(&catalogs.url).await;
+
+    let rendered = render::env_shell(
+        &harness
+            .call_with("env", json!({ "account": "acct_one" }))
+            .await
+            .unwrap(),
+    );
+
+    assert!(
+        rendered.contains("CLAUDE_CODE_MAX_CONTEXT_TOKENS=258400"),
+        "the tagged account's own window should be stated: {rendered}"
+    );
+    assert!(
+        rendered.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW=258400"),
+        "{rendered}"
+    );
+}
+
 /// What the stub carries: what it was asked for, and whether it is refusing.
 type CatalogState = (
     Arc<std::sync::Mutex<Vec<String>>>,
