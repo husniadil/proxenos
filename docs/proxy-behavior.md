@@ -861,8 +861,11 @@ Before a session's first completed request the estimate is uncalibrated.
 
 The catalog is fetched from the backend at startup and held for the life of the
 daemon. There is no TTL: a model added, renamed, or withdrawn after the daemon
-started is not noticed until something else makes it ask again. The one thing
-that does is the daemon changing which account it serves, for the reason below.
+started is not noticed until something else makes it ask again. What puts a
+new list in force is the daemon changing which account it serves, for the
+reason below; a `models` question about another stored account (`api.md` §3)
+fetches that account's own list to answer with, as that account, and puts
+nothing in force.
 That is also why a mapping validated at startup cannot go stale on its own, and
 why the only mismatch worth reporting otherwise is a mapped model the catalog
 withholds (§7.1).

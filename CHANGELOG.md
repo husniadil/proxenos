@@ -6,6 +6,15 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **`models --account <name>` answers with that account's own catalog.** Asked
+  about an account the list in force was not fetched for — or while the list
+  in force is the fallback — the daemon fetches that account's catalog as that
+  account and answers from it, without putting it in force: the serving
+  account's routing keeps its list. A free plan's menu and a paid plan's
+  differ (`gpt-6-astra`, `gpt-5.6-sol`), and the serving account's list could
+  not speak for either. A fetch that fails answers as before, with the list in
+  force marked stale. (`api.md` §3 `models`.)
+
 - **The fallback model list names `gpt-6-astra` and `gpt-5.6-sol`.** Where
   the catalog cannot be fetched — a daemon that starts serving an Anthropic
   account fetches with that credential and is refused, so `models --account

@@ -103,7 +103,7 @@ pub async fn dispatch(
         // the same reason: a launch reads this list to decide whether the id
         // it was given has a long-context variant, and the menu that answers
         // that is the serving account's (§9.1).
-        "models" => models(state, params),
+        "models" => models(state, params).await,
         "tiers" => Ok(tiers(state)),
         // Two halves, because the client has two configuration surfaces and
         // only one of them is the environment. `variables` keeps the shape it
@@ -473,7 +473,7 @@ fn status(state: &ControlState) -> Value {
     })
 }
 
-fn models(state: &ControlState, params: Option<&Value>) -> Result<Value, ProxyError> {
+async fn models(state: &ControlState, params: Option<&Value>) -> Result<Value, ProxyError> {
     let stored = state.credentials.accounts().unwrap_or_default();
     // Whose menu this is. A name the store does not hold is refused rather
     // than answered about the selection, the same as `env` (§2.2).
@@ -507,7 +507,36 @@ fn models(state: &ControlState, params: Option<&Value>) -> Result<Value, ProxyEr
         }));
     }
 
-    let catalog = state.catalog.current();
+    let asked = account_id_of(&stored, named.as_deref());
+    let in_force = state.catalog.current();
+    // §7.0 — a catalog is one account's menu, and the list in force is the
+    // serving account's. Asked by name about an account it was not fetched
+    // for (or holding only the fallback), fetch that account's own, as that
+    // account: a paid plan's menu and a free plan's differ, and the list in
+    // force cannot speak for either. Nothing is put in force by it — the
+    // serving account's routing keeps its list. A fetch that fails, or a
+    // daemon with no credentials to ask with, answers with what is in force,
+    // marked stale exactly as before.
+    let own = match (
+        &named,
+        in_force.is_stale_for(asked.as_deref()) || !in_force.authoritative,
+    ) {
+        (Some(name), true) => match authorizer(state) {
+            Some(authorizer) => match authorizer.authorize(Some(name)).await {
+                Ok(authorization) => state.catalog.fetch_for(&authorization).await,
+                Err(error) => {
+                    tracing::info!(%error, account = %name, "the account's catalog was not asked for");
+                    None
+                }
+            },
+            None => None,
+        },
+        _ => None,
+    };
+    let catalog = match own {
+        Some(own) => Arc::new(own),
+        None => in_force,
+    };
     let entries: Vec<Value> = catalog
         .selectable()
         .iter()
@@ -528,7 +557,7 @@ fn models(state: &ControlState, params: Option<&Value>) -> Result<Value, ProxyEr
         // The catalog is one account's menu (§7.0), so a list fetched for
         // somebody else is stale for whoever this was asked about — the
         // account a launch names as readily as the selection.
-        "stale": catalog.is_stale_for(account_id_of(&stored, named.as_deref()).as_deref()),
+        "stale": catalog.is_stale_for(asked.as_deref()),
     }))
 }
 

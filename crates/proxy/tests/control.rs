@@ -3017,6 +3017,57 @@ async fn selecting_an_account_refetches_the_catalog_as_that_account() {
     );
 }
 
+/// `models` asked about another account fetches that account's own menu, as
+/// that account, and leaves the list in force alone.
+///
+/// A catalog is one account's menu (§7.0): a paid plan's and a free plan's
+/// differ, so the serving account's list cannot answer for a named other. The
+/// stub keys its answer on the account header, which is what proves the fetch
+/// was made as the account asked about; the serving account's routing keeps
+/// the list it had.
+#[tokio::test]
+async fn models_asked_about_another_account_fetches_as_that_account() {
+    let catalogs = CatalogServer::start().await;
+    let harness = Harness::start()
+        .await
+        .with_configuration(mapping_per_account(&["acct_one", "acct_two"]))
+        .await;
+    harness
+        .store
+        .add(&grant("acct_one", "a-one"), None)
+        .unwrap();
+    harness
+        .store
+        .add(&grant("acct_two", "a-two"), None)
+        .unwrap();
+    harness.store.select("acct_two").unwrap();
+    let harness = harness.with_catalog_source(&catalogs.url).await;
+
+    let other = harness
+        .call_with("models", json!({ "account": "acct_one" }))
+        .await
+        .unwrap();
+    assert_eq!(other["models"][0]["id"], json!("model-for-acct_one"));
+    assert_eq!(other["authoritative"], json!(true));
+    assert_eq!(
+        other["stale"],
+        json!(false),
+        "a list fetched for the account asked about is not stale"
+    );
+
+    let serving = harness.call("models").await.unwrap();
+    assert_eq!(
+        serving["models"][0]["id"],
+        json!("model-for-acct_two"),
+        "the list in force is still the serving account's"
+    );
+    assert_eq!(
+        catalogs.accounts(),
+        vec!["acct_two".to_owned(), "acct_one".to_owned()],
+        "the fetch has to be made as the account asked about"
+    );
+}
+
 /// A refetch that fails keeps the list already in force.
 ///
 /// Fetch failure is not evidence that a model went away (§7.1). Replacing a

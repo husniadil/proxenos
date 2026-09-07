@@ -631,6 +631,32 @@ impl CatalogSource {
         }
     }
 
+    /// Fetch one account's catalog, as that account, without putting it in
+    /// force: the answer to a question about an account the list in force
+    /// was not fetched for (§7.0). `None` where there is nothing to fetch
+    /// from, or the fetch failed — the caller keeps whatever it holds.
+    pub async fn fetch_for(
+        &self,
+        authorization: &crate::auth::authorize::Authorization,
+    ) -> Option<Catalog> {
+        // The endpoint this credential belongs to, chosen from the credential
+        // rather than from whichever kind was selected when the daemon
+        // started. The pairing is structural here: there is no argument that
+        // could cross it.
+        let endpoint = self.endpoint(authorization.kind);
+        if endpoint.is_empty() {
+            return None;
+        }
+        fetch(
+            &reqwest::Client::new(),
+            endpoint,
+            authorization,
+            &self.client_version,
+            self.default_percent,
+        )
+        .await
+    }
+
     /// Fetch the catalog for this account and put it in force.
     ///
     /// **A failed fetch keeps what is already there.** Fetch failure is not
@@ -638,25 +664,7 @@ impl CatalogSource {
     /// the fallback on a network blink would withdraw models the account has.
     /// The answer says which happened rather than leaving it to be discovered.
     pub async fn refresh(&self, authorization: &crate::auth::authorize::Authorization) -> bool {
-        // The endpoint this credential belongs to, chosen from the credential
-        // rather than from whichever kind was selected when the daemon
-        // started. The pairing is structural here: there is no argument that
-        // could cross it.
-        let endpoint = self.endpoint(authorization.kind);
-        if endpoint.is_empty() {
-            return false;
-        }
-
-        let fetched = fetch(
-            &reqwest::Client::new(),
-            endpoint,
-            authorization,
-            &self.client_version,
-            self.default_percent,
-        )
-        .await;
-
-        let Some(catalog) = fetched else {
+        let Some(catalog) = self.fetch_for(authorization).await else {
             tracing::warn!("could not refetch the model catalog; keeping the list in force");
             return false;
         };
