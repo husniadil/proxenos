@@ -1083,10 +1083,19 @@ keeps it, because the two costs are not symmetrical — a denied entitlement mak
 a session smaller than it could have been, while a fabricated million-token
 window makes one that overruns.
 
-Where the catalog knows the window, the environment also states it:
-`CLAUDE_CODE_MAX_CONTEXT_TOKENS` and `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, both set
-to the effective window, and to the smallest across the mapped tiers since one
-value covers them all.
+Where the catalog knows the window, the environment states two figures, because
+the client reads two and they mean different things.
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` is the ceiling — the model's raw
+`context_window`, the tokens the backend accepts and what the client's context
+meter is drawn against. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is where compaction
+fires — the effective window, that raw window less the share §7.0 reserves for
+instructions, tools and output — so a turn compacts before the ceiling, leaving
+room for the response. Each is the smallest across the mapped tiers, since one
+value covers them all; the effective minimum never exceeds the raw minimum, so
+the compaction point stays at or below the ceiling. (Both were once the
+effective window, which under-reported the ceiling by that share: the meter read
+short and the last few per cent of the model's context went unused, while
+compaction landed in the same place regardless.)
 
 **Neither is stated once any tier is relayed** (§9.1). The client recognizes
 those ids natively and knows their windows already, and the catalog this figure

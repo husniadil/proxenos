@@ -4,6 +4,19 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **The stated context ceiling is the model's real window; compaction fires
+  below it.** `CLAUDE_CODE_MAX_CONTEXT_TOKENS` now carries the raw
+  `context_window` — the tokens the backend accepts, and what the client's
+  context meter is drawn against — while `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+  carries the effective window (that raw window less the share §7.0 reserves
+  for instructions, tools and output), so a turn compacts before the ceiling.
+  Both were the effective window before, which under-reported the ceiling by
+  that share: the meter read short and the last few per cent of the model's
+  context went unused, though compaction landed in the same place. Stated only
+  on a translating mapping, as before. (`proxy-behavior.md` §7.2.)
+
 ## [0.26.0]
 
 - **A launch tagged onto another account states that account's context

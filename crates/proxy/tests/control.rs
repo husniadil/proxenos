@@ -1565,13 +1565,15 @@ async fn env_states_the_real_context_window() {
 
     // The tiers here map to two models, 272000 and 200000. One variable covers
     // all four tiers, so the smallest wins — it is the only one that cannot
-    // overrun. And the effective window rather than the raw one: 200000 × 95%.
+    // overrun. The ceiling is the raw window (200000), what the backend
+    // accepts and the meter is drawn against.
     assert!(
-        rendered.contains("export CLAUDE_CODE_MAX_CONTEXT_TOKENS=190000"),
+        rendered.contains("export CLAUDE_CODE_MAX_CONTEXT_TOKENS=200000"),
         "{rendered}"
     );
 
-    // Stating the window without also setting where to compact is worse than
+    // And compaction fires below it, at the effective window (200000 × 95%).
+    // Stating the ceiling without also setting where to compact is worse than
     // saying nothing: the client drops its own 200,000 assumption and, not
     // recognizing the model, then enforces no limit at all.
     assert!(
@@ -3258,12 +3260,12 @@ async fn the_launch_window_is_the_tagged_accounts_own() {
     );
 
     assert!(
-        rendered.contains("CLAUDE_CODE_MAX_CONTEXT_TOKENS=258400"),
-        "the tagged account's own window should be stated: {rendered}"
+        rendered.contains("CLAUDE_CODE_MAX_CONTEXT_TOKENS=272000"),
+        "the tagged account's own raw window should be the ceiling: {rendered}"
     );
     assert!(
         rendered.contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW=258400"),
-        "{rendered}"
+        "the effective window (272000 x 95%) is where it compacts: {rendered}"
     );
 }
 
