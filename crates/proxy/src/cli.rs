@@ -115,6 +115,10 @@ pub struct TiersArgs {
     /// Print the socket's own payload instead of the table.
     #[arg(long, global = true)]
     pub json: bool,
+    /// Whose mapping to read: a stored account's own section rather than the
+    /// one in force. Reading only; `set` names its account with `--as`.
+    #[arg(long, value_name = "ACCOUNT")]
+    pub account: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

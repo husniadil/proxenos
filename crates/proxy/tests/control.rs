@@ -3017,6 +3017,55 @@ async fn selecting_an_account_refetches_the_catalog_as_that_account() {
     );
 }
 
+/// `tiers` asked about another account reads that account's own mapping.
+///
+/// A tier is one account's mapping (§7.1): the section in force is the
+/// serving account's, and a launch pinned to another (`exec --account`) runs
+/// on that account's section. Read from the file, so a `tiers.set` made for
+/// it since the daemon started is seen; and with no `missing_tiers`, because
+/// those are a question for a catalog that is not in force here.
+#[tokio::test]
+async fn tiers_asked_about_another_account_reads_its_own_mapping() {
+    let harness = Harness::start()
+        .await
+        .with_configuration(mapping_per_account(&["acct_one", "acct_two"]))
+        .await;
+    // Read from the file, not the daemon's copy: the file is where a
+    // `tiers.set` for another account lands after start.
+    std::fs::write(
+        &harness.config_file,
+        toml::to_string(&*harness.config).unwrap(),
+    )
+    .unwrap();
+    harness
+        .store
+        .add(&grant("acct_one", "a-one"), None)
+        .unwrap();
+    harness
+        .store
+        .add(&grant("acct_two", "a-two"), None)
+        .unwrap();
+    harness.store.select("acct_two").unwrap();
+
+    let other = harness
+        .call_with("tiers", json!({ "account": "acct_one" }))
+        .await
+        .unwrap();
+    assert_eq!(other["tiers"]["opus"], json!("model-for-acct_one"));
+    assert_eq!(other["tiers"]["fable"], json!("model-for-acct_one"));
+    assert_eq!(other["account"], json!("acct_one"));
+    assert!(
+        other.get("missing_tiers").is_none(),
+        "another account's catalog is not in force, so nothing is claimed missing"
+    );
+
+    let unknown = harness
+        .call_with("tiers", json!({ "account": "nobody" }))
+        .await
+        .expect_err("a name the store does not hold is refused");
+    assert!(unknown.contains("nobody"), "{unknown}");
+}
+
 /// `models` asked about another account fetches that account's own menu, as
 /// that account, and leaves the list in force alone.
 ///

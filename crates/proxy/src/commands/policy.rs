@@ -15,9 +15,18 @@ use serde_json::json;
 
 pub(crate) async fn tiers(args: cli::TiersArgs) -> Result<()> {
     let endpoint = control::Endpoint::resolve()?;
+    if args.account.is_some() && args.action.is_some() {
+        anyhow::bail!(
+            "--account reads a stored account's mapping; `tiers set` names its account with --as"
+        );
+    }
     let set = match args.action {
         None => {
-            let result = control::dial(&endpoint, "tiers", None).await?;
+            let params = args
+                .account
+                .as_deref()
+                .map(|account| json!({ "account": account }));
+            let result = control::dial(&endpoint, "tiers", params).await?;
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
                 return Ok(());

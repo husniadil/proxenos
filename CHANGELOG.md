@@ -6,6 +6,14 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **`tiers --account <name>` reads that account's own mapping.** The `tiers`
+  method takes `{"account": name}` and answers with that stored account's
+  section of the file as it is now, resolved the way a switch to it would —
+  what a launch pinned to it (`exec --account`) runs on — naming the account
+  back and leaving `missing_tiers` off, since that account's catalog is not
+  in force. Reading only; `tiers set` names its account as before.
+  (`api.md` §3 `tiers`.)
+
 - **`models --account <name>` answers with that account's own catalog.** Asked
   about an account the list in force was not fetched for — or while the list
   in force is the fallback — the daemon fetches that account's catalog as that

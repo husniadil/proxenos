@@ -104,7 +104,7 @@ pub async fn dispatch(
         // it was given has a long-context variant, and the menu that answers
         // that is the serving account's (§9.1).
         "models" => models(state, params).await,
-        "tiers" => Ok(tiers(state)),
+        "tiers" => tiers(state, params),
         // Two halves, because the client has two configuration surfaces and
         // only one of them is the environment. `variables` keeps the shape it
         // has always had; `settings` is additive, and **always present** — an
@@ -561,12 +561,35 @@ async fn models(state: &ControlState, params: Option<&Value>) -> Result<Value, P
     }))
 }
 
-fn tiers(state: &ControlState) -> Value {
-    json!({
+fn tiers(state: &ControlState, params: Option<&Value>) -> Result<Value, ProxyError> {
+    let stored = state.credentials.accounts().unwrap_or_default();
+    let named = named_account(params, &stored)?;
+    // §7.1 — another account's mapping is its own section of the file,
+    // resolved the way a switch to it would resolve it, and read from the
+    // file so a `tiers.set` made for it since the daemon started is seen.
+    // Its `missing_tiers` are a question for that account's catalog, which
+    // is not in force here, so the answer carries none rather than the
+    // serving account's.
+    if let Some(name) = named
+        && !stored
+            .iter()
+            .any(|account| account.selected && account.name == name)
+    {
+        let config = config_on_disk(state)?;
+        let resolved = config
+            .tiers_for(Some(&name))
+            .resolve(config.cross_account_policy())?;
+        return Ok(json!({
+            "tiers": tier_map_of(&resolved),
+            "account": name,
+            "cross_account_tiers": cross_account_permitted(state),
+        }));
+    }
+    Ok(json!({
         "tiers": tier_map(state),
         "missing_tiers": missing_tiers(state),
         "cross_account_tiers": cross_account_permitted(state),
-    })
+    }))
 }
 
 fn cross_account_permitted(state: &ControlState) -> bool {
@@ -602,8 +625,12 @@ fn missing_tiers(state: &ControlState) -> Vec<&'static str> {
 }
 
 fn tier_map(state: &ControlState) -> Value {
+    tier_map_of(state.policy.get().tiers())
+}
+
+fn tier_map_of(tiers: &[crate::config::ResolvedTier]) -> Value {
     let mut map = serde_json::Map::new();
-    for tier in state.policy.get().tiers().iter() {
+    for tier in tiers {
         // The same two shapes the configuration takes: a string for the
         // serving account at the client's own effort, an object where the
         // tier pins another account or states an effort.
@@ -2131,13 +2158,12 @@ const NEEDS_RESTART: [&str; 5] = ["instructions", "client", "transport", "upstre
 /// **A turn in flight keeps what it started with**, exactly as `tiers.set`
 /// leaves it: readers take a snapshot of the policy, and the store is read per
 /// request.
-fn reload_config(state: &ControlState) -> Result<Value, ProxyError> {
+/// The configuration as the file has it now — or, for a daemon with no
+/// file, the one it started with.
+fn config_on_disk(state: &ControlState) -> Result<crate::config::Config, ProxyError> {
     let Some(path) = state.config_path.as_ref() else {
-        return Err(ProxyError::invalid_request(
-            "this daemon has no configuration file to re-read",
-        ));
+        return Ok((*state.config).clone());
     };
-
     let config = match std::fs::read_to_string(path) {
         Ok(document) => toml::from_str::<crate::config::Config>(&document).map_err(|error| {
             ProxyError::invalid_request(format!(
@@ -2160,6 +2186,16 @@ fn reload_config(state: &ControlState) -> Result<Value, ProxyError> {
         }
     };
     config.validate()?;
+    Ok(config)
+}
+
+fn reload_config(state: &ControlState) -> Result<Value, ProxyError> {
+    if state.config_path.is_none() {
+        return Err(ProxyError::invalid_request(
+            "this daemon has no configuration file to re-read",
+        ));
+    }
+    let config = config_on_disk(state)?;
 
     let mut reloaded = Vec::new();
 
