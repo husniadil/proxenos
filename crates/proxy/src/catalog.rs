@@ -136,22 +136,35 @@ impl Catalog {
     /// stale silently: nothing here can tell that an id has stopped existing.
     /// That is why it is only ever a fallback, and why the catalog it stands in
     /// for is marked non-authoritative when it is used.
+    ///
+    /// `gpt-6-astra` and `gpt-5.6-sol` are plan-gated: a paid account serves
+    /// both (measured 2026-09-07), a free one refuses each as unsupported. They
+    /// are listed all the same, because this list is a menu for whichever
+    /// account is asked about, and a fallback that hides what a paid account
+    /// has is a worse guess than one that names what a free account lacks.
     pub fn fallback() -> Self {
-        let models = ["gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini"]
-            .into_iter()
-            .map(|id| {
-                (
-                    id.to_owned(),
-                    Model {
-                        id: id.to_owned(),
-                        context_window: None,
-                        effective_percent: None,
-                        visible: true,
-                        efforts: Vec::new(),
-                    },
-                )
-            })
-            .collect();
+        let models = [
+            "gpt-6-astra",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+            "gpt-5.4-mini",
+        ]
+        .into_iter()
+        .map(|id| {
+            (
+                id.to_owned(),
+                Model {
+                    id: id.to_owned(),
+                    context_window: None,
+                    effective_percent: None,
+                    visible: true,
+                    efforts: Vec::new(),
+                },
+            )
+        })
+        .collect();
 
         Self {
             models,

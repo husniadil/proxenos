@@ -4,6 +4,16 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **The fallback model list names `gpt-6-astra` and `gpt-5.6-sol`.** Where
+  the catalog cannot be fetched — a daemon that starts serving an Anthropic
+  account fetches with that credential and is refused, so `models --account
+  <codex account>` answers from the fallback — the menu now carries both
+  plan-gated models beside the four it had. Both are served by a paid account and refused by a free one; the
+  list says what can be asked for, and a fetch failure was never evidence
+  that a model is absent (§7.1).
+
 ## [0.25.0]
 
 - **The daemon reads the providers' status pages.** Once a minute, for every
