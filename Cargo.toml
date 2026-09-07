@@ -93,6 +93,22 @@ redundant_closure_for_method_calls = "deny"
 uninlined_format_args = "deny"
 unnecessary_to_owned = "deny"
 
+# Debug builds carried full DWARF for every dependency, and on macOS that lands
+# as a .dSYM bundle per binary — 47 of them for `--all-targets`, 100-170 MB
+# each. Cargo never reclaims the ones a later build supersedes, so the
+# directory grows without bound: one measured checkout reached 71.9 GB across
+# 140,054 files. A directory that size is a hazard beyond disk here, since
+# anything doing a readdir of it per process launch pays for every entry.
+#
+# Line tables are what a backtrace actually reads, so the workspace keeps them
+# and the dependencies keep nothing. Measured over one clean
+# `--all-targets --all-features` build: 4.3 GB before, 2.4 GB after.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = 0
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
