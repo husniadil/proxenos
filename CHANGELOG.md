@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.27.0]
 
 - **`status` publishes every method the daemon answers.** §12 says a caller
   needing a field or a method has to establish it is there rather than infer it
