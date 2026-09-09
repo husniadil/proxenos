@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.26.2]
 
 - **A tool schema's `pattern` is dropped where the backend would refuse it.**
   Its validator compiles patterns in a narrower dialect than the one client
