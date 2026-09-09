@@ -4,6 +4,18 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **`status` publishes every method the daemon answers.** §12 says a caller
+  needing a field or a method has to establish it is there rather than infer it
+  from the version, and until now the version was the only thing there was to
+  compare — so that is what front-ends did, each holding its own policy about
+  which release mattered and getting it wrong for a patched build or a
+  forgotten bump. `methods` is the `METHODS` vocabulary as this build answers
+  it, and a test holds the published list to the answered one. Its absence
+  means a build older than the field, which a caller reads by asking and taking
+  the refusal.
+
 ## [0.26.2]
 
 - **A tool schema's `pattern` is dropped where the backend would refuse it.**

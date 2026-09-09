@@ -490,6 +490,24 @@ async fn every_documented_method_is_answered() {
     }
 }
 
+/// `status` publishes the same vocabulary, so a front-end can establish a
+/// method is there instead of comparing versions (§12). The two lists must be
+/// the same one: a method answered but not published is one no caller will
+/// use, and a method published but not answered is the contract above.
+#[tokio::test]
+async fn status_publishes_every_method_it_answers() {
+    let harness = Harness::start().await;
+
+    let status = harness.call("status").await.unwrap();
+    let published: Vec<&str> = status["methods"]
+        .as_array()
+        .expect("status carries methods")
+        .iter()
+        .map(|method| method.as_str().expect("a method is a string"))
+        .collect();
+    assert_eq!(published, METHODS.to_vec(), "{status}");
+}
+
 #[tokio::test]
 async fn incidents_are_answered_before_any_page_was_asked() {
     let harness = Harness::start().await;

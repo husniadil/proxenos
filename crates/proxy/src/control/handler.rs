@@ -446,6 +446,16 @@ fn status(state: &ControlState) -> Value {
         // does not.
         "catalog_stale": catalog.is_stale_for(serving_account(&stored).as_deref()),
         "catalog_account": catalog.fetched_for.clone(),
+        // Every method this build answers. A front-end that needs one has to
+        // establish it is there, and §12 forbids inferring that from the
+        // version: comparing versions forces a policy about which differences
+        // matter and gets it wrong for a patched build or a forgotten bump.
+        // Without this the only thing to compare was the version, so that is
+        // what callers did. Present and empty is impossible — a daemon that
+        // answered this call answers `status` — so absence means a build older
+        // than the field, and a caller reading none should ask and read the
+        // refusal rather than assume.
+        "methods": crate::control::protocol::METHODS,
         // The build actually serving this socket, which is not necessarily the
         // build the caller was invoked from.
         "version": version(),
