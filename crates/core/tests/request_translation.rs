@@ -367,6 +367,112 @@ fn a_schema_without_properties_gains_an_empty_one() {
     assert_eq!(out["tools"][0]["parameters"]["properties"], json!({}));
 }
 
+/// §2.4 — a schema keyword the backend's regex validator accepts is left
+/// alone. Its dialect is narrower than the client's, but the patterns most
+/// schemas carry are inside both.
+#[rstest]
+#[case::literal(r"^[a-z0-9_-]{1,64}$")]
+#[case::dates(r"^\d{4}-\d{2}-\d{2}$")]
+#[case::alternation(r"^(cat|dog)s?$")]
+#[case::lookahead(r"^(?!\.\.?(?:/|$))[A-Za-z0-9_.~:@+-]{1,200}$")]
+#[case::escaped_punctuation(r"^\$\d+\.\d\d$")]
+fn a_pattern_the_validator_accepts_survives(#[case] pattern: &str) {
+    let out = translate(tool_with_schema(json!({
+        "type": "object",
+        "properties": { "field": { "type": "string", "pattern": pattern } },
+    })));
+
+    assert_eq!(
+        out["tools"][0]["parameters"]["properties"]["field"]["pattern"],
+        json!(pattern)
+    );
+}
+
+/// §2.4 — a pattern the backend's validator refuses is dropped rather than
+/// forwarded. Refusal is not partial: one unsupported pattern anywhere in one
+/// tool's schema rejects the whole request, so the turn dies for a reason the
+/// client can neither see nor fix. Dropping the pattern costs the model a hint
+/// about one argument.
+#[rstest]
+#[case::unicode_property(r"^[^\p{Cc}\p{Cf}]{1,200}$")]
+#[case::negated_unicode_property(r"^\P{L}$")]
+#[case::braced_code_point(r"^\u{1F600}$")]
+#[case::named_group(r"^(?<name>a)$")]
+#[case::control_escape(r"^\cA$")]
+#[case::back_reference_name(r"^(a)\k<a>$")]
+#[case::inline_flags(r"^a(?i)b$")]
+#[case::empty_class("^[]$")]
+#[case::escape_ended_range(r"^[a-\d]$")]
+#[case::unbalanced_group("^(a$")]
+fn a_pattern_the_validator_refuses_is_dropped(#[case] pattern: &str) {
+    let out = translate(tool_with_schema(json!({
+        "type": "object",
+        "properties": { "field": { "type": "string", "pattern": pattern } },
+    })));
+
+    assert_eq!(
+        out["tools"][0]["parameters"]["properties"]["field"],
+        json!({ "type": "string" })
+    );
+}
+
+/// §2.4 — the validator reads every schema in the tree, so the drop follows it
+/// there: nested subschemas, list keywords, and the *keys* of
+/// `patternProperties`, which are patterns themselves.
+#[test]
+fn an_unsupported_pattern_is_dropped_wherever_it_sits() {
+    let out = translate(tool_with_schema(json!({
+        "type": "object",
+        "properties": {
+            "list": { "type": "array", "items": { "type": "string", "pattern": r"^\p{L}$" } },
+            "names": { "type": "object", "propertyNames": { "pattern": r"^\p{L}$" } },
+            "either": { "anyOf": [{ "type": "string", "pattern": r"^\p{L}$" }] },
+            "map": {
+                "type": "object",
+                "patternProperties": {
+                    r"^\p{L}$": { "type": "string" },
+                    "^[a-z]+$": { "type": "string", "pattern": r"^\p{L}$" },
+                },
+            },
+        },
+    })));
+
+    let properties = &out["tools"][0]["parameters"]["properties"];
+    assert_eq!(properties["list"]["items"], json!({ "type": "string" }));
+    assert_eq!(properties["names"]["propertyNames"], json!({}));
+    assert_eq!(
+        properties["either"]["anyOf"][0],
+        json!({ "type": "string" })
+    );
+    assert_eq!(
+        properties["map"]["patternProperties"],
+        json!({ "^[a-z]+$": { "type": "string" } })
+    );
+}
+
+/// A property *named* `pattern` is a name, not the keyword, and its schema is
+/// left as it stands.
+#[test]
+fn a_property_named_pattern_is_not_a_pattern() {
+    let out = translate(tool_with_schema(json!({
+        "type": "object",
+        "properties": { "pattern": { "type": "string", "description": "a regex" } },
+    })));
+
+    assert_eq!(
+        out["tools"][0]["parameters"]["properties"]["pattern"],
+        json!({ "type": "string", "description": "a regex" })
+    );
+}
+
+fn tool_with_schema(schema: Value) -> Value {
+    json!({
+        "model": "gpt-5.5",
+        "messages": [{ "role": "user", "content": "hello" }],
+        "tools": [{ "name": "Probe", "input_schema": schema }],
+    })
+}
+
 /// §2.6 — any tool whose `type` begins with `web_search` is the server-side
 /// search tool. Translating it as a function produces a tool the model cannot
 /// execute and a search that silently returns nothing.

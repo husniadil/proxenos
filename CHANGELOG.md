@@ -4,6 +4,21 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **A tool schema's `pattern` is dropped where the backend would refuse it.**
+  Its validator compiles patterns in a narrower dialect than the one client
+  schemas are written against, and a Unicode property escape (`\p{Cc}`), a
+  braced code point, a control escape or a named group anywhere in one tool's
+  schema rejected the entire request: `Invalid schema for function '<tool>':
+  '<pattern>' is not a 'regex'`. Every turn declaring that tool failed,
+  including the compaction turn, and the client could neither see the cause nor
+  work around it. Such patterns are now dropped on the translating path,
+  throughout the schema tree and in the keys of `patternProperties`. What is
+  kept is decided by an allow-list, so a pattern using anything unrecognized
+  goes too — a false accept fails the turn, a false drop loses a hint the
+  backend never enforced. (`proxy-behavior.md` §2.4.)
+
 ## [0.26.1]
 
 - **The stated context ceiling is the model's real window; compaction fires

@@ -154,6 +154,26 @@ Function tools flatten from `{name, description, input_schema}` to `{type:
 "function", name, description, strict, parameters}`. A schema with no
 `properties` key gains an empty one.
 
+Every `pattern` the backend's schema validator would refuse is dropped, in the
+tool schema and in every subschema below it, including the keys of
+`patternProperties`, which are patterns themselves. That validator's dialect is
+narrower than the one the client's schemas are written against: it has no
+Unicode property escapes (`\p{Cc}`), no braced code points (`\u{1F600}`), no
+control escapes (`\cA`), one spelling of a named group the client does not use,
+and no tolerance for a class whose range ends in an escape. Lookaround and
+plain escapes it takes.
+
+Refusal is not partial. One unsupported pattern anywhere in one tool's schema
+rejects the whole request, and the client can neither see the reason nor fix it,
+so the turn dies wherever that tool is declared. Dropping the pattern costs the
+model a hint about one argument, and `strict` is false, so nothing enforced it
+either way.
+
+Which patterns are kept is decided by a narrow allow-list rather than a list of
+known-bad constructs: a pattern using anything unrecognized is dropped even
+where the validator would have taken it. A false accept fails the turn; a false
+drop loses a hint.
+
 `strict` is always false. Strict mode constrains the schema — every property
 required, no additional properties — and the client's tool schemas do not
 comply. Claiming it over a non-compliant schema is a request rejection, not a

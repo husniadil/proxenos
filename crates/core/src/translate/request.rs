@@ -255,7 +255,8 @@ fn translate_tool(tool: &Tool) -> ToolSpec {
     }
 }
 
-/// An object schema with no `properties` gains an empty one.
+/// An object schema with no `properties` gains an empty one, and every
+/// `pattern` the backend's validator would refuse is dropped.
 fn normalize_schema(schema: Option<Value>) -> Value {
     let mut schema = schema.unwrap_or_else(|| json!({ "type": "object" }));
     if let Some(object) = schema.as_object_mut()
@@ -263,6 +264,7 @@ fn normalize_schema(schema: Option<Value>) -> Value {
     {
         object.insert("properties".to_owned(), json!({}));
     }
+    super::schema::drop_unsupported_patterns(&mut schema);
     schema
 }
 
