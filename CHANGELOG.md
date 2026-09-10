@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.28.0]
 
 - **An open incident carries what has been posted about it.** A row said an
   incident existed and stopped there, so a front-end wanting the sentence that
