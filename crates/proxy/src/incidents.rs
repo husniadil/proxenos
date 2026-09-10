@@ -7,6 +7,12 @@
 //! provider a stored account is on and for none other, and keeps only what is
 //! open. Nothing here is computed: a row is the provider's own words.
 //!
+//! A row carries the updates posted on it as well, because the document they
+//! are read from carries them beside it. A front-end asking whether an
+//! incident is moving then has the sentence without fetching a provider's
+//! page itself, which is a second reader of a document this already polls and
+//! a second allowlist of hosts to be wrong about.
+//!
 //! Two pages, two shapes. Claude's is Statuspage, whose unresolved list is the
 //! one to read — its global indicator goes green while a major incident is
 //! still being monitored. OpenAI's is Statuspage-shaped without an unresolved
@@ -23,6 +29,18 @@ use std::time::Duration;
 pub const POLL: Duration = Duration::from_secs(60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// One update posted on an incident, in the provider's words.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Update {
+    /// The state that update announced: `investigating`, `identified`,
+    /// `monitoring`, `resolved`.
+    pub status: String,
+    /// What was posted, as the page states it.
+    pub body: String,
+    /// When it was posted, as the page states it.
+    pub at: String,
+}
+
 /// One open incident, in the provider's words.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Incident {
@@ -38,6 +56,13 @@ pub struct Incident {
     pub url: String,
     /// When it was opened, as the page states it.
     pub since: Option<String>,
+    /// What has been posted about it since it opened, newest first. The
+    /// document this is read from carries them beside the row, so a reader
+    /// asking whether an incident is moving needs no second request and no
+    /// second allowlist of status hosts. Present and empty rather than
+    /// absent: a caller reads its absence as a daemon older than the field
+    /// (§12) rather than as an incident nothing has been said about.
+    pub updates: Vec<Update>,
 }
 
 /// The open incidents in a Statuspage-shaped document: an `incidents` array
@@ -84,9 +109,43 @@ pub fn parse(provider: Provider, body: &str) -> Vec<Incident> {
                     .iter()
                     .find_map(|key| row.get(key).and_then(Value::as_str))
                     .map(str::to_owned),
+                updates: updates_of(row),
             })
         })
         .collect()
+}
+
+/// The updates posted on one incident row, newest first. A row with neither
+/// a body nor a status says nothing and is dropped. The stamps are ISO-8601
+/// in UTC, which sorts as text.
+fn updates_of(row: &Value) -> Vec<Update> {
+    let Some(posted) = row.get("incident_updates").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut out: Vec<Update> = posted
+        .iter()
+        .map(|update| {
+            let text = |key: &str| {
+                update
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned()
+            };
+            Update {
+                status: text("status"),
+                body: text("body"),
+                at: ["display_at", "created_at"]
+                    .iter()
+                    .find_map(|key| update.get(key).and_then(Value::as_str))
+                    .unwrap_or("")
+                    .to_owned(),
+            }
+        })
+        .filter(|update| !update.body.is_empty() || !update.status.is_empty())
+        .collect();
+    out.sort_by(|a, b| b.at.cmp(&a.at));
+    out
 }
 
 /// Where a provider states its status.
@@ -271,6 +330,33 @@ mod tests {
         assert_eq!(open[1].provider, "anthropic");
         assert!(parse(Provider::Codex, "not json").is_empty());
         assert!(parse(Provider::Codex, r#"{"status":{"indicator":"none"}}"#).is_empty());
+    }
+
+    #[test]
+    fn an_open_row_carries_what_has_been_posted_about_it_newest_first() {
+        let body = r#"{"incidents":[{"id":"a1","name":"Elevated errors","status":"monitoring","impact":"major",
+          "incident_updates":[
+            {"status":"investigating","body":"We are looking into it.","display_at":"2026-09-06T01:00:00Z"},
+            {"status":"monitoring","body":"A fix is in place.","display_at":"2026-09-06T02:00:00Z"},
+            {"status":"","body":"","created_at":"2026-09-06T03:00:00Z"}
+          ]}]}"#;
+        let open = parse(Provider::Anthropic, body);
+        let updates = &open[0].updates;
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].status, "monitoring");
+        assert_eq!(updates[0].body, "A fix is in place.");
+        assert_eq!(updates[0].at, "2026-09-06T02:00:00Z");
+        assert_eq!(updates[1].status, "investigating");
+        // A row the page carries nothing for is an empty list, never a
+        // missing field: absent is how a caller reads a daemon older than
+        // this, and a page that has posted nothing is not that.
+        let bare = parse(
+            Provider::Anthropic,
+            r#"{"incidents":[{"id":"b","name":"Bare","status":"identified","impact":"minor"}]}"#,
+        );
+        assert!(bare[0].updates.is_empty());
+        let answer = serde_json::to_value(&bare[0]).unwrap();
+        assert_eq!(answer["updates"], serde_json::json!([]));
     }
 
     #[test]
