@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.28.1]
 
 - **The stated context ceiling is the effective window again, the same figure
   the guard enforces.** `CLAUDE_CODE_MAX_CONTEXT_TOKENS` carried the raw
