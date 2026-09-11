@@ -4,6 +4,20 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **The stated context ceiling is the effective window again, the same figure
+  the guard enforces.** `CLAUDE_CODE_MAX_CONTEXT_TOKENS` carried the raw
+  `context_window` for a release, so the client's context meter was drawn
+  against the tokens the backend accepts rather than the tokens this daemon
+  will pass on. The window guard (`proxy-behavior.md` §7.2) refuses a turn
+  above the effective window by name and before it is sent, so the band between
+  the two — 13,600 tokens on a 272,000-token model at the default 95% — was
+  context the meter offered and the same process would not accept. Both
+  variables are the effective window once more. A ceiling that reads short
+  costs the last few per cent of the model's context; one that cannot be
+  reached costs a refusal the meter said was impossible.
+
 ## [0.28.0]
 
 - **An open incident carries what has been posted about it.** A row said an

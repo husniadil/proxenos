@@ -1035,45 +1035,44 @@ pub fn environment_for(
     //
     // The client cannot recognize these model ids, so it assumes 200,000 and
     // says so. That assumption is safe but wrong: it compacts a session with a
-    // quarter of its context still unused. Stating the figures replaces a
-    // guess with a measurement.
+    // quarter of its context still unused. Stating the figure replaces a guess
+    // with a measurement.
     //
-    // Two figures, because the client reads two, and they mean different
-    // things. The ceiling (CLAUDE_CODE_MAX_CONTEXT_TOKENS) is the model's real
-    // window — the raw context_window, the tokens the backend accepts and what
-    // the client's context meter is drawn against. The compaction point
-    // (CLAUDE_CODE_AUTO_COMPACT_WINDOW, below) is the effective window — that
-    // raw window less the share §7.0 reserves for instructions, tools and
-    // output — so a turn is compacted before the ceiling, leaving room for the
-    // response. Both were once the effective window, which under-reported the
-    // ceiling by that share: the meter read short and the last few per cent of
-    // the model's context went unused, while compaction landed in the same
-    // place regardless. The smallest across the mapped tiers for each, because
-    // one value covers them all and the smallest is the only one that cannot
-    // overrun; the effective minimum never exceeds the raw minimum, so the
-    // compaction point stays at or below the ceiling.
+    // The smallest window across the mapped tiers, because one value covers
+    // them all and the smallest is the only one that cannot overrun. The
+    // effective window rather than the raw one, for the same reason the guard
+    // uses it (§7.0): what is left after instructions, tools and output.
     //
-    // Neither is stated once any tier is relayed (§7.2). The client recognizes
+    // The ceiling carried the RAW window for a release, on the grounds that
+    // the client's meter is drawn against it and read short by that share. The
+    // guard in `ingress.rs` is what settles it: this daemon refuses a turn
+    // above the EFFECTIVE window, by name and before it is sent. A meter drawn
+    // against the raw window therefore offered a band of context this same
+    // process would not accept, and the two figures a person can see — the
+    // meter and the refusal — named different limits. A ceiling that reads
+    // short is a smaller fault than one that cannot be reached.
+    //
+    // Not stated at all once any tier is relayed (§7.2). The client recognizes
     // those ids itself, this catalog is not their menu, and one variable
-    // governs every tier — so a figure that covers a translated tier would
+    // governs every tier — so the figure that covers a translated tier would
     // also govern a relayed one, where nothing else checks it: the translating
     // path has this proxy's own window guard behind it and the relay path has
     // none.
-    let raw_window = tiers
+    if let Some(window) = tiers
         .iter()
         .filter(|_| !relayed)
         .filter_map(|tier| catalog.get(&tier.model))
-        .filter_map(|model| model.context_window)
-        .min();
-    if let Some(ceiling) = raw_window {
+        .filter_map(crate::catalog::Model::effective_window)
+        .min()
+    {
         variables.push((
             "CLAUDE_CODE_MAX_CONTEXT_TOKENS".to_owned(),
-            ceiling.to_string(),
+            window.to_string(),
         ));
 
-        // And compact before it, at the effective window.
+        // And compact at it.
         //
-        // Stating the ceiling alone is worse than saying nothing: the client
+        // Stating the window alone is worse than saying nothing: the client
         // stops applying its own 200,000 assumption and, not recognizing the
         // model, enforces no limit at all — the session grows until the backend
         // refuses it. Early compaction wastes context; late compaction fails
@@ -1085,29 +1084,20 @@ pub fn environment_for(
         // value rather than reject it. A figure outside the range is therefore
         // not an early compaction or a late one — it is no setting at all, and
         // nothing would say so. Reported instead, where a reader can see it.
-        let effective = tiers
-            .iter()
-            .filter(|_| !relayed)
-            .filter_map(|tier| catalog.get(&tier.model))
-            .filter_map(crate::catalog::Model::effective_window)
-            .min();
-        match effective {
-            Some(window) if (COMPACT_WINDOW_FLOOR..=COMPACT_WINDOW_CEILING).contains(&window) => {
-                variables.push((
-                    "CLAUDE_CODE_AUTO_COMPACT_WINDOW".to_owned(),
-                    window.to_string(),
-                ));
-            }
-            other => {
-                tracing::warn!(
-                    effective = ?other,
-                    floor = COMPACT_WINDOW_FLOOR,
-                    ceiling = COMPACT_WINDOW_CEILING,
-                    "the effective window is outside the range the client accepts for \
-                     auto-compaction, so it is not set; the client will use its own default \
-                     and may compact later than this window allows"
-                );
-            }
+        if (COMPACT_WINDOW_FLOOR..=COMPACT_WINDOW_CEILING).contains(&window) {
+            variables.push((
+                "CLAUDE_CODE_AUTO_COMPACT_WINDOW".to_owned(),
+                window.to_string(),
+            ));
+        } else {
+            tracing::warn!(
+                window,
+                floor = COMPACT_WINDOW_FLOOR,
+                ceiling = COMPACT_WINDOW_CEILING,
+                "the effective window is outside the range the client accepts for \
+                 auto-compaction, so it is not set; the client will use its own default \
+                 and may compact later than this window allows"
+            );
         }
     }
 
