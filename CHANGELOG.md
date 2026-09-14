@@ -6,6 +6,21 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **`ultracode` is read as xhigh, the level it runs at.** It was taken as
+  `ultra`, the backend's top level, as a ceiling and on a request. Claude Code
+  describes it as xhigh with dynamic workflow orchestration on top, a session
+  mode rather than a level, so a ceiling written `ultracode` capped above what
+  it meant and a request asking for it spent more than the client asked for.
+- **A tier's effort is one the client takes: low, medium, high, xhigh or
+  max.** It is delivered as that model's `effortLevel`, which Claude Code
+  refuses for anything else, so `none`, `minimal` and `ultra` there started the
+  tier at nothing it named. They are refused naming the tier, at startup and on
+  `tiers.set`; `ultracode` is refused saying it is a mode turned on with
+  `/effort`.
+- **The test suite ignores a client-mode `PROXENOS_DAEMON` in the shell that
+  runs it.** Every spawn of the binary drops the variables that point the CLI
+  at another machine, which made `proxenos run` refuse and the daemon under
+  test never answer.
 - **`effort set` says which levels it takes.** Its help and `docs/api.md`
   named low, medium, high and none, while the daemon has taken every level a
   ceiling may be (`minimal` through `ultra`, and `ultracode` as `ultra`) for

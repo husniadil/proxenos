@@ -171,6 +171,9 @@ impl Daemon {
         std::fs::write(home.join("config.toml"), format!("{config}{profiles}")).unwrap();
 
         let process = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+            .env_remove("PROXENOS_DAEMON")
+            .env_remove("PROXENOS_TOKEN_FILE")
+            .env_remove("PROXENOS_TOKEN")
             .args(["run", "--port", "0"])
             .env("PROXENOS_HOME", &home)
             .env("HOME", dir.path())
@@ -195,6 +198,9 @@ impl Daemon {
     /// One CLI verb, through the socket this daemon is serving.
     fn run(&self, args: &[&str]) -> String {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+            .env_remove("PROXENOS_DAEMON")
+            .env_remove("PROXENOS_TOKEN_FILE")
+            .env_remove("PROXENOS_TOKEN")
             .args(args)
             .env("PROXENOS_HOME", self.dir.path().join("home"))
             .env("HOME", self.dir.path())
@@ -294,6 +300,9 @@ fn the_binary_lists_and_switches_accounts() {
 
     // And a name nobody holds is refused rather than silently ignored.
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["accounts", "use", "nobody"])
         .env("PROXENOS_HOME", daemon.dir.path().join("home"))
         .env("TMPDIR", daemon.dir.path())
@@ -418,6 +427,9 @@ fn the_binary_refuses_to_rename_a_borrowed_profile() {
     let daemon = Daemon::start(&grant("acct_legacy"));
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["accounts", "rename", "acct_legacy", "work"])
         .env("PROXENOS_HOME", daemon.dir.path().join("home"))
         .env("HOME", daemon.dir.path())
@@ -449,6 +461,9 @@ fn the_binary_stores_a_key_from_stdin_and_serves_turns_as_it() {
     let home = daemon.dir.path().join("home");
 
     let mut login = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["accounts", "add-key", "billing", "--provider", "codex"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", daemon.dir.path())
@@ -527,6 +542,9 @@ fn a_cli_login_leaves_the_running_daemon_alone_and_the_switch_hands_over() {
     let home = daemon.dir.path().join("home");
 
     let mut login = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["accounts", "add-key", "billing", "--provider", "codex"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", daemon.dir.path())
@@ -575,6 +593,9 @@ fn a_live_probe_run_without_a_credential_refuses_rather_than_reporting_failures(
     std::fs::create_dir_all(&home).unwrap();
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["doctor", "--live"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
@@ -842,6 +863,9 @@ fn a_grant_left_in_the_key_store_is_reported_rather_than_offered() {
     .unwrap();
 
     let process = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["run", "--port", "0"])
         .env("PROXENOS_HOME", &home)
         .env("HOME", dir.path())

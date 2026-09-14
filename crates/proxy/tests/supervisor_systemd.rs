@@ -112,6 +112,9 @@ impl Drop for Cleanup {
 /// `XDG_CONFIG_HOME`, so a unit written anywhere else is a file nothing loads.
 fn proxenos(home: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(arguments)
         .env("PROXENOS_HOME", home)
         .env("TMPDIR", home)

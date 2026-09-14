@@ -172,6 +172,9 @@ fn exec_refuses_before_starting_anything_when_the_daemon_is_not_answering() {
     let dir = tempfile::tempdir().unwrap();
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["exec", "claude", "--resume", "x"])
         .env("PROXENOS_HOME", dir.path())
         .env("TMPDIR", dir.path())
@@ -226,6 +229,9 @@ fn a_launched_child_is_given_the_policy_and_the_environment() {
 
     let binary = env!("CARGO_BIN_EXE_proxenos");
     let mut daemon = std::process::Command::new(binary)
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["run", "--port", "0"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
@@ -243,6 +249,9 @@ fn a_launched_child_is_given_the_policy_and_the_environment() {
     }
 
     let launched = std::process::Command::new(binary)
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["exec", "claude", "--resume", "abc"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
@@ -315,6 +324,9 @@ fn settings_and_exec_refuse_a_daemon_that_predates_client_policy() {
     let binary = env!("CARGO_BIN_EXE_proxenos");
     let run = |args: &[&str]| {
         std::process::Command::new(binary)
+            .env_remove("PROXENOS_DAEMON")
+            .env_remove("PROXENOS_TOKEN_FILE")
+            .env_remove("PROXENOS_TOKEN")
             .args(args)
             .env("PROXENOS_HOME", dir.path())
             .env("TMPDIR", dir.path())
@@ -376,6 +388,9 @@ fn a_stop_asked_for_over_the_socket_ends_the_process() {
 
     let binary = env!("CARGO_BIN_EXE_proxenos");
     let mut daemon = std::process::Command::new(binary)
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["run", "--port", "0"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
@@ -394,6 +409,9 @@ fn a_stop_asked_for_over_the_socket_ends_the_process() {
     assert!(socket.exists(), "the daemon never came up");
 
     let stopped = std::process::Command::new(binary)
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .arg("stop")
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
@@ -477,6 +495,9 @@ fn stop_names_the_upgrade_problem_when_the_daemon_predates_it() {
     });
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .arg("stop")
         .env("PROXENOS_HOME", dir.path())
         .env("TMPDIR", dir.path())
@@ -511,6 +532,9 @@ fn a_started_daemon_outlives_the_command_that_started_it() {
     let binary = env!("CARGO_BIN_EXE_proxenos");
 
     let started = std::process::Command::new(binary)
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["start", "--port", "0"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
@@ -539,6 +563,9 @@ fn a_started_daemon_outlives_the_command_that_started_it() {
     );
 
     let stopped = std::process::Command::new(binary)
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .arg("stop")
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
@@ -571,6 +598,9 @@ fn a_started_daemon_that_dies_at_startup_is_reported_from_its_log() {
     std::fs::write(home.join("daemon.log"), "STALE LINE FROM AN EARLIER RUN\n").unwrap();
 
     let started = std::process::Command::new(binary)
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["start", "--port", &port])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
@@ -604,6 +634,9 @@ fn a_second_start_names_the_daemon_already_answering() {
     let binary = env!("CARGO_BIN_EXE_proxenos");
 
     let first = std::process::Command::new(binary)
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["start", "--port", "0"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
@@ -616,6 +649,9 @@ fn a_second_start_names_the_daemon_already_answering() {
     );
 
     let second = std::process::Command::new(binary)
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["start", "--port", "0"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
@@ -637,6 +673,9 @@ fn a_second_start_names_the_daemon_already_answering() {
     );
 
     let _ = std::process::Command::new(binary)
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .arg("stop")
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
@@ -669,6 +708,9 @@ fn a_launch_that_cannot_carry_the_policy_names_the_loss() {
 
     let binary = env!("CARGO_BIN_EXE_proxenos");
     let mut daemon = std::process::Command::new(binary)
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["run", "--port", "0"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
@@ -686,6 +728,9 @@ fn a_launch_that_cannot_carry_the_policy_names_the_loss() {
     }
 
     let launched = std::process::Command::new(binary)
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["exec", "tool"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
@@ -734,6 +779,9 @@ fn a_cross_account_mapping_without_consent_refuses_the_daemon() {
     .expect("the config");
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["run", "--port", "0"])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
@@ -755,6 +803,9 @@ fn a_cross_account_mapping_without_consent_refuses_the_daemon() {
 #[test]
 fn the_old_home_variable_is_refused_by_name() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["status"])
         .env("CODEX_CC_PROXY_HOME", "/tmp/anywhere")
         .env_remove("PROXENOS_HOME")
@@ -788,6 +839,9 @@ fn record_ingress_honours_the_port_variable() {
         .port();
 
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["record", "ingress"])
         .env("PROXENOS_HOME", &home)
         .env("PROXENOS_PORT", port.to_string())
@@ -825,6 +879,9 @@ fn a_store_under_the_old_default_home_is_refused_with_the_move() {
     let old = dir.path().join("codex-cc-proxy");
     std::fs::create_dir_all(&old).expect("the old home");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["status"])
         .env("XDG_CONFIG_HOME", dir.path())
         .env_remove("PROXENOS_HOME")
@@ -912,6 +969,9 @@ fn a_named_launch_reads_the_model_list_of_the_account_it_names() {
 
     let binary = env!("CARGO_BIN_EXE_proxenos");
     let launched = std::process::Command::new(binary)
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args([
             "exec",
             "--account",

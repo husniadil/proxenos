@@ -112,7 +112,7 @@ port = 8787
 
 # Optional. Caps reasoning effort on every request, whatever the client asks
 # for: one of none, minimal, low, medium, high, xhigh, max, ultra. `ultracode`
-# is the client's name for `ultra` and is accepted as one.
+# is Claude Code's mode that runs at xhigh, and is read as xhigh.
 #
 # `ultra` exists only on some models and only on a paid plan. A model whose
 # catalog entry does not offer it is capped below it; where the catalog offers
@@ -158,7 +158,8 @@ port = 8787
 # `cross_account_tiers` above.
 #
 # A tier may state the effort the client starts its model at:
-# `opus = { model = "...", effort = "high" }`. It reaches the client in the
+# `opus = { model = "...", effort = "high" }`, one of the client's own levels:
+# low, medium, high, xhigh or max. It reaches the client in the
 # launch settings as that model's own effort (`proxenos settings` shows it), so
 # a session that names no effort runs opus at high and, say, sonnet at low. A
 # session's `--effort` outranks it, and the ceiling above still caps what
@@ -1544,9 +1545,33 @@ pub fn parse_effort(effort: &str) -> Result<proxenos_core::responses::Effort, Pr
     proxenos_core::responses::Effort::parse(effort).ok_or_else(|| {
         ProxyError::invalid_request(format!(
             "`{effort}` is not a recognized effort. \
-             One of: none, minimal, low, medium, high, xhigh, max."
+             One of: none, minimal, low, medium, high, xhigh, max, ultra."
         ))
     })
+}
+
+/// The levels Claude Code takes as a model's `effortLevel` (and as
+/// `--effort`), which is where a tier's effort is delivered (§2.2). A level
+/// the backend has and the client does not (none, minimal, ultra) would
+/// reach the client as a setting it refuses ("unrecognized effortLevel",
+/// Claude Code 2.1.270), so the tier would start at nothing it named.
+pub const CLIENT_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+/// A tier's effort: one of the client's own levels.
+pub fn parse_client_effort(effort: &str) -> Result<(), ProxyError> {
+    if CLIENT_EFFORTS.contains(&effort) {
+        return Ok(());
+    }
+    let why = if effort == "ultracode" {
+        " `ultracode` is a mode the client turns on for a session with /effort, \
+         not a level a model starts at; it runs at xhigh."
+    } else {
+        ""
+    };
+    Err(ProxyError::invalid_request(format!(
+        "`{effort}` is not an effort the client starts a model at. \
+         One of: low, medium, high, xhigh, max.{why}"
+    )))
 }
 
 /// The four tier names, in the order they are reported.
@@ -1636,7 +1661,7 @@ impl Tiers {
         // started anyway would deliver nothing and say nothing.
         for (tier, value) in &entries {
             if let Some(effort) = value.as_ref().and_then(|value| value.effort()) {
-                parse_effort(effort).map_err(|error| {
+                parse_client_effort(effort).map_err(|error| {
                     ProxyError::invalid_request(format!("tier `{tier}`: {}", error.message))
                 })?;
             }

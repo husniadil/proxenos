@@ -199,8 +199,8 @@ pub enum EffortAction {
 
 #[derive(Debug, clap::Args)]
 pub struct SetEffortArgs {
-    /// minimal, low, medium, high, xhigh, max or ultra (ultracode is taken
-    /// as ultra), or none to remove the ceiling. Under an account, none
+    /// minimal, low, medium, high, xhigh, max or ultra (ultracode is read as
+    /// xhigh, the level it runs at), or none to remove the ceiling. Under an account, none
     /// removes that account's override and the shared ceiling applies again;
     /// the answer reports the ceiling that results.
     pub level: String,

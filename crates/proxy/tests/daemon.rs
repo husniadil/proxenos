@@ -1031,6 +1031,30 @@ fn an_unrecognized_effort_is_refused_naming_the_tier() {
     assert!(error.message.contains("xhigh"), "{}", error.message);
 }
 
+/// A tier's effort is delivered to the client as that model's
+/// `effortLevel`, so a level only the backend has (none, minimal, ultra) is
+/// refused like a word nobody has: the client would refuse the setting and
+/// the tier would start at nothing it named. `ultracode` is refused saying it
+/// is a session mode, not a level.
+#[test]
+fn a_tier_effort_the_client_does_not_take_is_refused() {
+    for level in ["none", "minimal", "ultra", "ultracode"] {
+        let config: Config = toml::from_str(&format!(
+            "[tiers]\nsonnet = {{ model = \"gpt-5.6-terra\", effort = \"{level}\" }}\n"
+        ))
+        .unwrap();
+        let error = config
+            .tiers
+            .resolve(proxenos::config::CrossAccountTiers::Refused)
+            .expect_err("a level the client does not take should fail");
+        assert!(error.message.contains("sonnet"), "{}", error.message);
+        assert!(error.message.contains(level), "{}", error.message);
+        if level == "ultracode" {
+            assert!(error.message.contains("/effort"), "{}", error.message);
+        }
+    }
+}
+
 /// The client keeps one effort per model. Two tiers on one model that disagree
 /// would deliver one of the two and keep quiet, so they are refused by name;
 /// two that agree, or one that states nothing, are fine.

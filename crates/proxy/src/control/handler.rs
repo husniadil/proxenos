@@ -1198,7 +1198,7 @@ fn set_tiers(state: &ControlState, params: Option<&Value>) -> Result<Value, Prox
             )));
         }
         if let Some(effort) = &effort {
-            crate::config::parse_effort(effort).map_err(|error| {
+            crate::config::parse_client_effort(effort).map_err(|error| {
                 ProxyError::invalid_request(format!("tier `{name}`: {}", error.message))
             })?;
         }

@@ -1169,9 +1169,9 @@ fn the_effort_sent_is_one_the_model_supports() {
     assert_eq!(ask("ultra", &full).as_deref(), Some("ultra"));
     assert_eq!(ask("ultra", &modest).as_deref(), Some("xhigh"));
 
-    // `ultracode` is the client's name for the same top level, so it maps to
-    // it — and is held to the same model gate as any other level.
-    assert_eq!(ask("ultracode", &full).as_deref(), Some("ultra"));
+    // `ultracode` is the client's mode that runs at xhigh, not the backend's
+    // top level: it asks for xhigh on a model that goes further too.
+    assert_eq!(ask("ultracode", &full).as_deref(), Some("xhigh"));
     assert_eq!(ask("ultracode", &modest).as_deref(), Some("xhigh"));
 }
 

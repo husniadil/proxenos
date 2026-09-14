@@ -173,6 +173,9 @@ mod cli {
     /// the shape a test wants from a process it only needs to exist.
     fn agent() -> std::process::Child {
         std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+            .env_remove("PROXENOS_DAEMON")
+            .env_remove("PROXENOS_TOKEN_FILE")
+            .env_remove("PROXENOS_TOKEN")
             .arg("statusline")
             .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:1")
             .env(
@@ -188,6 +191,9 @@ mod cli {
 
     fn inspect(arguments: &[&str]) -> std::process::Output {
         std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+            .env_remove("PROXENOS_DAEMON")
+            .env_remove("PROXENOS_TOKEN_FILE")
+            .env_remove("PROXENOS_TOKEN")
             .arg("inspect")
             .args(arguments)
             .output()

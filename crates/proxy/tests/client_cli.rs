@@ -188,6 +188,10 @@ fn serve(mut stream: std::net::TcpStream, recorded: &Seen) {
 fn run(dir: &std::path::Path, daemon: Option<&str>, args: &[&str]) -> std::process::Output {
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"));
     command
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN");
+    command
         .args(args)
         .env("PROXENOS_HOME", dir)
         .env("TMPDIR", dir);
@@ -354,6 +358,10 @@ fn a_local_exec_carries_no_token_even_with_one_in_the_environment() {
     let (_asked, server) = local_stand_in(&dir.path().join("proxenos.sock"), 4);
 
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"));
+    command
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN");
     let output = command
         .args(["exec", "/usr/bin/env"])
         .env("PROXENOS_HOME", dir.path())

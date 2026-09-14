@@ -223,7 +223,7 @@ proxenos effort     the effort ceiling in force, read from `status`
   effort set       LEVEL|none [--account NAME] [--persist]
                     set the ceiling through `effort.set` (§3) to one of
                     minimal, low, medium, high, xhigh, max or ultra
-                    (`ultracode` is taken as ultra); `none` is the word for
+                    (`ultracode` is read as xhigh); `none` is the word for
                     null, and the answer reports the ceiling that results
                     rather than the one asked for
 proxenos doctor     probe backend capabilities (--live answers from the real one)
@@ -2004,7 +2004,8 @@ bare-string form is ungated and keeps the meaning it has always had.
 
 The same table may state the effort the client starts the tier's model at:
 `opus = { model = "…", effort = "high" }`, with or without `account`. It is
-checked at startup — an unrecognized level refuses the daemon naming the tier,
+checked at startup — a level other than the client's own low, medium, high,
+xhigh and max refuses the daemon naming the tier,
 and two tiers on one model must agree, because the client keeps one effort per
 model — and delivered in the launch settings as that model's own effort (§2.2).
 It is the effort a session asks for when it names none; the ceiling above is
@@ -2047,7 +2048,8 @@ launch, translate or relay.
 
 `effort` caps reasoning effort on every request, whatever the client asks for —
 one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`
-(`ultracode` is the client's name for `ultra` and is accepted as one). It is a
+(`ultracode`, Claude Code's mode that runs at xhigh with workflows on top, is
+read as `xhigh`). It is a
 ceiling, not a fixed value, and is capped again by what the model accepts — and
 raised by it: an effort below the lowest one the model lists is snapped up to
 that floor, this ceiling included, because there is nothing cheaper the model

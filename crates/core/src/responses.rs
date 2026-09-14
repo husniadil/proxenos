@@ -65,11 +65,14 @@ impl Effort {
             "high" => Self::High,
             "xhigh" => Self::XHigh,
             "max" => Self::Max,
-            // The two names for the same top level. `ultra` is what the wire
-            // calls it; `ultracode` is what the client calls it, and the
-            // client's own description — xhigh plus workflow orchestration —
-            // describes the mode rather than the level it asks for.
-            "ultra" | "ultracode" => Self::Ultra,
+            "ultra" => Self::Ultra,
+            // Not a level: Claude Code's session mode that runs at xhigh with
+            // dynamic workflow orchestration on top ("ultracode: xhigh +
+            // dynamic workflow orchestration", its own /effort list, 2.1.270).
+            // Read as the level it runs at. It was read as `ultra`, the
+            // backend's top level, which asked a model for more than the
+            // client meant and spent more than the operator expected.
+            "ultracode" => Self::XHigh,
             _ => return None,
         })
     }

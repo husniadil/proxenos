@@ -14,6 +14,9 @@
 fn status_json_reports_an_absent_unit_with_its_paths() {
     let dir = tempfile::tempdir().unwrap();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(["supervisor", "status", "--json"])
         .env("HOME", dir.path())
         .env("PROXENOS_HOME", dir.path())

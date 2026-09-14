@@ -102,6 +102,9 @@ fn usage_answer(asked: bool) -> serde_json::Value {
 
 fn run(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
     std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
         .args(args)
         .env("PROXENOS_HOME", dir)
         .env("TMPDIR", dir)
