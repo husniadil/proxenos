@@ -220,10 +220,12 @@ proxenos tiers      the tier mapping as `TIER MODEL`, a tier the catalog
                     grant or revoke consent for pinned tiers; `off` is
                     refused while any tier still pins an account
 proxenos effort     the effort ceiling in force, read from `status`
-  effort set       low|medium|high|none [--account NAME] [--persist]
-                    set the ceiling through `effort.set` (§3); `none` is the
-                    word for null, and the answer reports the ceiling that
-                    results rather than the one asked for
+  effort set       LEVEL|none [--account NAME] [--persist]
+                    set the ceiling through `effort.set` (§3) to one of
+                    minimal, low, medium, high, xhigh, max or ultra
+                    (`ultracode` is taken as ultra); `none` is the word for
+                    null, and the answer reports the ceiling that results
+                    rather than the one asked for
 proxenos doctor     probe backend capabilities (--live answers from the real one)
 proxenos usage      what quota is left (--refresh asks, per account), as a
                     header table: `NAME PROVIDER USED RESETS SOURCE AS OF`,

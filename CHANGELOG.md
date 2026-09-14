@@ -4,6 +4,13 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **`effort set` says which levels it takes.** Its help and `docs/api.md`
+  named low, medium, high and none, while the daemon has taken every level a
+  ceiling may be (`minimal` through `ultra`, and `ultracode` as `ultra`) for
+  several releases. A front-end that trusted the help offered three of them.
+
 ## [0.28.1]
 
 - **The stated context ceiling is the effective window again, the same figure
