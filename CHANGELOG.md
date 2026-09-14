@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.29.0]
 
 - **`ultracode` is read as xhigh, the level it runs at.** It was taken as
   `ultra`, the backend's top level, as a ceiling and on a request. Claude Code
