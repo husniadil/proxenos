@@ -223,7 +223,7 @@ fn snapshot(used_percent: f64) -> Snapshot {
         windows: vec![proxenos::usage::Window {
             used_percent,
             window_minutes: Some(300),
-            resets_at: Some(1_789_487_264),
+            resets_at: Some(4_102_444_800),
             ..proxenos::usage::Window::default()
         }],
         ..Snapshot::default()
@@ -967,7 +967,7 @@ fn a_figure_with_no_moment_taken_is_not_restored() {
                 "plan": "plus",
                 "limit_reached": false,
                 "windows": [{ "used_percent": 11.0, "window_minutes": 300,
-                              "resets_at": 1_789_487_264u64 }],
+                              "resets_at": 4_102_444_800u64 }],
             },
             "source": "turn",
         },
@@ -1042,7 +1042,7 @@ fn a_snapshot_file_holds_nothing_but_names_and_figures() {
                     "windows": [{
                         "used_percent": 11.0,
                         "window_minutes": 300,
-                        "resets_at": 1_789_487_264u64,
+                        "resets_at": 4_102_444_800u64,
                         "label": null,
                         "status": null,
                         "surpassed_threshold": null,
