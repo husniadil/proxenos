@@ -4,7 +4,7 @@ Quota bars for every claude pane in the [herdr](https://herdr.dev) sidebar,
 and the full per-account usage table in a popup. The bars show what the pane
 actually spends: a pane routed through the proxenos daemon shows the serving
 account's windows, and a pane talking to Anthropic directly shows the
-operator's own Claude account — model-scoped windows included.
+operator's own Claude account, model-scoped windows included.
 
 ## Requires
 
@@ -17,14 +17,15 @@ operator's own Claude account — model-scoped windows included.
 
 ```sh
 herdr plugin link /path/to/proxenos/herdr-plugin
-sh install.sh
+sh /path/to/proxenos/herdr-plugin/install.sh
 herdr server reload-config
 ```
 
-`install.sh` writes the two things a plugin cannot declare for itself — the
-`prefix+u` keybinding that opens the dashboard, and the sidebar rows that
-render the tokens — between marker comments in your herdr config.
-`sh install.sh uninstall` removes exactly those blocks. A config that already
+`install.sh` writes the two things a plugin cannot declare for
+itself, the `prefix+u` keybinding that opens the dashboard and the sidebar rows
+that render the tokens, between marker comments in your herdr config
+(`$HERDR_CONFIG`, or `~/.config/herdr/config.toml`). `sh install.sh uninstall`
+removes exactly those blocks. A config that already
 declares `[ui.sidebar.agents]` is left alone and the rows are printed for a
 manual merge, because a second declaration of one TOML table is an error.
 
@@ -33,17 +34,19 @@ manual merge, because a second declaration of one TOML table is an error.
 Two actions and two event hooks, all shell scripts in this directory, plus a
 detached per-pane watcher:
 
-- `proxenos.open` opens the dashboard popup (`r` refreshes, `q` or `Esc`
-  quits).
+- `proxenos.open` opens the dashboard popup, which redraws every 30 seconds
+  (`r` refreshes, `q` or `Esc` quits).
 - `proxenos.report` re-resolves the focused pane's routing and pushes its
   quota tokens; the same script runs on herdr's `pane.agent_detected` and
   `pane.agent_status_changed` events. Reporting a claude pane starts the
   watcher for that pane.
 
-The watcher re-publishes the bars every 60 seconds until the pane closes,
-because quota ticks with no herdr event. `usage --refresh` — the one thing
-here that contacts the providers — runs from one stamp-guarded place, at most
-every five minutes. The scripts write only herdr's own pane metadata plus a
+The watcher re-publishes the bars every 60 seconds
+(`PROXENOS_USAGE_WATCH_INTERVAL`, minimum 5) until the pane closes, because
+quota ticks with no herdr event. `usage --refresh` is the one command here
+that contacts the providers. The reporter runs it at most every five minutes,
+guarded by a stamp shared across every reporter and watcher, and the popup
+runs it when you press `r`. The scripts write only herdr's own pane metadata plus a
 stamp and one pidfile per watched pane in the plugin state directory.
 
 ## How a pane's account is resolved
@@ -55,7 +58,7 @@ its environment (`ps eww`):
 |---|---|
 | this daemon's `ANTHROPIC_BASE_URL` | the serving account's windows |
 | no base URL, default profile | the keychain anthropic account's windows |
-| a foreign base URL, or `CLAUDE_CONFIG_DIR` | nothing — no figure beats a wrong one |
+| a foreign base URL, or `CLAUDE_CONFIG_DIR` | nothing, because no figure beats a wrong one |
 
 **Client mode needs nothing here.** Everything this plugin does goes through the
 `proxenos` CLI, so with `PROXENOS_DAEMON` set it reads the remote daemon's quota

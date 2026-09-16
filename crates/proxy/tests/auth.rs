@@ -1070,7 +1070,7 @@ fn the_store_answers_for_an_account_other_than_the_selected_one() {
 ///
 /// Never a fallback to the serving account: that spends the wrong
 /// subscription's quota invisibly, which is the failure the consent gate
-/// exists to prevent (`roadmap.md` v0.6.0). The name is in the message because
+/// exists to prevent (`proxy-behavior.md` §7.1). The name is in the message because
 /// a mapping and a store are edited separately and either one could be the
 /// half that is wrong.
 #[test]
@@ -1087,7 +1087,7 @@ fn a_pin_naming_an_unstored_account_is_refused_by_name() {
 
 /// A key states which provider it is spent against, and the store keeps it.
 ///
-/// `roadmap.md` v0.6.0 — routing reads the provider off the account, so a key
+/// `proxy-behavior.md` §9.1 — routing reads the provider off the account, so a key
 /// stored without one is a key that can only ever reach the first provider's
 /// endpoint. The provider is a parameter rather than a default because the two
 /// endpoints refuse each other's credentials, and a key that silently claimed

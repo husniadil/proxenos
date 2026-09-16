@@ -3,49 +3,44 @@
 Claude Code, running on OpenAI models served through a ChatGPT subscription,
 without modifying Claude Code.
 
-An Anthropic Messages API on the front, the OpenAI Responses API on the back,
-and a translation layer between them whose real job is keeping Claude Code's
-built-in tools working.
+![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)
+![Platforms: macOS, Linux, Windows](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
----
+proxenos is a local daemon. It presents an Anthropic Messages API to Claude
+Code and serves each turn from the account you choose: a Codex subscription or
+an OpenAI API key through a translation layer, or an Anthropic account relayed
+untranslated.
 
-## Why this rather than a generic translator
+## What it does
 
-A dozen proxies will map Messages onto some other chat API. Claude Code is not
-an ordinary Messages client: several of its built-in tools depend on behaviour
-the *server* provides, and each of them fails **silently** when a translator
-handles only messages and function calls. Every request still returns 200.
-
-| Path | What it needs from the server | What happens without it |
-|---|---|---|
-| `Read` (image, PDF) | attachment blocks inside a tool result | the bytes never arrive, and the model describes the file from its name |
-| `WebSearch` | a server-side search tool, and its results as structured blocks | the search returns nothing, reported as "no results" |
-| `WebFetch` | a model call on the haiku tier | breaks in a way that looks unrelated to tier mapping |
-| tool search | deferred tool stubs and discovery | discovered tools stay uncallable, or every stub inflates context |
-| context meter | input tokens in the first frame | the meter collapses to zero at the start of every turn |
-
-Preserving those is the product. [`docs/proxy-behavior.md`](docs/proxy-behavior.md)
-is the normative specification, and most of its rules exist because the obvious
-implementation is wrong in a way that does not fail loudly.
-
----
+- **Keeps Claude Code's built-in tools working.** `Read` on images and PDFs,
+  `WebSearch`, `WebFetch`, tool search and the context meter all depend on
+  behaviour the server provides. A translator that only maps messages breaks
+  each of them silently, with a 200 and plausible output. Preserving them is
+  the point of this project.
+- **Borrows the accounts you already have.** A subscription stays in the
+  profile directory of the program that signed in (`codex login`,
+  `claude auth login`). The daemon reads the grant there and never holds a
+  copy.
+- **Switches accounts per daemon or per session.** `accounts use` moves every
+  turn; `exec --account` serves one session as another account.
+- **Maps Claude Code's tiers to models.** `opus`, `sonnet`, `haiku` and
+  `fable` each point at a model, with an optional effort ceiling, globally or
+  per account.
+- **Reports quota.** `usage` shows what is left per account, and
+  `statusline` merges it into your own status-line script.
 
 ## Status
 
-Everything here is verified against a local replay server built from the
-upstream protocol definitions, and the whole suite runs without credentials or
-quota. Every capability probe has since also been answered by a
-live backend — `doctor --live` runs the same probes against the real thing, and
-all of them pass.
+Released, with binaries for macOS, Linux and Windows. The upstream endpoint is
+not a published or supported API: it may change or be withdrawn without
+notice, and using a subscription this way is each operator's own decision.
 
-The distinction between those two stays visible, because it is a real one: a
-replayed matrix establishes that the proxy does its half, and only a live one
-establishes that the backend does its own. `doctor` states which it was on the
-face of its output, and [`docs/roadmap.md`](docs/roadmap.md) §L records every
-question that needed a live backend, what it turned out to be, and what it
-falsified on the way.
+## Requirements
 
----
+- A Codex subscription signed in with `codex login`, an OpenAI API key, or an
+  Anthropic account signed in with `claude auth login` or held as a key.
+- Claude Code.
 
 ## Install
 
@@ -53,360 +48,151 @@ falsified on the way.
 curl -fsSL https://raw.githubusercontent.com/husniadil/proxenos/main/install.sh | sh
 ```
 
-That detects the platform, downloads the matching release, **verifies it against
-the release's own `SHA256SUMS`**, and installs into `~/.local/bin`. There is no
-flag to skip the checksum: a script that fetches a binary and runs it has one
-defence, and an install that succeeded without taking it is the failure the step
-exists to prevent. On a mismatch it installs nothing and exits non-zero — which
-is tested by serving a deliberately corrupted archive, because a verifying
-script and a non-verifying one behave identically on a good download.
+The script picks the release for your platform, verifies it against the
+release's `SHA256SUMS`, and installs into `~/.local/bin`. It has no flag to
+skip the checksum. `--version <tag>`, `--bin-dir <dir>` and `--target <triple>`
+override its choices, and `--dry-run` downloads nothing. Windows binaries are
+on the [releases page](https://github.com/husniadil/proxenos/releases); the
+script does not install them.
 
-`--bin-dir`, `--version`, and `--target` override the choices it makes;
-`--dry-run` reports them and downloads nothing. Windows is released as a binary
-but not installed by this script.
-
-Or do the same by hand. Every release carries a binary for macOS, Linux, and
-Windows, on both architectures where the platform has two — pick one from
-[the releases page](https://github.com/husniadil/proxenos/releases), or:
+By hand, from the same release:
 
 ```sh
-target=aarch64-apple-darwin      # or x86_64-apple-darwin,
-                                 #    x86_64-unknown-linux-gnu,
-                                 #    aarch64-unknown-linux-gnu,
-                                 #    x86_64-pc-windows-msvc
+target=aarch64-apple-darwin   # x86_64-apple-darwin, x86_64-unknown-linux-gnu,
+                              # aarch64-unknown-linux-gnu, x86_64-pc-windows-msvc
 base=https://github.com/husniadil/proxenos/releases/latest/download
-
 curl -fLO "$base/proxenos-$target.tar.gz"
 curl -fLO "$base/SHA256SUMS"
 shasum -a 256 --ignore-missing -c SHA256SUMS   # sha256sum on Linux
-
 tar -xzf "proxenos-$target.tar.gz"
-install "proxenos-$target/proxenos" /usr/local/bin/
+install "proxenos-$target/proxenos" ~/.local/bin/
 ```
 
-The checksum step is not decoration. `SHA256SUMS` is generated by the same run
-that built the archives and covers all of them, so verifying costs one command
-and is the only thing that distinguishes the binary that run produced from
-whatever else arrived over the network.
-
-From source, which is also how you get it on a target no release covers:
+From source:
 
 ```sh
 cargo install --git https://github.com/husniadil/proxenos --locked proxenos
 ```
 
-`--locked` builds against the dependency versions the release was tested with.
-Without it Cargo is free to resolve newer ones, which is a different build than
-the one the suite passed against.
-
-There is no package manager entry yet — no Homebrew tap and no container image.
-Both are worth having and neither exists, which is stated here rather than left
-to be discovered.
-
----
-
-## Getting started
+## First run
 
 ```sh
-proxenos doctor
+proxenos doctor            # capability probes against recorded fixtures; no credentials, no quota
+proxenos start             # the daemon, on 127.0.0.1:8787, in the background
+proxenos accounts          # the accounts it found; * marks the one serving turns
+proxenos exec claude       # Claude Code, pointed at the daemon
 ```
 
-`doctor` runs the capability probes against the fixture corpus, so it works end
-to end on a fresh install with no credentials and no quota. It reports which
-kind of run it was on the face of its output — a replayed probe says so, and one
-that could not run is reported as skipped rather than passed.
-
-The same offline constraint governs the test suite, which is a design decision
-rather than a convenience: a project whose correctness can only be demonstrated
-by spending money stops being demonstrable at an arbitrary moment. From a
-checkout:
+With no `[profiles]` in the configuration, the daemon uses the stock profile
+of each program (`codex` and `claude`). To name profiles yourself, or add one:
 
 ```sh
-just setup          # toolchain and test runners
-just check          # formatting, lints, and the whole suite
-```
-
-To use it for real, write a configuration first. It lives at
-`~/.config/proxenos/config.toml` (or `$XDG_CONFIG_HOME`), and a missing file is
-a first run rather than a failure: the daemon logs where it would go and starts
-on the defaults. The commented version of this — `[transport]` included — is
-what the first command that writes the file starts from, so `accounts login`,
-or any setter that persists a change, leaves it there:
-
-```toml
-port = 8787
-
-# A ceiling on reasoning effort, whatever the client asks for.
-effort = "low"
-
-[tiers]
-opus   = "gpt-5.6-terra"
-sonnet = "gpt-5.6-luna"
-haiku  = "gpt-5.6-luna"
-fable  = "gpt-5.6-sol"
-
-[instructions]
-# Lead the system prompt with one line naming the model that is answering.
-identity = true
-```
-
-Both the model and the reasoning effort are chosen per request, not baked in.
-Claude Code sends its effort with every request and the proxy honours it; it
-also sends a model id, and any id the backend knows passes straight through. So
-`ANTHROPIC_DEFAULT_SONNET_MODEL=gpt-5.6-terra` takes effect on the next request
-with no restart, and the `effort` key above is a *ceiling* on what the client
-asks for rather than a fixed value.
-
-The system prompt Claude Code sends is written for a different model and opens
-by saying so, and the client cannot be made to say otherwise —
-`--append-system-prompt` reaches the same field, so it can add to that prompt but
-never precede it. `[instructions]` is where the proxy states what the model
-actually is, and where an operator can append text that outranks the prompt
-above it. See [`docs/api.md`](docs/api.md) §4.
-
-The models named must be ones your account actually has. The daemon validates
-the mapping against the live catalog at startup and refuses an id that is not
-there, naming the ones that are — `proxenos models` lists them too. Model
-ids are renamed and retired over time, so treat the ones above as an example
-rather than a current list.
-
-All four tiers have defaults — the mapping above — so a fresh install works
-before anything is written down. Change any one of them in a single line; a tier
-written blank is refused rather than defaulted, because a blank is a mistake
-rather than a preference.
-`WebFetch` runs on the haiku tier, so an unmapped haiku breaks it in a way that
-looks like something else entirely — refusing to start is the only failure that
-points at the cause. Credentials never go in this file.
-
-Then:
-
-```sh
-proxenos start             # start the daemon on loopback, in the background
-proxenos exec claude       # start the client against it
-```
-
-That last line is one step because it has to be: part of what the client needs
-lives in its settings file rather than its environment, so `eval` alone cannot
-deliver all of it. Two other ways to hand it over, each with a different limit:
-
-```sh
-eval "$(proxenos env)"     # this shell, routing only
-proxenos settings          # the whole thing, for a settings file you merge it into
-```
-
-Nothing here obtains a subscription grant of its own, because there is nothing
-to log into. **The account that pays for a turn is a directory you already
-have**: sign in with the ChatGPT app or `codex login`, then name that directory
-in the configuration file:
-
-```toml
-[profiles.personal]
-provider = "codex"
-path = "/Users/me/.codex"
-
-[profiles.work]
-provider = "codex"
-path = "/Users/me/Library/Application Support/Agent Profiles/codex/p/997619b5"
-```
-
-Which account pays is then which profile is selected, and switching costs
-nothing:
-
-```sh
-proxenos accounts                # what is declared; * is the one serving turns
+proxenos accounts login work --provider codex     # runs `codex login` into a new directory and declares it
+proxenos accounts login work --provider codex --relogin   # signs a declared profile back in
+proxenos accounts add-key api --provider codex < key.txt  # stores a key, read from stdin
 proxenos accounts use work
 ```
 
-The grant in that directory is **read and never written**. Its refresh token is
-single-use, so exchanging it here would rotate the value the ChatGPT app still
-holds and log you out over there — the failure would surface in that app rather
-than in this one. When a borrowed grant lapses, the program that owns it is what
-renews it: run it once and the next turn picks the new token up.
+`--device-auth` prints a URL and a code instead of opening a browser; it is
+for `--provider codex` only. `accounts rename OLD NEW` and `accounts remove
+NAME` manage the rest.
 
-An account can hold an API key instead, for anyone with no subscription at all.
-That one *is* this daemon's to keep. The key is read from standard input, never
-from an argument, because an argument is visible to every other process on the
-machine:
+`exec` exists because part of what Claude Code needs lives in its settings
+file, not its environment. `eval "$(proxenos env)"` sets routing only, and
+`proxenos settings` prints the whole document for a settings file you merge
+it into.
 
-```sh
-# pipe the key in, or paste it and end with ctrl-d
-proxenos accounts add-key api --provider anthropic
-proxenos accounts use api
-```
+Claude Code warns that it does not recognise the model ids and suggests a
+200,000-token compaction window. Ignore it: `env` already sets the model's real
+window.
 
-The name is positional and required: a key carries no account id to be named
-by, and the name is what `accounts use` takes. `--provider` is required too —
-the two providers refuse each other's credentials, and a key that silently
-claimed the wrong one fails later as an authentication error about the
-credential rather than about the choice.
+## Configure
 
-`proxenos accounts login NAME --provider codex` is the other way to gain an
-account: it runs that program's own login against a fresh directory and writes
-the `[profiles]` entry for you. On a machine with no browser to open — a
-container, or a session over ssh — add `--device-auth` and the client prints a
-URL and a code instead; it is a `codex login` flag, and `--provider anthropic`
-refuses it. When that account's grant later lapses, `--relogin` signs the
-declared profile back in against the directory `[profiles]` already names, and
-writes nothing. Either way, `proxenos accounts` lists what is
-there, `accounts rename OLD NEW` changes what this daemon calls one, and
-`accounts remove NAME` drops one — a key from the store, a declared profile
-from `[profiles]`, leaving the grant in its directory alone.
-
-An edit to `config.toml` reaches a daemon that is already serving:
-
-```sh
-proxenos reload    # re-reads the file; says what it applied and what needs a restart
-```
-
-Each account can map the tiers its own way. A catalog is one account's menu, so
-two subscriptions on different plans are offered different models, and a key
-account beside a subscription need not overlap at all:
+The file is `~/.config/proxenos/config.toml` (`$XDG_CONFIG_HOME/proxenos`, or
+`$PROXENOS_HOME`). A missing file is a first run, and the first command that
+writes it starts from a fully commented example. A short one:
 
 ```toml
+port = 8787
+effort = "high"            # a ceiling on what the client asks for; unset means none
+
 [tiers]
-opus = "gpt-5.6-terra"        # the default for every account
+opus   = "gpt-5.6-terra"   # these four are the defaults
+sonnet = "gpt-5.6-luna"
+haiku  = "gpt-5.6-luna"    # WebFetch and WebSearch run on haiku
+fable  = "gpt-5.6-sol"
 
-[accounts.api]
-effort = "low"                # replaces the shared ceiling for this account
+[profiles.work]
+provider = "codex"
+path = "/Users/me/.codex-work"
 
-[accounts.api.tiers]
-opus = "gpt-5.1"              # a tier an account does not name falls through
+[accounts.work.tiers]      # overrides for one account; unnamed tiers fall through
+opus = "gpt-5.6-sol"
 ```
 
-Switching accounts re-resolves that mapping and refuses the switch if the
-account's catalog cannot serve it, so a turn is never dispatched to a model the
-backend will not answer for. Renaming an account moves its section with it.
+The daemon validates each tier against the account's catalog and refuses a
+model that is not there; `proxenos models` lists what is. Credentials never go
+in this file.
 
-`proxenos exec --account NAME` serves one session as that account without
-moving the selection, and configures it from that account's mapping — so a
-session on a subscription of the other provider is handed that provider's ids
-rather than the shared table's, with no `--model` needed to get there. The
-mapping it applied is printed as it starts, and it is the mapping every turn of
-that session is served on: `[accounts.NAME.tiers]` applies to a tagged session
-exactly as it would if the account were selected. A plain `--model` id is
-upgraded to its `[1m]` long-context variant where that account's own menu
-offers one.
+A running daemon takes changes without a restart:
 
-A key is spent against a different endpoint with different billing, and one kind
-of credential is refused against the other kind's endpoint before anything
-leaves. It has no refresh, no expiry, and no plan, so `usage` has no quota to
-report for it and the WebSocket transport does not apply — that protocol belongs
-to the subscription backend. The path is proven against the replay server; a
-live key endpoint has answered and **has not settled everything**, and
-[`docs/roadmap.md`](docs/roadmap.md) §L carries what is still open.
+```sh
+proxenos reload                          # re-reads config.toml, says what needs a restart
+proxenos tiers set opus gpt-5.6-sol      # add --persist to write it to config.toml
+proxenos effort set medium               # or none to remove the ceiling
+```
 
-| | |
+[`docs/api.md`](docs/api.md) §4 documents every key, including `[transport]`,
+`[instructions]`, `[client]` and `[listen]`.
+
+## Keep it running
+
+```sh
+proxenos supervisor install    # a launchd agent on macOS, a systemd user unit on Linux
+proxenos supervisor status
+proxenos status                # connection, serving account, tier mapping
+proxenos stop                  # under a supervisor, replaces the daemon with the build on disk
+```
+
+## Reach it from another machine
+
+The daemon always serves `127.0.0.1` without a token. Setting
+`[listen] address` opens a second listener that demands a token on every
+request, and the daemon refuses to start with a reachable address and no
+token. On the other machine, set `PROXENOS_DAEMON` and `PROXENOS_TOKEN` (or
+`PROXENOS_TOKEN_FILE`) and use the CLI as usual. proxenos terminates no TLS,
+so put a private overlay network or a reverse proxy in front. See
+[`docs/api.md`](docs/api.md) §2.7 and [`SECURITY.md`](SECURITY.md).
+
+## Learn more
+
+| If you want to | Read |
 |---|---|
-| `status`, `models` | connection, catalog, and the client policy in effect |
-| `env`, `settings` | what a client needs, as shell exports or as one settings document |
-| `exec <command>` | runs a command with both of those applied |
-| `stop` | asks the running daemon to stop, and says what happened next |
-| `usage` | what quota is left; `--refresh` asks for a figure per account |
-| `statusline -- <script>` | wraps your own status-line script and merges that quota into what it reads |
-| `record ingress` / `record upstream` / `record surface` | capture exchanges as fixtures |
-| `supervisor install` / `uninstall` / `status` | installs, removes, or inspects the supervisor that keeps the daemon alive |
-| `doctor` | capability probes; `--live` answers them from the real backend |
+| Every verb, flag, config key and error | [`docs/api.md`](docs/api.md), or `proxenos <verb> --help` |
+| How translation, transports, sessions and token counts behave | [`docs/proxy-behavior.md`](docs/proxy-behavior.md) |
+| Quota bars in the herdr sidebar | [`herdr-plugin/`](herdr-plugin/README.md) |
+| Report a vulnerability | [`SECURITY.md`](SECURITY.md) |
+| Work on the code | [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`CLAUDE.md`](CLAUDE.md) |
 
-Everything but `record`, `supervisor`, and `doctor` talks to the running daemon
-over a control socket, and the CLI holds no state of its own. `record` runs a
-daemon of its own or calls the endpoint directly, `supervisor` touches the
-machine rather than the daemon, and `doctor` is the exception because `--live`
-needs credentials whether or not a daemon is up. See
-[`docs/api.md`](docs/api.md).
+## If you are an AI agent helping someone with proxenos
 
-**One warning is expected and harmless.** The client does not recognize these
-model ids, so it reports that its own 200,000-token limit is not enforced and
-suggests setting the compaction window to 200,000. Do not: `env` already sets it
-to the model's real effective window, which is larger, and using it is the
-point.
+- **Check the CLI before quoting it.** `proxenos <verb> --help` matches the
+  installed build; [`docs/api.md`](docs/api.md) §2 matches this checkout.
+- **Launching Claude Code through it, or a second opinion from another model
+  family:** read [`skills/proxenos/SKILL.md`](skills/proxenos/SKILL.md).
+- **A setup problem:** run `proxenos status` and `proxenos doctor` and read
+  their output before suggesting a fix.
+- **Do not spend quota unasked.** `doctor --live`, `usage --refresh`, and
+  `record upstream` / `record surface` contact the providers.
+- **Ask the person first** before `proxenos stop`, `accounts use`, `accounts
+  remove`, or anything with `--persist`. They affect every session on the
+  machine.
+- **Never put a key or token in argv.** Keys go on stdin; tokens go in
+  `PROXENOS_TOKEN_FILE`.
+- **Changing the code:** read [`CLAUDE.md`](CLAUDE.md), then the section of
+  [`docs/proxy-behavior.md`](docs/proxy-behavior.md) you are touching.
 
----
+## License
 
-## How it fits together
-
-```
-ingress ──── Anthropic Messages surface (axum)
-                        │
-core ─────── translation: Messages ⇄ Responses
-             pure functions and state machines, no I/O
-                        │
-session ───── per-conversation state
-             input baseline · transport binding · calibration
-                        │
-transport ─── WebSocket (primary) │ HTTP + SSE (fallback)
-                        │
-auth ──────── borrowed grants, stored keys, CredentialStore
-```
-
-`proxenos-core` holds the middle layer and nothing else: no sockets, no
-clock, no filesystem. That boundary is what makes every translation rule
-testable as a pure function over recorded data.
-
-WebSocket is primary and HTTP is its fallback, but neither is a degraded version
-of the other. A session that falls back stays fallen back rather than retrying
-the socket every turn, and the HTTP path is held to the same tests rather than
-treated as an error route.
-
-That posture was chosen against the possibility of the backend refusing sockets
-under policy conditions. On the account this has been run against, **no such
-refusal has been seen** — it connects, and the catalog marks these models as
-preferring sockets. The fallback is tested as a normal path anyway: one
-account's experience is not evidence about every account's.
-
-Set `websocket = false` under `[transport]` to use HTTP only. Compression
-applies to both: zstd on an HTTP body, `permessage-deflate` on the socket,
-negotiated during the upgrade. It takes roughly two thirds off the wire in both
-directions and **saves no tokens** — quota is unaffected either way.
-
----
-
-## Security and privacy
-
-The daemon binds `127.0.0.1` and authenticates nothing by default, which is safe
-precisely because every caller reaching the socket is already a local process
-running as the user. `ANTHROPIC_AUTH_TOKEN` must be set for Claude Code's sake
-and its value is ignored.
-
-**A reachable address is a second door, and it needs a token.** `[listen]` in
-config.toml takes an `address` and a `token_file` (or `token`). `127.0.0.1`
-stays bound and stays open to local callers whatever that says; the stated
-address is a second listener where every request — turns and the control
-vocabulary alike — must carry the token as `proxenos-token:<secret>` in
-`ANTHROPIC_AUTH_TOKEN`. The daemon refuses to start with a reachable address and
-no token. That is what lets a second machine run only the CLI and be served by
-this daemon: `PROXENOS_DAEMON` and `PROXENOS_TOKEN`, and every verb goes there,
-while sessions on the daemon's own machine carry on through the loopback door.
-This project terminates no TLS, so put a private overlay network or a reverse
-proxy in front of anything reachable beyond loopback. `docs/api.md` §1, §2.7,
-§4 and §7.
-
-Credentials live in a file created `0600`, never in the configuration file,
-never in process arguments, and never in logs. Nothing is collected and nothing
-is transmitted anywhere but the backend.
-
-See [`SECURITY.md`](SECURITY.md).
-
----
-
-## Contributing
-
-Development is test-first, and the specification comes first: read the relevant
-section of [`docs/proxy-behavior.md`](docs/proxy-behavior.md) before touching
-translation, transport, sessions, or token accounting. If implementation shows a
-rule is wrong, change the spec in the same commit as the code that proved it.
-
-[`CONTRIBUTING.md`](CONTRIBUTING.md) has the rest.
-
----
-
-## Posture
-
-The upstream endpoint is not a published or supported API. It may change or be
-withdrawn without notice, and using a subscription this way is a decision each
-operator makes for themselves. There is no version of this project that avoids
-that, so it is stated rather than omitted.
-
-Not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. All
-trademarks belong to their owners.
-
-Licensed under [Apache-2.0](LICENSE).
+Apache License 2.0; see [LICENSE](LICENSE). Not affiliated with, endorsed by,
+or sponsored by Anthropic or OpenAI. All trademarks belong to their owners.

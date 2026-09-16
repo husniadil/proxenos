@@ -9,112 +9,154 @@ control socket, and the configuration file. The ingress shape is fixed by the
 Anthropic Messages API and is not ours to change. The other three are ours, and
 the stability rules in §6 apply to them.
 
+A bare `§N` in this file is a section of this file. A section of the behavior
+spec is always written `proxy-behavior.md` §N.
+
 ---
 
 ## 1. Ingress
 
-**Two doors, one daemon.** The daemon always binds `127.0.0.1:<port>` and asks
-nothing of a caller reaching it: every one of them is already a local process
-running as the user. Where `listen.address` (§4) names a reachable address, that
-is opened as a **second** listener over the same state, and **every request
-arriving on it — ingress and §3's HTTP control endpoint alike — must carry the
-token**, or is refused with an `authentication_error` (§1.1). A non-loopback
-`listen.address` with no token refuses to start, naming both keys.
-
-| Door | Address | Asks for the token |
-|---|---|---|
-| loopback | `127.0.0.1:<port>` — always bound | no, ever |
-| remote | `<listen.address>:<port>` — only where one is stated | yes, on every request |
-
-With `listen.address` left at its loopback default there is **one** door, and
-nothing about this daemon differs from a build that had never heard of tokens.
-
-**The token belongs to the door, not to the caller.** Which listener a request
-arrived on is what decides whether it needs one; nothing anywhere reads the
-peer address to decide it. Two reasons, and the second is the one that would
-have bitten:
-
-- A guard keyed on the peer address cannot be tested from one machine, so the
-  posture it implements is the one nobody ever exercises.
-- Behind a reverse proxy or an overlay-network daemon, **every** request
-  arrives from loopback. A peer-keyed exemption would exempt the internet.
-
-**Why the loopback door is unconditional**, rather than moving to the stated
-address: an `exec` launch bakes `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`
-into the client it starts, and a local launch has no token to present (a local
-CLI is not in client mode, so it holds none — §2.7). A daemon that rebound
-itself would cut off every session already running on its own machine the
-moment a token was configured, and each would fail with a 401 it could do
-nothing about.
-
-`ANTHROPIC_AUTH_TOKEN` must be set for Claude Code's own sake, and it is the
-one header the client offers, so **both the token and the launch tag travel in
-it**:
-
-| Value | Meaning |
-|---|---|
-| anything (`unused`) | ignored, on a daemon with no token configured |
-| `proxenos-account:<name>` | the launch tag `exec --account` (§2.3) travels as, naming the stored account that session's turns are made as |
-| `proxenos-token:<secret>` | this daemon's token |
-| `proxenos-token:<secret> proxenos-account:<name>` | both, whitespace-separated, in either order |
-
-A value that does **not** contain a `proxenos-token:` part is read exactly as
-it was before tokens existed: the whole string, tag prefix stripped, is the
-account name. That is not tidiness — an account name may hold a space, and
-splitting a value that was never multi-part would silently truncate it. Only a
-value that announces a token is parsed as parts.
-
-The tag is a name, never a secret, and the credential it resolves to never
-leaves the daemon. The token *is* a secret: it never appears in argv, in a log
-line, or in what `status`, `env` or `settings` print (§2.2).
+### Endpoints
 
 | Endpoint | Purpose |
 |---|---|
 | `POST /v1/messages` | The only endpoint carrying real load. Answers with SSE where `stream` is true, and with one JSON body otherwise. |
-| `POST /v1/messages/count_tokens` | Pre-flight sizing. Returns an estimate. |
-| `GET /v1/models` | The mapped models, in the Anthropic list shape — `{"data": [{"id", "display_name", "type": "model"}]}`. Ids are the upstream model ids the tiers map to. |
+| `POST /v1/messages/count_tokens` | Pre-flight sizing. Answers `{"input_tokens": n}`, an estimate. |
+| `GET /v1/models` | The mapped models, in the Anthropic list shape: `{"data": [{"id", "display_name", "type": "model"}]}`. Ids are the upstream model ids the tiers map to. |
+| `POST /control` | The §3 control vocabulary over HTTP. |
+| anything else | `not_found_error`, 404. |
 
-A request to `POST /v1/messages` whose model id belongs to an account on the
-second provider is **relayed** rather than translated: the body is forwarded
-byte for byte and the reply is streamed back byte for byte, with the bearer
-replaced by that account's credential. `proxy-behavior.md` §9 states the rule
-and the header delta. Nothing about the endpoint changes — the same URL serves
-both paths, and which one a turn takes is decided from the model id it carries.
-This path is **confirmed live**: relayed turns round-trip against the real
-endpoint of the second provider — plain and streaming, generation and refusal —
-with a subscription bearer the relay substituted (`proxy-behavior.md` §9,
-`roadmap.md` §L).
+### Two doors, one daemon
 
-`stream` decides the shape of the answer, and its default is the endpoint's:
-absent or `false` is **not** a stream, and is answered with a single
-`application/json` message body. Claude Code always sets it, so the harness only
-ever takes the streaming path; every other local caller gets what it asked for.
-The non-streaming body is the frame sequence folded shut — `proxy-behavior.md`
-§5.5 — and its field set is held against a captured answer from the real
-endpoint. The one field a real answer carries that this one does not is
-`stop_details`.
+The daemon always binds `127.0.0.1:<port>` and asks nothing of a caller reaching
+it. Where `listen.address` (§4) names a reachable address, a **second** listener
+opens there over the same state, and every request on it — ingress and
+`POST /control` alike — must carry the token or is refused with
+`authentication_error` (§1.1). A non-loopback `listen.address` with no token
+refuses to start, naming both keys.
 
-`run` fails immediately if the port is already bound, naming the conflict, rather
-than retrying or selecting another port. A second daemon on a different port
-would be silently unused by a client already configured for the first.
+| Door | Address | Asks for the token |
+|---|---|---|
+| loopback | `127.0.0.1:<port>`, always bound | never |
+| remote | `<listen.address>:<port>`, only where one is stated | on every request |
 
-The ingress imposes **no size limit** on a request body. A real turn — a full
-system prompt and a large tool set — runs past the extractor's 2 MB default, and
-the backend's own limit is the real one. A 413 from the door is worse than a
-large body: it is not an Anthropic error shape, so the client reads it as
-retryable and loops on it, the turn never reaching the backend. The sender is
-the user's own client on this machine, or one that got past the remote door's
-token.
+With `listen.address` at its loopback default there is one door.
 
-**The token is compared in constant time.** Short-circuiting on the first
-differing byte turns a comparison into an oracle: a caller who can time it
-recovers the secret one byte at a time. A missing token and a wrong one get the
-same sentence, for the same reason.
+#### Why
+
+Every caller reaching loopback is already a local process running as the user.
+The loopback door stays open when a token is configured because an `exec`
+launch bakes `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>` into the client it
+starts, and a local launch holds no token (§2.7). A daemon that moved to the
+stated address would cut off every session already running on its own machine
+with a 401 it could do nothing about.
+
+### The token belongs to the door, not to the caller
+
+Which listener a request arrived on decides whether it needs a token. Nothing
+reads the peer address.
+
+#### Why
+
+- A guard keyed on the peer address cannot be tested from one machine, so the
+  posture it implements is the one nobody exercises.
+- Behind a reverse proxy or an overlay-network daemon every request arrives from
+  loopback. A peer-keyed exemption would exempt the internet.
+
+### The token is compared in constant time
+
+A missing token and a wrong one get the same sentence.
+
+#### Why
+
+Short-circuiting on the first differing byte turns a comparison into an oracle
+that recovers the secret one byte at a time. Saying which of the two failed
+tells a caller where to look next.
+
+### What `ANTHROPIC_AUTH_TOKEN` carries
+
+It is the one header the client offers (sent as `Authorization: Bearer …`), so
+both the token and the launch tag travel in it.
+
+| Value | Meaning |
+|---|---|
+| anything (`unused`) | ignored, on the loopback door |
+| `proxenos-account:<name>` | the launch tag `exec --account` (§2.3) travels as, naming the stored account that session's turns are made as |
+| `proxenos-token:<secret>` | this daemon's token |
+| `proxenos-token:<secret> proxenos-account:<name>` | both, whitespace-separated, in either order |
+
+A value with no `proxenos-token:` part is read whole: the tag prefix is
+stripped and the rest is the account name. Only a value that announces a token
+is split into parts.
+
+The tag is a name, and the credential it resolves to never leaves the daemon.
+The token is a secret: it never appears in argv, a log line, or what `status`,
+`env` or `settings` print (§2.2).
+
+#### Why
+
+An account name may hold a space. Splitting a value that was never multi-part
+would silently truncate it.
+
+### Relay or translate
+
+`POST /v1/messages` either translates a turn or relays it. A relayed turn's body
+is forwarded byte for byte and its reply streamed back byte for byte, with the
+bearer replaced by that account's credential (`proxy-behavior.md` §9). The URL is
+the same for both. The account that decides is, in order: the launch tag; the
+account a relayed mapping entry claims for the model id; a tier's pinned
+account; the serving account. The turn relays where that account is on the
+second provider.
+
+A launch tag naming no stored account is refused with `authentication_error`
+before anything is spent.
+
+This path is confirmed live against the second provider's real endpoint, plain
+and streaming, generation and refusal (`roadmap.md` §L).
+
+### `stream` decides the shape
+
+Absent or `false` is not a stream and is answered with one `application/json`
+message body: the frame sequence folded shut (`proxy-behavior.md` §5.5). Its
+field set is held against a captured answer from the real endpoint; the one
+field a real answer carries that this one does not is `stop_details`.
+
+Claude Code always sets `stream`, so the harness only takes the streaming path.
+
+### No request size limit
+
+The ingress imposes no limit on a request body. The backend's limit is the real
+one.
+
+#### Why
+
+A real turn — a full system prompt and a large tool set — runs past the
+extractor's 2 MB default. A 413 from the door is not an Anthropic error shape,
+so the client reads it as retryable and loops without the turn ever reaching
+the backend.
+
+### A held port fails the start
+
+`run` fails immediately if the port is already bound, naming the conflict. It
+does not retry or pick another port.
+
+#### Why
+
+A second daemon on a different port would be silently unused by a client
+configured for the first.
+
+### Where it lives
+
+| File | What it holds |
+|---|---|
+| `crates/proxy/src/ingress.rs` | Router, doors, token guard, tag parsing, relay-or-translate branch |
+| `crates/proxy/src/upstream/relay.rs` | The relay path and which account a turn relays as |
+| `crates/core/src/anthropic/aggregate.rs` | Folding frames into the non-streaming body |
+| `crates/proxy/src/commands/daemon.rs` | Binding both doors at startup |
 
 ### 1.1 Errors
 
-Every failure — including transport and credential failures — returns an
-Anthropic-shaped body:
+Every failure returns an Anthropic-shaped body:
 
 ```json
 { "type": "error", "error": { "type": "...", "message": "..." } }
@@ -122,721 +164,720 @@ Anthropic-shaped body:
 
 | Condition | Type | Status |
 |---|---|---|
-| Quota exhausted | `rate_limit_error` | 429 |
-| Upstream overload or 5xx | `overloaded_error` | 529 |
-| Upstream judged the request invalid | `invalid_request_error` | 400 |
-| Upstream rejection, otherwise | `api_error` | upstream status |
+| Upstream 429 | `rate_limit_error` | 429 |
+| Upstream 5xx | `overloaded_error` | 529 |
+| Upstream unreachable, or the connection failed | `overloaded_error` | 529 |
+| Upstream 400 | `invalid_request_error` | 400 |
+| Upstream 401 or 403 | `authentication_error` | 401 |
+| Upstream rejection, any other status | `api_error` | upstream status |
 | Credentials invalid or absent | `authentication_error` | 401 |
 | Credentials transiently unavailable | `overloaded_error` | 529 |
+| Missing or wrong token on the remote door | `authentication_error` | 401 |
+| Launch tag naming no stored account | `authentication_error` | 401 |
+| Pinned tier naming an account not stored, or holding a credential the endpoint does not take | `invalid_request_error` | 400 |
 | Request exceeds the model's window | `invalid_request_error` | 400 |
 | Malformed request body | `invalid_request_error` | 400 |
 | Unknown endpoint | `not_found_error` | 404 |
 
 `retry-after` is forwarded when upstream supplies it.
 
-Transient conditions surface as retryable so Claude Code's own backoff drives
-them. Terminal conditions surface as terminal. The proxy does not build a second
-retry loop on top of the client's.
+### Transient is retryable, terminal is terminal
 
-An error arising mid-stream is emitted as an SSE `error` frame rather than
-changing an already-sent status.
+The proxy builds no retry loop of its own. Claude Code's backoff drives the
+retryable types.
 
-On the non-streaming path nothing is written until the turn is over, so the same
-failure is a status and an error body rather than a 200 carrying an error frame.
-A frame and a status describing one failure never disagree: both are built from
-the vocabulary above.
+### Mid-stream failures
+
+An error arising after the status was sent is an SSE `error` frame. On the
+non-streaming path nothing is written until the turn is over, so the same
+failure is a status and an error body. The status is rebuilt from the frame by
+the same vocabulary, so the two never disagree; an `api_error` frame folds to
+502.
+
+### Where it lives
+
+| File | What it holds |
+|---|---|
+| `crates/proxy/src/error.rs` | `ProxyError`, the constructors, upstream status mapping, frame-to-status |
+| `crates/core/src/anthropic/stream.rs` | `ErrorKind` and the error body |
 
 ---
 
 ## 2. Command line
 
 ```
-proxenos start      start the daemon in the background, returning once it
-                    answers; says what is there and does nothing where one is
-                    already running
-proxenos run        start the daemon in the foreground
-proxenos accounts   stored accounts, and which one serves turns (also
-                    `accounts list`; --json prints the socket's own payload)
-                    a header table, one row per account: `NAME PROVIDER KIND
-                    ACCOUNT SOURCE STATE`, with a `*` on the one serving
-                    turns. KIND is `profile` or `key`; ACCOUNT is the address,
-                    else the id, else the subscription; SOURCE abbreviates
-                    `$HOME` to `~`, reads `keychain` for a keychain and
-                    `stored` for a key, and marks a profile nobody declared
-                    `(found)`; STATE is one phrase — `refused`, `identity
-                    changed`, the renewal countdown, else `ok`. The provider
-                    is on every row, since with two stored an unnamed one is
-                    a guess
-  accounts login   NAME --provider codex|anthropic [--path DIR]
-                    [--device-auth] [--relogin]
-                    sign in to a new profile of the owning program and
-                    declare it; --path says where, absent it goes under this
-                    daemon's own directory; --device-auth has the client print
-                    a URL and a code instead of opening a browser, and is
-                    `codex` only; --relogin signs a profile `[profiles]`
-                    already declares back in, against the directory it names,
-                    and declares nothing
-  accounts add-key NAME --provider codex|anthropic
-                    store an API key, read from stdin
-  accounts use     NAME   serve every following turn as this account
-  accounts rename  OLD NEW   change what this daemon calls an account
-  accounts remove  NAME   drop this account, leaving the rest usable
-proxenos status     connection, tier mapping, model catalog (--json prints the
-                    socket's own payload)
-proxenos models     available models, as `MODEL WINDOW TIER` under a header;
-                    TIER names the tiers mapping to each id, read from the
-                    `tiers` method (--json prints the socket's own payload;
-                    --account NAME asks for that stored account's menu)
-proxenos incidents  what the providers say about themselves: the incidents
-                    open on the status page of every provider a stored
-                    account is on, as `PROVIDER IMPACT STATUS SINCE NAME
-                    URL`, worst first; then a line per page that did not
-                    answer. Nothing open is a sentence naming the providers
-                    asked (--json prints the socket's own payload)
-proxenos env        environment for Claude Code, as shell exports
-proxenos settings   the same configuration, as one settings document
-proxenos exec       run a command with that configuration applied
-proxenos reload     re-read config.toml into the running daemon
-proxenos stop       ask the running daemon to stop
-proxenos tiers      the tier mapping as `TIER MODEL`, a tier the catalog
-                    cannot honour marked (--json prints the `tiers` payload)
-  tiers set        TIER MODEL [--account NAME] [--persist]
-                   [--as ACCOUNT [--allow-cross-account]] [--effort LEVEL]
-                    point one tier at a model, through `tiers.set` (§3) with
-                    exactly what was typed: no account means the shared
-                    table, no --persist means until the daemon stops, and
-                    the answer says which. One tier per call, because a set
-                    is partial. `--as` pins the tier to a stored account —
-                    the table form of §4 — which needs the operator's
-                    consent and is refused without it, naming the flag;
-                    `--allow-cross-account` grants that consent first, in the
-                    same breath, through `cross_account_tiers.set` (always
-                    written), and a consent already given is left alone.
-                    `--effort` states the effort the client starts the
-                    tier's model at, delivered in the launch settings
-                    (§2.2); omitted, the tier carries none, since a set
-                    replaces the tier's whole value
+proxenos start [--port N]          start the daemon in the background
+proxenos run [--port N]            start the daemon in the foreground
+proxenos accounts [--json]         stored accounts, and which one serves
+  accounts list [--json]           the same
+  accounts login NAME --provider codex|anthropic [--path DIR]
+                 [--device-auth] [--relogin]
+  accounts add-key NAME --provider codex|anthropic   (key on stdin)
+  accounts use NAME
+  accounts rename OLD NEW
+  accounts remove NAME
+proxenos status [--json]           connection, tier mapping, catalog
+proxenos models [--json] [--account NAME]
+proxenos incidents [--json]        open incidents on the providers' status pages
+proxenos env                       environment for Claude Code, as shell exports
+proxenos settings                  the same, as one client settings document
+proxenos exec [--account NAME] [--] PROGRAM [ARGS...]
+proxenos reload                    re-read config.toml into the running daemon
+proxenos stop                      ask the running daemon to stop
+proxenos tiers [--json] [--account NAME]
+  tiers set TIER MODEL [--account NAME] [--persist]
+            [--as ACCOUNT [--allow-cross-account]] [--effort LEVEL]
   tiers cross-account on|off
-                    grant or revoke consent for pinned tiers; `off` is
-                    refused while any tier still pins an account
-proxenos effort     the effort ceiling in force, read from `status`
-  effort set       LEVEL|none [--account NAME] [--persist]
-                    set the ceiling through `effort.set` (§3) to one of
-                    minimal, low, medium, high, xhigh, max or ultra
-                    (`ultracode` is read as xhigh); `none` is the word for
-                    null, and the answer reports the ceiling that results
-                    rather than the one asked for
-proxenos doctor     probe backend capabilities (--live answers from the real one)
-proxenos usage      what quota is left (--refresh asks, per account), as a
-                    header table: `NAME PROVIDER USED RESETS SOURCE AS OF`,
-                    with a `*` on the account serving turns and one row per
-                    window (--json prints the socket's own payload)
-proxenos statusline wrap a status-line script, adding that quota
-proxenos inspect    PID [--json]
-                    what another process's environment says about how it was
-                    started: `pid 4242: through proxenos as work-codex
-                    (http://127.0.0.1:8787)`, or `pid 4242: not through
-                    proxenos`. --json prints
-                    `{"pid","through","account","daemon"}`. Needs no daemon —
-                    the answer is in the process being asked about (§2.8)
-proxenos record     capture exchanges as fixtures
-proxenos supervisor install|uninstall|status
-                    the supervisor that keeps the daemon alive — launchd on
-                    macOS, a systemd **user** service on Linux; `install`
-                    writes the unit for this user and hands it over,
-                    `uninstall` removes it and the daemon it was supervising
-                    stops with it, `status` says whether it is installed and
-                    what the supervisor makes of it (--json prints the same
-                    as one document: `installed` — absent, current, or
-                    divergent — the program, log and socket paths, the file
-                    the unit lives in under `plist` on macOS and `unit` on
-                    Linux, and the `state` word and `pid` the supervisor
-                    holds, null where it said nothing). Named for what
-                    supervises rather than for launchd, because a verb named
-                    after an implementation cannot grow a second one — which
-                    it since did
+proxenos effort [--json]           the effort ceiling in force
+  effort set LEVEL|none [--account NAME] [--persist]
+proxenos doctor [--live] [--probe NAME] [--fixtures DIR] [--relay-account NAME]
+proxenos usage [--json] [--refresh]
+proxenos statusline [-- COMMAND...]
+proxenos inspect PID [--json]
+proxenos record ingress [--port N]
+proxenos record upstream [--port N]
+proxenos record surface --account NAME [--only NAME] [--out DIR]
+proxenos supervisor install|uninstall|status [--json]
 ```
 
-Every verb except `run`, `start`, `record`, `supervisor`, `doctor`, `inspect`,
-and the two `accounts` verbs that add an account operates through the control
-socket (§3) against a running daemon. Those bring a daemon up, run one of their
-own, touch the machine, read a process, or need credentials rather than a
-socket.
+`proxenos --help` and `proxenos <verb> --help` are the source of truth for flag
+spelling. `--port` also reads `PROXENOS_PORT`.
 
-**And that socket need not be on this machine.** With `PROXENOS_DAEMON` set,
-every verb that goes through the control vocabulary goes over HTTP to a daemon
-elsewhere instead — §2.7.
+### What reaches the daemon
 
-**One sub-verb per thing an operator does, each naming its account
-positionally.** The surface before this used flags as actions — `--use`,
-`--forget` and `--rename` on `accounts`, and a top-level `login` whose two
-unrelated halves were told apart by `--key` and `--profile` — so what a command
-did was decided by which flags were present, and the account it did it to was
-spelled `--as` in one verb and `--use` in another. The top-level `login` verb
-is gone with no alias, and there is one word for the account: `NAME`.
+Every verb goes through the control vocabulary (§3) against a running daemon,
+except: `run`, `start` and `record` (bring a daemon up, or run their own),
+`supervisor` (touches the machine), `doctor` (runs in the CLI), `inspect` (reads
+a process), and `accounts login` and `accounts add-key` (need a terminal and the
+store). The last two still call the socket afterwards where a daemon answers.
 
-**Neither verb that adds an account obtains a subscription grant of this
-daemon's own**; there is no authorization flow here, no callback port, and no
-`--setup-token`.
+With `PROXENOS_DAEMON` set, the control vocabulary goes over HTTP to a daemon
+elsewhere (§2.7).
 
-`accounts add-key` stores an API key, and only that: a key belongs to nobody
-and has to be kept somewhere.
+### `--json` means one thing
 
-`accounts login` signs in to a profile the daemon will then borrow from
-(`proxy-behavior.md` §8.4). It runs that program's own login — `claude auth
-login` or `codex login` — against a directory, with the same environment
-variable the daemon later resolves the grant from, so what was signed in and
-what is read cannot drift apart. Nothing here sees a token. Afterwards the
-profile is read, and only a directory that holds a grant is written into
-`[profiles]`.
+On every verb that takes it, `--json` prints the control socket's payload for
+that verb, unrendered. `supervisor status --json` and `inspect --json` print
+their own documents, since neither has a socket payload.
 
-A directory that is **already** signed in is adopted rather than signed in
-again: no client is run, and the entry is written. That is how a profile
-another tool made is taken on, and how a second run finishes the job after the
-operator ran the printed line themselves.
+#### Tried and dropped
 
-`--relogin` is the case that adoption cannot serve: a declared profile whose
-grant has lapsed. An expired grant still reads as one, so without the flag the
-name is refused as already declared and with it the profile would be adopted
-and nothing would change. Given it, the name has to be declared already, the
-provider has to be the one it is declared as, the directory is the one
-`[profiles]` names — so `--path` is refused, and a declaration naming no path
-is the stock profile and is signed in with no variable set — and the client is
-run whatever the profile currently reads as. Nothing is written afterwards:
-the entry is already there, and the file is not opened at all.
+`env --json` printed the settings document, a different verb's output. It is
+gone with no alias: `settings` is that document's only name.
 
-Where there is no terminal to answer a login's prompts, the command is printed
-instead of run — with the environment variable already on it — along with the
-line that declares the profile afterwards. A client that wants a browser and a
-keyboard, started from something with neither, hangs with nothing said.
+### One sub-verb per action, the account positional
 
-`--device-auth` is the other half of that machine: a terminal there may be, but
-no browser to open. It puts `--device-auth` on the `codex login` that is run or
-printed, so the client prints a URL and a code to carry elsewhere, and it is on
-the printed way back too — a re-run that dropped it would start the client the
-way that hangs. `--provider anthropic` refuses it rather than passing it on,
-because `claude auth login` has no equivalent and would end in its own usage
-error about a spelling rather than about the choice.
+Each thing an operator does to an account is its own sub-verb, and the account
+it acts on is always the positional `NAME`.
 
-A declared profile reaches a running daemon at once: the verb calls
-`config.reload` (§3) after it writes, and says whether the daemon took it.
-Best effort — no socket is no daemon, which is an ordinary state for a login
-and not a failure of one.
+#### Tried and dropped
 
-Storing a key never moves which account pays. A lone account serves turns
-without anything recorded, so the choice is written down before a second
-account exists; every account stored after that leaves the selection alone, and
-`accounts use NAME` is the verb that moves it. Storing a credential and
-choosing what serves turns are two decisions, and one command making both moved
-every turn onto a newly stored account without saying so.
+Flags as actions (`--use`, `--forget`, `--rename` on `accounts`) and a top-level
+`login` split by `--key` and `--profile`. What a command did depended on which
+flags were present, and the account was spelled `--as` in one verb and `--use` in
+another. The top-level `login` is gone with no alias.
 
-The key arrives on **stdin**, never in a command line: an argument is visible to
-every process on the machine and lands in shell history. Where stdin is a
-terminal it says on **stderr** what it is waiting for and reads from a hidden
-prompt; where stdin is a pipe it says nothing, so
+### Adding an account never obtains a grant
+
+Neither `accounts login` nor `accounts add-key` runs an authorization flow of
+this daemon's own. There is no callback port and no `--setup-token`.
+
+### `accounts login`
+
+Signs in to a profile the daemon will borrow from (`proxy-behavior.md` §8.4). It
+runs the owning program's own login — `claude auth login` or `codex login` —
+against a directory, with the same environment variable the daemon later
+resolves the grant from. Afterwards the profile is read, and only a directory
+holding a grant is written into `[profiles]`.
+
+- `--path DIR` says where. Absent, the profile goes under
+  `<config dir>/profiles/<NAME>`.
+- A directory already signed in is adopted: no client runs, and the entry is
+  written.
+- Where there is no terminal to answer the login's prompts, the command is
+  printed instead of run, with the environment variable on it, together with
+  the line that declares the profile afterwards.
+- A declared profile reaches a running daemon at once: the verb calls
+  `config.reload` after it writes and says whether the daemon took it. No socket
+  is not a failure.
+
+#### Why
+
+Running the login against the same variable the daemon reads means what was
+signed in and what is read cannot drift apart. Nothing here sees a token. A
+client that wants a browser and a keyboard, started from something with neither,
+hangs with nothing said, which is why the command is printed instead.
+
+### `accounts login --relogin`
+
+Signs a profile `[profiles]` already declares back in. The name must be
+declared, `--provider` must match its declaration, and the directory is the one
+declared: `--path` is refused, and a declaration with no path is the stock
+profile, signed in with no variable set. The client runs whatever the profile
+currently reads as. Nothing is written afterwards.
+
+#### Why
+
+A lapsed grant still reads as a grant. Without the flag the name is refused as
+already declared, and adoption would change nothing.
+
+### `accounts login --device-auth`
+
+Puts `--device-auth` on the `codex login` that is run or printed, so the client
+prints a URL and a code instead of opening a browser. It is on the printed way
+back too. `--provider anthropic` refuses it.
+
+#### Why
+
+A machine may have a terminal and no browser. A re-run that dropped the flag
+would start the client the way that hangs. `claude auth login` has no
+equivalent, and passing it on would end in a usage error about a spelling rather
+than about the choice.
+
+### `accounts add-key`
+
+Stores an API key read from **stdin**. At a terminal it says on stderr what it is
+waiting for and reads from a hidden prompt; from a pipe it says nothing, so
 `printf '%s' "$KEY" | proxenos accounts add-key NAME --provider P` writes to
-stdout only the line
-naming what it stored. One thing more is said, on stderr and only at a terminal:
-an `anthropic` key beginning `sk-ant-oat` gets a note that the stem belongs to
-two credentials — the year-long token `claude setup-token` mints and the
-harness's own hours-long OAuth access token — that nothing stored can tell them
-apart, and that the second will simply stop authenticating
-(`proxy-behavior.md` §8.2). The key is stored either way; the note names the
-stem and no part of the secret.
+stdout only the line naming what it stored.
 
-`NAME` is positional and required, because a key carries no id to be named by.
-`--provider` is required too and has no default: it states which provider's
-endpoints the key is spent against — `anthropic` for a key that serves turns
-through the relay (`proxy-behavior.md` §9) — and the two providers refuse each
-other's credentials, so a key that silently claimed the wrong one fails later
-as an authentication error naming the credential rather than the choice.
-Storing a key under a name that already holds a key of the *same* provider
-rotates it in place, silently, which is what a replaced secret needs. A name
-that holds a key of a *different* provider is refused instead, naming the
-account, the provider it currently holds, and the `accounts remove NAME` that
-clears the way. A name that is already a declared profile is refused too: one
-name, one account.
+- `NAME` and `--provider` are required. `--provider` has no default.
+- A name already holding a key of the same provider is rotated in place.
+- A name holding a key of the other provider is refused, naming the account, the
+  provider it holds, and `accounts remove NAME`.
+- A name that is a declared profile is refused.
+- An `anthropic` key beginning `sk-ant-oat` gets a note on stderr, at a terminal
+  only: that stem belongs both to the year-long token `claude setup-token` mints
+  and to the harness's hours-long OAuth access token, nothing stored can tell
+  them apart, and the second will stop authenticating (`proxy-behavior.md`
+  §8.2). The key is stored either way, and the note names no part of the secret.
+- Storing a key never moves the selection, except that a lone account is
+  selected so the choice is written down before a second exists. Where it did
+  select, the verb calls `accounts.select` so a running daemon follows.
 
-`accounts` lists what this daemon can serve — the declared profiles first, then
-the keys — as a table under a header, marking the one serving turns, naming the
-store each borrowed row was read from, and saying in its last column whether
-the account needs anything doing to it: a credential the backend refused, a
-profile that has become a different account since it was chosen, a login about
-to expire, else `ok`. Only the source column is ever cut. A grant left in
-`credentials.json` by an older version is **not** listed as an account, because
-nothing reads one any more; it is named in a note under the listing instead,
-since a credential that quietly stopped counting reads as one that vanished.
-Each row also says what kind of thing it is and whether the operator wrote it
-down — `declared` is true only for a profile named in `[profiles]`, and it is
-what separates the account `accounts remove` can drop by deleting a line from
-the one where there is no line to delete.
-`--json` prints the socket's payload instead of the table, under either
-spelling of the listing.
+#### Why
 
-`accounts use NAME` switches to another, and its confirmation says how far the
-switch moved: a switch within one provider changes whose quota is spent and
-reads `still on codex`, while one across providers changes which backend
-answers, which path the turn takes and which subscription is drawn down, and
-names both sides — `codex to anthropic`.
+An argument is visible to every process on the machine and lands in shell
+history. The two providers refuse each other's credentials, so a key that
+claimed the wrong one would fail later as an authentication error naming the
+credential rather than the choice. Storing a credential and choosing who pays
+are two decisions; one command making both moved every turn onto a newly stored
+account without saying so.
 
-`accounts rename OLD NEW` works on a key; it is **refused for a borrowed
-profile**, naming it, because a profile's name is the key it is declared under
-and changing it is an edit to a file the operator can see.
+### `accounts` and `accounts list`
 
-`accounts remove NAME` works on both, and each kind loses a different thing. A
-key is this daemon's own and is dropped from its store. A **declared** profile
-is a line in `[profiles]` naming a directory another program owns: the line
-goes, the grant stays exactly where it is, and the daemon re-reads the file so
-it stops answering for an account it has just reported gone. A profile this
-daemon *found* rather than one it was given is refused instead, saying both
-that it was found and that `[profiles]` is empty — there is no line to delete,
-and writing the set down is what makes it something an entry can be taken out
-of. All of these go through the socket, because the daemon holds the selection:
-a CLI that edited the file directly would leave a running daemon serving the
-account it read at startup.
+A table under `NAME PROVIDER KIND ACCOUNT SOURCE STATE`, declared profiles
+first, then keys, with a `*` on the account serving turns.
 
-**The rendered `models` is a table under `MODEL  WINDOW  TIER`.** The `TIER`
-column names the tiers pointing at each id, in the ladder's own order — `opus,
-sonnet, haiku` — and a pinned tier (§7.1) points at its model like any other.
-The mapping is read from the `tiers` method rather than carried a second time
-on this one's payload, and where it cannot be read the column is left off
-rather than printed empty: a blank cell there reads as "no tier maps to this
-model", which is a different statement from "this side does not know". A
-catalog that states no window still says `window unknown`.
+| Column | Content |
+|---|---|
+| `PROVIDER` | `codex` or `anthropic`, on every row |
+| `KIND` | `profile` or `key` |
+| `ACCOUNT` | the address, else the id, else the subscription |
+| `SOURCE` | the store it was read from, `$HOME` shortened to `~`; `keychain` for a keychain, `stored` for a key; `(found)` on a profile nobody declared. The only column ever cut |
+| `STATE` | one phrase: `refused`, `identity changed`, the renewal countdown, else `ok` |
 
-**The rendered `status` names the account by the name `accounts` lists it
-under.** The `auth` line leads with it — `auth       work-codex
-(husni@sayurbox.com, codex)` — because that string is what every account verb
-takes, and the word it led with before, `connected`, was the one thing already
-established by there being a line at all. The address, the kind and the
-provider follow it, and a daemon whose payload carries no name renders exactly
-what it did before rather than inventing one.
+A grant left in `credentials.json` by an older version is not listed as an
+account; it is named in a note under the table.
 
-**A `daemon` line names what is serving the socket**: the build, the process,
-and — where the daemon can tell — whether the supervisor of §2.6 is what
-started it. `stop`, `supervisor` and `start` all talk about that
-process, and nothing in the report named it. The supervision clause is silence
-rather than `not supervised` where the answer is not established, since a
-platform with no supervisor here has no standing to make that claim. **Both
-implemented platforms do answer it**, by different readings: launchd names the
-job it started in the process's environment, and systemd names nothing there,
-so the Linux answer is the manager's own — see §2.6 for how it is read and
-when it is still silence.
+#### Why
 
-**The four tier rows are a table under `TIER  MODEL`**, with a `STATE` column
-where a row has one — `inert while relaying`, or `as <account>` for a tier
-pinned to another account. The state used to trail off the end of the model as
-a parenthesis, and the rows had no header at all. The column appears only where
-some row has a state: a header over four blank cells is one the reader learns
-nothing from.
+With two providers stored, a row without its provider is a guess. A credential
+that quietly stopped counting reads as one that vanished, so it is named.
 
-**The rendered `status` says what the next turn does, not only what is
-configured.** Where the account serving turns is on the second provider, every
-model id it authenticates relays verbatim and the tier mapping decides nothing
-(`proxy-behavior.md` §9.1). The four tier rows printed unqualified read as
-"your turns go to these models", which is the one thing they do not mean in
-that state, so each unpinned row is marked inert and a `routing` line names the
-provider the ids relay to. A pinned tier (§7.1) names its own account and stays
-live either way, marked or not by the provider the selection happens to be on —
-a split mapping renders accurately row by row. This is a rendering rule: the
-`status` payload already carries `auth.provider` and the pins, and no field
-changed.
+### `accounts use NAME`
 
-A live run **resolves its credential before it probes anything**, and answers
-with that refusal alone when it cannot. A matrix reporting seven capabilities
-as broken because there is no credential — under a header saying the backend
-answered and was billed, when nothing was sent — is the same failure the probes
-exist to prevent, printed the other way round. It probes the endpoint the
-account's kind belongs to (`proxy-behavior.md` §8.2), so a key is answered for
-rather than reported as a subscription that failed everything.
+Serves every following turn as that account. The confirmation says how far the
+switch moved: within one provider it reads `still on codex`; across providers it
+names both sides, `codex to anthropic`.
 
-`doctor` runs the capability probes and prints a matrix. Against the fixture
-corpus — the default — it contacts nothing and costs nothing. `--live` answers
-the same probes from the real backend instead, one turn each, and spends real
-inference quota; it maps the corpus's model ids through the configured tiers,
-so what it reports is the mapping in the configuration file rather than a
-notional one.
+#### Why
 
-A live run also names any tier whose stated model this account's catalog does not
-carry, above the matrix. Only a live run can: a catalog is one account's menu and
-has to be fetched, and a replay run contacts nothing. The fetch is a model list
-rather than a turn, so it adds nothing to what `--live` already spends.
+A name does not state a provider. A cross-provider switch changes which backend
+answers, which path turns take, and which subscription is drawn down, and only
+the daemon holds the answer.
 
-A live run applies every check except the ones that only mean something against
-a recording. The corpus can assert the exact URL a search returned because the
-corpus wrote it; a backend answers with whatever it answers, and failing a
-working capability on that basis teaches whoever reads the matrix to discount
-it. Those checks are marked in the probe table and skipped live.
+### `accounts rename OLD NEW`
 
-The matrix always states which it was. One built from replayed fixtures that
-reads like one built from a live backend is exactly the plausible-looking
-output the probes exist to prevent. A probe that could not run is reported as
-skipped and never counted as a pass: a probe that established nothing while
-reporting success is the same failure in miniature.
+Works on a key. Refused for a borrowed profile, naming it.
 
-A failed row prints the probe's rationale beneath it — what breaks silently
-without that probe. Passing rows stay one line, because a rationale on every
-row is a page of prose over a matrix nobody would then read.
+#### Why
 
-Under `--live` the `count-tokens` and `env-contract` rows are marked as answered
-by the proxy. The live header says the backend answered and was billed, and that
-is true of every other row and false of these two: pre-flight sizing never leaves
-the proxy by design, and the launch surface is rendered rather than sent. The
-rows are marked rather than dropped, because a list whose job is to be complete
-cannot quietly omit a surface it cannot vouch for.
+A profile's name is the key it is declared under in `[profiles]`, and changing it
+is an edit to a file the operator can see.
 
-The launch surface has a probe of its own, `env-contract`, and it replays
-nothing: it renders the environment of §2.2 for two representative mappings and
-holds it to its contract. `ENABLE_TOOL_SEARCH` must be there on every launch, and
-`CLAUDE_CODE_DISABLE_1M_CONTEXT` must be there where a tier translates and absent
-where every tier is relayed (`proxy-behavior.md` §7.2). Both variables were
-settled against a live client and both fail silently: without the first the
-client disables deferred tool loading on a base URL it does not recognize as
-first-party, and without the second it appends `[1m]` to an unrecognized model id
-and assumes a window four times the model's. Either regression presents as a
-broken-looking client over a fully green matrix, which is why the assertion is on
-the rendered environment rather than on the configuration behind it. It costs
-nothing on either mode and is not skipped under `--live`.
+### `accounts remove NAME`
 
-One line under the matrix names what the run exercised and what it did not: the
-account whose credential was spent, and — always — that the WebSocket transport
-was not among it. A live run is HTTP only, since a probe is one turn with no
-continuation and the socket's value is entirely in the incremental path. The
-same line says whether the relay path (§9) was exercised, and as which
-account when it answered live. Green rows say
-nothing about a path no probe drove, and a reader with no line to tell them
-otherwise reads green as coverage of the whole proxy.
+- A key is dropped from this daemon's store.
+- A **declared** profile loses its `[profiles]` line. The grant stays where it
+  is, and the daemon re-reads the file.
+- A profile the daemon **found** rather than was given is refused, saying it was
+  found and that `[profiles]` is empty.
 
-That line is assembled from the outcomes, so a partial run states a partial
-result. `--probe` is one way to get one, and a skipped or failed row is another.
-Every path is named exactly once, under the heading that is true of it. A path
-with a passing row is listed under `Exercised:`, and only there is the account
-it spent named. A path nothing ran on — no probe, or every probe skipped — is
-listed under `Not exercised:`, alongside the WebSocket transport, which is
-always in it. A path whose probes all ran and all failed belongs under neither:
-it was reached and established nothing, and gets a clause of its own saying so.
-A heading with nothing under it is not printed, so a run that exercised nothing
-prints no `Exercised:` at all.
+All of it goes through the socket.
 
-The relay path has a probe of its own, and it runs on both modes. Replayed, it
-drives the §9 branch against a recording whose marker sits inside a field the
-proxy does not model, so a body round-tripped through the proxy's own types
-fails it, and a stand-in backend records the bytes it was sent so both halves
-are checked. Live, it sends a turn of its own to the second provider's real
-endpoint.
+#### Why
 
-The live arm establishes the answer half only, and the row says so. Forwarding
-is the whole behaviour of this path, so the outbound bytes leave on a socket
-this process cannot read; the request-half checks do not run, and the replay arm
-is what covers them. Running them over a stand-in value would report a pass for
-a half nothing looked at.
+The daemon holds the selection. A CLI that edited the file directly would leave
+a running daemon serving the account it read at startup. A found profile has no
+line to delete, and writing the set down is what makes one removable.
 
-Which account the live arm relays as is read from the store rather than taken
-from whichever account is serving turns. Exactly one account on the second
-provider is used; several need `--relay-account <name>`; none skips the row
-naming what the store holds. The account is pinned by name, and an authorization
-by name neither reads nor changes the selection — `accounts` reports the same
-serving account before and after a run. The coverage line names the relayed
-account separately from the account the translating probes spent, because they
-are different accounts by construction.
+### `status`
 
-`--probe <name>` runs one at a time, and naming an unknown one lists the
-known ones.
+Renders the `status` payload.
 
-The corpus resolves in one of three ways, and the matrix names which. `--fixtures
-<dir>` is answered from that directory and never from anywhere else — a
-recording just captured by `record` must be what a run against it sees, not a
-copy compiled in months earlier, so a named directory missing a fixture skips
-the probe rather than falling back. With no `--fixtures`, a `fixtures/`
-directory in the working directory wins if there is one, and otherwise the
-corpus compiled into the binary answers. That last case is the one an installed
-binary is in: `doctor` has to establish something on a first run, and a run that
-skipped every probe for want of a checkout would establish nothing at the
-moment it is most likely to be run.
+- The `auth` line leads with the account's name, as `accounts` lists it —
+  `auth       work-codex (husni@sayurbox.com, codex)` — then the address, kind
+  and provider. A payload with no name renders without one.
+- A `daemon` line names the build and pid serving the socket, and whether the
+  §2.6 supervisor started it. Where `supervised` is null the clause is left out.
+- The tier rows are a table under `TIER MODEL` in ladder order — `opus, sonnet,
+  haiku, fable` — with a `STATE` column only where some row has a state:
+  `inert while relaying`, or `as <account>` for a pinned tier.
+- Where the serving account is on the second provider, every unpinned tier row
+  is marked inert and a `routing` line names the provider the ids relay to. A
+  pinned tier names its own account and stays live.
+- Where the CLI's build differs from the daemon's, it says so.
 
-`usage` reports every account's quota as a table, the serving account's plan
-above it. It costs nothing to ask: the backend opens every stream with a snapshot, before it says
-anything about the response, so the figure rides along with a turn already being
-made and is never polled. Before any turn has been made it says so rather than
-answering with zeroes. A figure survives a restart where its window has not
-reset since (`proxy-behavior.md` §6.1), and comes back with the moment it was
-taken, so the row reads `2h ago` rather than standing empty. `--json` emits the
-snapshot as it stands, for a status line.
+#### Why
 
-`--refresh` **asks** before reporting: it calls `usage.refresh` (§3), which
-sweeps every stored account that can hold a figure, each on its own credential
-and each recorded under its own name, and then reports the `usage` document as
-it now stands. It spends one request per askable account, which is why it is
-opted into: a bare `usage` asks for nothing and stays the cheap read. Nothing
-about which account serves turns moves, a failure belongs to the row it
-happened on, and an unselected account's expired grant is never refreshed. The
-document `--json` emits is the same one either way — asking changes the figures
-in it, never its shape.
+The name is the string every account verb takes. `supervised` null is silence
+because "not supervised" is a claim a platform with no supervisor cannot make.
+When the serving account relays, every id relays verbatim and the mapping decides
+nothing (`proxy-behavior.md` §9.1); four unqualified rows would read as "your
+turns go to these models", the one thing they do not mean. The payload sorts
+`tiers` by name, an order nothing else uses. A version line printed on every run
+is one nobody reads on the run that matters.
 
-**One row per window, and the long sentences under the table rather than on
-it.** An account can hold a five-hour window beside a seven-day one, each with
-its own reset, so the window rows after the first repeat neither the name nor
-the freshness — those belong to the account. USED carries the percentage and
-the window it is of, plus the provider's own words about that window where it
-stated any. RESETS counts down to the reset the provider gave, or says the
-window has already reset. SOURCE is `last turn` or `asked`. AS OF is the age of
-the figure, and on a row that has none it is the reason in a cell — `no turn
-yet`, `no relayed turn yet`, `per token` for a metered account, `not reported`
-for a provider that states none. A metered row's USED cell carries the tally of
-§6.1 instead of a percentage, because it has no ceiling to state one against.
-The explanation of an empty row is one note under the table, said once however
-many rows are empty, and it names `usage --refresh` as the way to fill them.
+### `models`
 
-**A credit balance gets a row of its own.** Where the provider states one
-(`proxy-behavior.md` §8.4), the account's windows are followed by a row whose
-USED cell reads `credit: $205.75 / $210.52 · 98%`, with the provider's severity
-word in parentheses where it said anything other than `normal`. It is money
-rather than a percentage of an entitlement and has no reset, so the RESETS,
-SOURCE and AS OF cells stay blank — those belong to the account, and are said
-once on its first row. The amounts are the minor units the provider stated
-divided by the exponent it stated, and the percentage is the provider's own,
-never recomputed from them. A currency this proxy has no symbol for is named by
-its code rather than dressed as dollars.
+A table under `MODEL WINDOW TIER`. `TIER` names the tiers pointing at each id, in
+ladder order, read from the `tiers` method. Where `tiers` cannot be read the
+column is left off. A model with no stated window reads `window unknown`.
+`--account NAME` asks for that stored account's menu.
 
-**A subscription that is not active gets a row too.** Where the provider states
-a subscription status other than `active` (`proxy-behavior.md` §8.4), the
-account's windows are followed by a row whose USED cell reads `subscription `
-and the provider's own word — `subscription canceled`. It is the one state the
-figures cannot show: quota keeps reading as untouched while every turn is
-refused. An active subscription, and an account whose provider states nothing,
-say nothing.
+#### Why
 
-**A figure per account, not per daemon.** A pinned tier's turns spend the
-account it names (`proxy-behavior.md` §7.1), so a daemon can hold two live
-figures at once. Each is held under the account that earned it and reported
-beside the serving one, with how it was come by — riding a turn, or asked for
-over the socket — and the moment it was taken. An account with no figure says
-so, and says why: no turn as it recorded by this daemon yet, a key holding no
-subscription entitlement, or a provider that does not report a quota to this
-proxy at all. That first reason is scoped to the daemon on purpose
-(`proxy-behavior.md` §6.1): a turn relayed by a CLI process — `doctor --live`
-makes one — reads the same quota headers and exits with them, so the account
-has spent something the daemon never saw, and a line claiming none had been
-spent would be false.
+A blank cell reads as "no tier maps to this model", a different statement from
+"this side does not know".
 
-**A second-provider account earns its figure the same way**, from the
-`anthropic-ratelimit-unified-*` headers on the response to a relayed turn
-(`proxy-behavior.md` §9.4) — the only place that provider states a quota for a
-subscription credential. It is reported as having ridden a turn, because it did.
-No plan name appears beside it: no header states one, and one is not deducible
-from headroom.
-Where there is one account, the block above is the whole answer and nothing is
-repeated under its own name.
+### `incidents`
 
-The same snapshot is also put on the response as `anthropic-ratelimit-unified-*`
-headers, which are the names this client's own code parses a quota from.
-**Measured: that is not enough to make it appear in the status line.** A stub
-endpoint setting those headers, with nothing else changed, left `rate_limits`
-absent from the status-line payload.
+Asks the daemon for the incidents open on the status page of every provider a
+stored account is on. A table under `PROVIDER IMPACT STATUS SINCE NAME URL`,
+worst first, then one line per page that did not answer. Nothing open is a
+sentence naming the providers asked.
 
-The reason is now known rather than inferred. The client does parse those header
-names, but the status-line payload is gated on a separate flag, which its own
-schema describes as false "when plan rate limits do not apply (API key, Bedrock,
-Vertex, or missing profile scope)". Pointing the client at a proxy means setting
-`ANTHROPIC_AUTH_TOKEN`, which is the API-key path by definition, so `rate_limits`
-is null there no matter what any header says. §2.1 is the only route, and the
-headers are emitted because they are the accurate wire form of a figure the
-response really carries — they do still feed the client's retry banner on a
-quota 429.
+### `tiers`
+
+Reads the mapping as `TIER MODEL`, a tier the catalog cannot honour marked.
+`--account NAME` reads that stored account's mapping (the `tiers` method's
+`account` parameter); it cannot be combined with a sub-verb.
+
+### `tiers set TIER MODEL`
+
+Points one tier at a model through `tiers.set` (§3), with exactly what was typed.
+
+| Flag | Effect |
+|---|---|
+| none | the shared table, until the daemon stops |
+| `--account NAME` | that account's section instead |
+| `--persist` | also written to `config.toml` |
+| `--as ACCOUNT` | pins the tier to a stored account. Refused, naming the flag, without cross-account consent |
+| `--allow-cross-account` | grants that consent first through `cross_account_tiers.set` (always written). Requires `--as` |
+| `--effort LEVEL` | the effort the client starts the tier's model at, delivered in the launch settings (§2.2). Omitted, the tier carries none |
+
+One tier per call. The answer says whether the change was persisted and where.
+
+#### Why
+
+A set is partial and replaces the tier's whole value, so an omitted `--effort`
+clears it rather than keeping an old one.
+
+### `tiers cross-account on|off`
+
+Grants or revokes consent for pinned tiers. `off` is refused while any tier still
+pins an account.
+
+### `effort`
+
+Reads the ceiling in force from `status`.
+
+### `effort set LEVEL|none`
+
+Sets the ceiling through `effort.set` (§3) to `minimal`, `low`, `medium`, `high`,
+`xhigh`, `max` or `ultra`. `ultracode` is read as `xhigh`. `none` sends null,
+removing the override. `--account` and `--persist` as for `tiers set`. The answer
+reports the ceiling that results, not the one asked for.
+
+### `doctor`
+
+Runs the capability probes and prints a matrix. The default answers from the
+fixture corpus, contacts nothing, and costs nothing. The matrix always states
+which mode produced it.
+
+| Flag | Effect |
+|---|---|
+| `--live` | answers from the real backend, one turn per probe, spending quota. Model ids are mapped through the configured tiers |
+| `--probe NAME` | runs one probe. An unknown name lists the known ones |
+| `--fixtures DIR` | answers from that directory only |
+| `--relay-account NAME` | which account the live relay probe spends, where several are on the second provider |
+
+#### Why
+
+A matrix from replayed fixtures that reads like one from a live backend is the
+plausible-looking output the probes exist to prevent.
+
+### Which corpus answers
+
+`--fixtures DIR` is used and nothing else; a fixture missing from it skips the
+probe. With no `--fixtures`, a `fixtures/` directory in the working directory
+wins if present, otherwise the corpus compiled into the binary.
+
+#### Why
+
+A recording just captured by `record` must be what a run against it sees, not a
+compiled copy. An installed binary has no checkout, and a first run that skipped
+every probe would establish nothing.
+
+### Rows
+
+- A probe that could not run is `skipped`, never a pass.
+- A failed row prints the probe's rationale beneath it; passing rows stay one
+  line.
+- Under `--live`, `count-tokens` and `env-contract` are marked as answered by the
+  proxy: sizing never leaves the proxy, and the launch surface is rendered, not
+  sent.
+- Checks that only mean something against a recording (an exact URL the corpus
+  wrote) are marked in the probe table and skipped live.
+
+### A live run resolves its credential first
+
+A live run that cannot resolve a credential answers with that refusal alone. It
+probes the endpoint the account's kind belongs to (`proxy-behavior.md` §8.2).
+It also names, above the matrix, any tier whose stated model this account's
+catalog does not carry; the catalog fetch is a model list, not a turn.
+
+#### Why
+
+Seven capabilities reported broken for want of a credential, under a header
+saying the backend answered and was billed, is the failure the probes prevent,
+printed the other way round.
+
+### `env-contract`
+
+Renders the §2.2 environment for two representative mappings and holds it to its
+contract: `ENABLE_TOOL_SEARCH` on every launch, and
+`CLAUDE_CODE_DISABLE_1M_CONTEXT` present where a tier translates and absent where
+every tier relays (`proxy-behavior.md` §7.2). It replays nothing and runs in both
+modes.
+
+#### Why
+
+Both variables were settled against a live client and both fail silently: without
+the first the client disables deferred tool loading on a base URL it does not
+recognize as first-party; without the second it appends `[1m]` to an
+unrecognized id and assumes a window four times the model's. Either regression
+presents as a broken client over a green matrix.
+
+### The relay probe
+
+Runs in both modes. Replayed, it drives the relay branch against a recording
+whose marker sits inside a field the proxy does not model, and a stand-in backend
+records the bytes sent, so both halves are checked. Live, it sends a turn to the
+second provider's real endpoint and checks the answer half only, and the row says
+so.
+
+The live account is read from the store, not from the selection: exactly one
+account on the second provider is used; several need `--relay-account`; none
+skips the row, naming what the store holds. Authorizing by name neither reads
+nor changes the selection.
+
+#### Why
+
+A body round-tripped through the proxy's own types fails the marker check. Live,
+the outbound bytes leave on a socket this process cannot read, and checking them
+against a stand-in would report a pass for a half nothing looked at.
+
+### The coverage line
+
+One line under the matrix, assembled from outcomes:
+
+- `Exercised:` lists each path with a passing row, and the account it spent.
+- `Not exercised:` lists each path nothing ran on, and always the WebSocket
+  transport — a live run is HTTP only.
+- A path whose probes all ran and all failed gets a clause of its own.
+- A heading with nothing under it is not printed.
+
+The relayed account is named separately from the account the translating probes
+spent.
+
+#### Why
+
+Green rows say nothing about a path no probe drove, and a reader with nothing
+saying so reads green as coverage of the whole proxy.
+
+### `usage`
+
+What quota is left, per account, as a table under
+`NAME PROVIDER USED RESETS SOURCE AS OF`, the serving account's plan above it and
+a `*` on the serving row.
+
+- **One row per window.** Rows after an account's first repeat neither name nor
+  freshness.
+- `USED` is the percentage and the window it is of, plus the provider's own words
+  about that window. A metered row carries the token tally
+  (`proxy-behavior.md` §6.1) instead.
+- `RESETS` counts down to the reset, or says the window has already reset.
+- `SOURCE` is `last turn` or `asked`.
+- `AS OF` is the figure's age, or the reason there is none: `no turn yet`,
+  `no relayed turn yet`, `per token`, `not reported`. The explanation is one note
+  under the table naming `usage --refresh`.
+- A **credit balance** gets its own row: `credit: $205.75 / $210.52 · 98%`, the
+  provider's severity word in parentheses where not `normal`, and `RESETS`,
+  `SOURCE`, `AS OF` blank. Amounts are the minor units divided by the stated
+  exponent; the percentage is the provider's, never recomputed; a currency with
+  no known symbol is named by its code.
+- A **subscription not active** gets its own row: `subscription canceled`, the
+  provider's own word.
+- A window whose reset has already passed is marked stale; a window with no reset
+  stated never is.
+
+A figure rides a turn already being made — the backend opens every stream with
+one — so a bare `usage` costs nothing. Before any turn it says so rather than
+printing zeroes. A figure survives a restart where its window has not reset
+(`proxy-behavior.md` §6.1). A second-provider account earns its figure from the
+`anthropic-ratelimit-unified-*` headers on a relayed turn (`proxy-behavior.md`
+§9.4), with no plan name beside it. With one account, nothing is repeated under
+its own name.
+
+#### Why
+
+Figures are per account because a pinned tier spends the account it names
+(`proxy-behavior.md` §7.1), so a daemon can hold two live figures. "No turn yet"
+is scoped to this daemon: a CLI process such as `doctor --live` can spend quota
+the daemon never saw. A subscription that is not active is the one state the
+percentages cannot show — quota reads untouched while every turn is refused.
+
+### `usage --refresh`
+
+Calls `usage.refresh` (§3), then prints the same document. One request per
+askable account.
+
+#### Why
+
+Asking spends a request per account, so it is opted into. The `--json` shape is
+the same either way.
+
+### The quota headers do not reach the status line
+
+The snapshot is also put on the response as `anthropic-ratelimit-unified-*`
+headers, which feed the client's retry banner on a quota 429. They do not make
+`rate_limits` appear in the client's status-line payload: that field is gated on
+a flag its schema documents as false for the API-key path, and a proxied client
+is on that path by definition. `statusline` (§2.1) is the only route.
+
+### `record`
+
+| Mode | Captures | Needs | Spends |
+|---|---|---|---|
+| `ingress` | what the client sends, before translation | a client | nothing |
+| `upstream` | the client's untranslated request paired with the backend's stream, for every turn | credentials | quota, one turn per turn |
+| `surface` | a fixed list of exchanges against the second provider's Messages endpoint | an account on that provider | one turn per exchange |
+
+`ingress` and `upstream` run a daemon and take `--port` / `PROXENOS_PORT`.
+Captures go to `captures/` in the configuration directory, `0600`, and the most
+recent twenty are kept. They hold conversation content.
+
+- Ingress keeps request headers, with `authorization`, `x-api-key`, `cookie` and
+  `proxy-authorization` redacted by name. A relayed turn's request is held as the
+  exact bytes relayed.
+- `upstream` warns at start that every turn spends quota.
+- `surface` needs no daemon and goes out through the relay code. `--account` is
+  required and must be on the second provider. `--only NAME` captures one
+  exchange. `--out DIR` defaults to `fixtures/surface`. Response headers are
+  scrubbed by name before writing: `authorization`, `x-api-key`, `cookie`,
+  `proxy-authorization`, `set-cookie`, and the organization and workspace ids.
+
+Ingress and upstream share one fixture format. Surface captures hold a status, a
+scrubbed header set, and a body or a list of SSE payloads.
+
+#### Why
+
+A request cannot be inferred from a stream, and a translated request could not be
+replayed through the translation it has already been through. A relayed body
+re-encoded through this proxy's types would drop every field they do not model.
+Spending the wrong subscription is not recoverable, so `surface` names its
+account; a capture on disk is quota already spent, so `--only` exists. Organization
+and workspace ids say whose account paid, and fixtures are committed.
+
+### Logging
+
+Controlled by `RUST_LOG`, written to stderr. Credentials never appear at any
+level.
+
+### Where it lives
+
+| File | What it holds |
+|---|---|
+| `crates/proxy/src/cli.rs` | The verb and flag set |
+| `crates/proxy/src/main.rs` | Dispatch, logging setup |
+| `crates/proxy/src/commands/accounts.rs` | `accounts` sub-verbs |
+| `crates/proxy/src/auth/profile_login.rs` | `accounts login`, adoption, relogin, printed commands |
+| `crates/proxy/src/auth/key_login.rs` | `accounts add-key`, stdin reading, the `sk-ant-oat` note |
+| `crates/proxy/src/commands/inspect.rs` | `status`, `models`, `incidents`, `usage`, `statusline` |
+| `crates/proxy/src/commands/policy.rs` | `tiers`, `effort` |
+| `crates/proxy/src/commands/doctor.rs`, `crates/proxy/src/doctor.rs`, `crates/proxy/src/probe.rs` | `doctor`, probes, coverage line |
+| `crates/proxy/src/commands/record.rs`, `crates/proxy/src/recorder.rs`, `crates/proxy/src/surface.rs` | `record` and capture files |
+| `crates/proxy/src/render/` | Every table and line the verbs print |
 
 ### 2.1 `statusline`
 
-The status line is a script the user supplies, and the client hands it a JSON
-payload on stdin. `statusline` wraps that script: it reads the payload, merges
-in the quota, and passes it on. A script written against the client's own shape
-keeps working unchanged and gains a figure it could not otherwise have.
+Wraps a status-line script: reads the payload the client hands it on stdin,
+merges in the quota, and passes it on.
 
 ```json
 { "statusLine": { "type": "command",
                   "command": "proxenos statusline -- ~/.claude/my-statusline.sh" } }
 ```
 
-The merged payload gains `rate_limits.five_hour` and `rate_limits.seven_day`
-where a window genuinely is one of those, in the fields a script already reads —
-plus `rate_limits.windows`, which carries every window the backend reported with
-its real length. A script wanting a window the client has no name for reads that.
+The merged payload gains:
 
-Omit the command to print the merged payload instead, for a script that would
-rather pipe it. The wrapped command's exit status becomes this command's.
+- `rate_limits.five_hour` and `rate_limits.seven_day`, only where a window's
+  duration genuinely is one of those;
+- `rate_limits.windows`, every window the backend reported with its real length;
+- the `serving` block from `usage` — name, provider, address, plan, account id —
+  whether or not a figure is known.
 
-**It never breaks the status line.** A daemon that is not running, a socket that
-does not answer, a payload that will not parse: each passes through unchanged. A
-status line renders constantly, and one that breaks is worse than one missing a
-figure.
+With no command after `--`, the merged payload is printed. The wrapped command's
+exit status becomes this command's.
 
-**And it never merges another session's quota.** A status line is configured
-once and renders for every session the client runs, including sessions pointed
-at their own provider rather than at this proxy — and the daemon answers `usage`
-whenever it is up. So the merge is conditional on the model: `usage` reports
-the ids this daemon serves, and a payload naming something else is passed
-through untouched. That is what makes the wrapper safe to leave configured
-permanently while switching back and forth.
+#### Why
 
-The ids are the configured tiers plus every id a turn has actually been made
-against, because a client that names a model itself passes that id straight
-through and no tier would recognize it. **An unanswerable question merges**: a
-snapshot that names no models, or a payload that names none, leaves nothing to
-compare, and withholding the figure there would take it from every session that
-has it today to prevent a case that may not be happening.
+A script written against the client's own shape keeps working and gains a figure
+it could not otherwise have. The backend's windows are not fixed, so a window
+matching neither slot is left to `windows` rather than announced as one it is
+not. On a daemon that has served no turn, who is paying is the only thing worth
+rendering.
 
-Where headers do apply, only a window that genuinely matches one gets one. Those
-headers name two fixed windows, five hours and seven days, and the backend's
-windows are not fixed: it has reported a five-hour window in the past, does not
-currently, and may again. Windows are matched to header slots by duration, and
-one matching neither is reported by `usage` — where it can state its real length
-— rather than announced as a window it is not.
+### It never breaks the status line
 
-`record` has two modes, and the distinction matters because only one of them
-costs anything:
+A daemon not running, a socket not answering, a payload that will not parse:
+each passes through unchanged.
 
-- **ingress** captures what Claude Code sends to the proxy. It needs a working
-  client and no upstream credentials at all, since the exchange is recorded
-  before translation. The capture carries the request headers as they arrived —
-  they are half of any question about what a client actually sends — with
-  credential-bearing values (`authorization`, `x-api-key`, `cookie`,
-  `proxy-authorization`) redacted by name: the header's presence is the datum,
-  its value is a secret in a file that is not the credential store. A turn that
-  is relayed rather than translated (`proxy-behavior.md` §9) is captured too,
-  and its request is held as the exact bytes that were relayed — that path
-  forwards the body verbatim, and a capture re-encoded through this proxy's own
-  types would silently drop every field they do not model.
-- **upstream** captures the whole exchange: the client's request, untranslated,
-  paired with the stream the backend answered it with. It needs credentials and
-  spends quota, because the turn it records is a real one. Every turn through a
-  daemon started this way is captured, not only the failing ones — a fixture is
-  made from an exchange that worked.
+#### Why
 
-- **surface** captures the second provider's Messages endpoint itself: a short
-  fixed list of exchanges — a plain generation, a streaming text turn, a
-  streaming tool call, a refusal, and a sizing call — made against the real
-  endpoint and written as conformance fixtures under `fixtures/surface/`. It
-  makes the calls rather than waiting for a client to make them, because what
-  is wanted is a handful of known shapes rather than whatever a session happens
-  to send, and it needs no daemon at all. It goes out through the same relay
-  code a §9 turn takes, so what is captured is what the shipping path would
-  receive. `--account` is required and must name an account on the second
-  provider: spending the wrong subscription is not recoverable, and the
-  selected account is usually the other one. `--only <name>` captures one
-  exchange, because a capture on disk is quota already spent. Response headers
-  are scrubbed by name before anything is written — `authorization`,
-  `x-api-key`, `cookie`, `proxy-authorization`, `set-cookie`, and the
-  organization and workspace ids, the last two because a fixture is committed
-  and they say whose account paid for it.
+A status line renders constantly, and one that breaks is worse than one missing
+a figure.
 
-Both halves are needed to replay one. The request cannot be inferred from the
-stream, which is why the capture holds the client's request rather than the
-translated one: a capture of the translated request could not be replayed
-through the translation it had already been through.
+### It never merges another session's quota
 
-Ingress and upstream write to the same fixture format, so a test replays either
-without knowing which mode produced it. Surface captures are a format of their
-own: they hold a status, a scrubbed header set, and either a body or a list of
-SSE payloads, because what they record is an endpoint's answer rather than an
-exchange to be replayed through translation.
+`usage` reports the ids this daemon serves: the configured tiers plus every id a
+turn has been made against. A payload naming another model passes through
+untouched, `serving` included. Where either side names no models there is
+nothing to compare, and the figure is merged.
 
-Either mode runs a daemon, so both take the daemon's port control: `--port`, or
-`PROXENOS_PORT`, overriding the configured value — the same pair `run`
-documents.
+#### Why
 
-Captures are written beside the configuration, `0600`, and the most recent
-twenty are kept. They hold conversation content — the system prompt, the
-messages, and whatever the tools read.
+One status line renders for every session, including ones pointed at their own
+provider. Withholding on an unanswerable question would take the figure from
+every session that has it to prevent a case that may not be happening.
 
-Logging is controlled by `RUST_LOG`. Credentials never appear at any level.
+### Where it lives
+
+| File | What it holds |
+|---|---|
+| `crates/proxy/src/statusline.rs` | The merge and the session check |
+| `crates/proxy/src/commands/inspect.rs` | The verb |
 
 ### 2.2 `env` and `settings`
 
-The configuration Claude Code needs, in two renderings. Neither is a degraded
-version of the other; they carry different amounts because the client has two
-configuration surfaces and only one of them is the environment.
+The configuration Claude Code needs, in two renderings. `env` is shell exports;
+`settings` is one client settings document.
 
-`env` emits shell exports, for a shell:
+### `env`
 
 ```
-ANTHROPIC_BASE_URL=http://127.0.0.1:8787
-ANTHROPIC_AUTH_TOKEN=unused
-ANTHROPIC_DEFAULT_OPUS_MODEL=<mapped>
-ANTHROPIC_DEFAULT_SONNET_MODEL=<mapped>
-ANTHROPIC_DEFAULT_HAIKU_MODEL=<mapped>
-ANTHROPIC_DEFAULT_FABLE_MODEL=<mapped>
-CLAUDE_CODE_MAX_CONTEXT_TOKENS=<effective window>
-CLAUDE_CODE_AUTO_COMPACT_WINDOW=<effective window>
-CLAUDE_CODE_DISABLE_1M_CONTEXT=1
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
+export ANTHROPIC_AUTH_TOKEN=unused
+export ANTHROPIC_DEFAULT_OPUS_MODEL=<mapped>
+export ANTHROPIC_DEFAULT_SONNET_MODEL=<mapped>
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=<mapped>
+export ANTHROPIC_DEFAULT_FABLE_MODEL=<mapped>
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS=<effective window>
+export CLAUDE_CODE_AUTO_COMPACT_WINDOW=<effective window>
+export CLAUDE_CODE_DISABLE_1M_CONTEXT=1
+export ENABLE_TOOL_SEARCH=true
+export ENABLE_CLAUDEAI_MCP_SERVERS=false
 ```
 
-A tier the serving account relays (`proxy-behavior.md` §9.1) has no
-`ANTHROPIC_DEFAULT_<TIER>_MODEL` line unless its model was stated for that
-account — pinned in `[tiers]`, or named under `[accounts.<name>.tiers]`. The
-shared table's id is the first provider's, and the client's own id for the
-tier is the one the second provider accepts (`proxy-behavior.md` §7.2).
+### Tier variables
 
-**Whose environment this is.** The socket method takes an optional
-`{"account": name}`, and `exec --account` (§2.3) passes it: the flag decides
-who serves every turn of the session it starts, so the mapping, the window,
-and the client policy are all resolved for that account rather than for the
-selection. Without it the answer is the selection's, unchanged. A name the
-store does not hold is refused by name rather than answered about somebody
-else. The mapping in force is the selection's, so an account the call names
-instead is resolved from `config.toml` the way `accounts.select` would resolve
-it — the shared table with `[accounts.<name>.tiers]` over it — and a
-`tiers.set` that was never persisted is not carried across to it.
+`ANTHROPIC_DEFAULT_<TIER>_MODEL` is emitted for every tier, except a tier the
+serving account relays (`proxy-behavior.md` §9.1) whose model was not stated for
+that account — pinned in `[tiers]` or named under `[accounts.<name>.tiers]`.
 
-The two window variables appear only when the catalog knows the window, and
-carry the smallest across the mapped tiers. `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
-carries one further condition: it is emitted only where that figure falls
-within 100,000–1,000,000 tokens, the range the client will accept. Outside it
-the client's own parser answers `Expected 'auto' or 100k–1M tokens` and the
-settings key of the same meaning discards the value silently, so a figure out
-of range is no setting at all; the variable is left out and the reason is
-logged instead (`proxy-behavior.md` §7.2). The client will warn that its
-200,000 limit is not enforced; that is expected, because the real window is
-larger and using it is the point.
+#### Why
 
-**A mapping with any tier on the second provider states no window at all**, and
-one served entirely by that provider omits `CLAUDE_CODE_DISABLE_1M_CONTEXT` too
-— the client recognizes those ids by itself, and both variables would replace
-what it knows with a figure this catalog cannot supply (`proxy-behavior.md`
-§7.2). The tier variables are unchanged: they still carry the final ids.
+`WebFetch` and `WebSearch` run on the haiku tier, so an unmapped haiku breaks them
+in a way that looks unrelated to tier mapping. For a relayed tier the shared
+table's id is the first provider's, and the client's own id is the one the second
+provider accepts (`proxy-behavior.md` §7.2).
 
-**Every launch adds `ENABLE_TOOL_SEARCH=true`.** The client disables deferred
-tool loading the moment its base URL is not a first-party host — it cannot
-know what stands behind the proxy — and that variable is the client's own
-documented override. Both paths carry the contract it needs: the relay
-forwards `defer_loading` and `tool_reference` verbatim to a backend that runs
-the search itself, and the translating path carries client-driven discovery
-(`proxy-behavior.md` §2.5). Measured on both, live: an MCP set costing ~101k
-tokens loaded up front defers to zero and the turns succeed.
+### Window variables
 
-All four tier variables are always emitted. `WebFetch` runs on the haiku tier, so
-an unmapped haiku breaks it in a way that looks unrelated to tier mapping.
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` and `CLAUDE_CODE_AUTO_COMPACT_WINDOW` appear only
+where the catalog knows the window, carrying the smallest across the mapped
+tiers. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is further limited to 100,000–1,000,000
+tokens; outside that range it is left out and the reason logged. A mapping with
+any tier on the second provider states no window, and one served entirely by
+that provider also omits `CLAUDE_CODE_DISABLE_1M_CONTEXT`.
 
-`CLAUDE_CODE_DISABLE_1M_CONTEXT` is not inert: without it this client appends
-`[1m]` to an unrecognized id and assumes a million tokens, and it also strips
-`context-1m-2025-08-07` from the beta list the client sends — see
-`proxy-behavior.md` §7.2.
+The client will warn that its 200,000 limit is not enforced. That is expected.
 
-**Shell exports carry routing, plus the connector switch.** When
-`client.disable_connectors` is on, the exports include
-`ENABLE_CLAUDEAI_MCP_SERVERS=false` — the client's documented opt-out for the
-claude.ai-hosted servers, and the one piece of client policy (§7.3 of
-`proxy-behavior.md`) that has an environment variable. The rest — the denied
-skill, the connector notice — lives in the client's settings file and has no
-environment variable of any kind, so this rendering cannot deliver it. It says
-so in a comment, which `eval` steps over, and the comment appears only when
-there is a policy being left out.
+#### Why
 
-`settings` emits one complete client settings document, and is the only name for
-it. `env --json` printed it too and is **gone, with no alias**: `--json` means
-one thing on every verb that takes it — the control socket's payload for that
-verb, unrendered, which is what it already meant on `accounts` and `usage` and
-now means on `status` and `models` as well. On `env` it meant a different verb's
-document, so the one flag an operator could read off the surface was the one
-they had to learn twice. `env` renders shell exports and nothing else.
+Outside the range the client's parser answers `Expected 'auto' or 100k–1M tokens`
+and the settings key of the same meaning discards the value silently. The client
+recognizes second-provider ids by itself, and both variables would replace what
+it knows with a figure this catalog cannot supply (`proxy-behavior.md` §7.2).
+
+### `CLAUDE_CODE_DISABLE_1M_CONTEXT`
+
+Load-bearing. Without it the client appends `[1m]` to an unrecognized id and
+assumes a million tokens. With it, the client also strips `context-1m-2025-08-07`
+from the beta list it sends (`proxy-behavior.md` §7.2).
+
+### `ENABLE_TOOL_SEARCH=true`
+
+On every launch.
+
+#### Why
+
+The client disables deferred tool loading whenever its base URL is not a
+first-party host, and this is its own override. Both paths carry what deferral
+needs: the relay forwards `defer_loading` and `tool_reference` verbatim, and the
+translating path carries client-driven discovery (`proxy-behavior.md` §2.5).
+Measured live on both: an MCP set costing ~101k tokens up front defers to zero and
+turns succeed.
+
+### `ENABLE_CLAUDEAI_MCP_SERVERS=false`
+
+Emitted when `client.disable_connectors` is on. It is the only piece of client
+policy (`proxy-behavior.md` §7.3) with an environment variable. Where there is
+policy the exports cannot carry, a comment above them says so and names
+`settings` and `exec`.
+
+### Whose environment
+
+The `env` method takes an optional `{"account": name}`, and `exec --account`
+passes it. The mapping, window and client policy are then resolved for that
+account; without it, for the selection. A name the store does not hold is refused
+by name. A named account's mapping is resolved from `config.toml` the way
+`accounts.select` would resolve it; a `tiers.set` never persisted does not carry
+across to it.
+
+### `settings`
 
 ```json
 {
@@ -849,135 +890,150 @@ they had to learn twice. `env` renders shell exports and nothing else.
 }
 ```
 
-**This document is complete on its own.** Measured: a client started with no
-`ANTHROPIC_*` in its environment, reading only a settings file holding this
-document's `env` block, still reached the proxy. It needs no `eval`.
+- The document is complete on its own. Measured: a client with no `ANTHROPIC_*`
+  in its environment, reading only this `env` block from a settings file, reached
+  the proxy.
+- `permissions`, `disableClaudeAiConnectors`, `remoteControlAtStartup`,
+  `attribution` and `modelSettings` are absent when nothing is configured.
+- The proxy publishes this document and never installs it.
 
-The `permissions`, `disableClaudeAiConnectors`, `remoteControlAtStartup`,
-`attribution`, and `modelSettings` keys are absent from the *document* when
-nothing is configured, rather than present and empty. An empty deny list merged
-over a real one is how a rule disappears.
+#### Why
 
-**`modelSettings` is the tier mapping's effort, in the client's own terms.** A
-tier that states an effort (§4: `opus = { model = "…", effort = "high" }`)
-becomes one entry, keyed by the tier's upstream model — the id the client
-names, since the `ANTHROPIC_DEFAULT_<TIER>_MODEL` line above resolves the
-alias before the client looks the effort up — with the effort as that model's
-`effortLevel`. Measured against Claude Code 2.1.259 through a stand-in
-endpoint: the client sends the stated effort for a second-provider id, a
-session started with `--effort` sends that instead, and an id with no entry
-sends the client's default. The daemon's ceiling (§4) still caps what arrives;
-this key only decides what a session that names nothing asks for. Two tiers
-on one model must agree on its effort, since the client keeps one per model,
-and are refused by name where they do not. It is resolved for the same account
-as the rest of the document.
+An empty deny list merged over a real one is how a rule disappears.
 
-**The payload behind it is the other way round.** The `env` method's `settings`
-field is always present, an empty object when there is no policy, because
-absence there is reserved for one thing only: a daemon that predates client
-policy. One file is both the daemon and the CLI, and replacing it on disk does
-not restart what is already running, so a newer CLI against an older daemon is
-what an ordinary upgrade leaves behind. If "no policy" and "cannot answer" looked
-alike, nothing could tell the operator which one they had.
+### `modelSettings`
 
-`settings` and `exec` **refuse** against such a daemon rather than producing a
-document that looks complete and lacks a permission rule. `env` continues,
-because routing is all it ever carried and an older daemon has all of it — with
-a comment naming the daemon it is talking to. `status` (§3) names the version
-actually running.
+A tier that states an effort (§4) becomes one entry keyed by the tier's upstream
+model, with the effort as `effortLevel`. Two tiers on one model must agree, and
+are refused by name where they do not. Resolved for the same account as the rest
+of the document.
 
-**Redirecting this into a settings file overwrites that file.** `>` truncates;
-it does not merge. `.claude/settings.local.json` in particular is where the
-client itself records the permissions a user has accepted, so an existing file
-with real content in it is the common case, not the corner case. Merge, or write
-somewhere nothing else owns. Deep-merging with `jq -s '.[0] * .[1]'` is the
-obvious one-liner and is wrong: it recurses into objects but takes arrays from
-the right-hand side, so the existing `permissions.deny` is replaced rather than
-extended.
+Measured against Claude Code 2.1.259 through a stand-in endpoint: the client sends
+the stated effort for a second-provider id, `--effort` on a session overrides it,
+and an id with no entry sends the client's default. The daemon's ceiling (§4)
+still caps what arrives.
 
-The proxy publishes this document and never installs it. Applying it is the job
-of whoever starts the client.
+#### Why
+
+Keyed by model, not alias: the `ANTHROPIC_DEFAULT_<TIER>_MODEL` line resolves the
+alias before the client looks the effort up, and the client keeps one effort per
+model.
+
+### The payload's `settings` is always present
+
+The `env` method's `settings` field is an empty object where there is no policy.
+Absence means a daemon that predates client policy. `settings` and `exec` refuse
+against such a daemon; `env` continues with a comment saying the policy is
+missing.
+
+#### Why
+
+One file is both the daemon and the CLI, and replacing it does not restart a
+running daemon, so a newer CLI against an older daemon is an ordinary upgrade
+state. If "no policy" and "cannot answer" looked alike, a document lacking a
+permission rule would look complete.
+
+### Redirecting into a settings file overwrites it
+
+`>` truncates. `.claude/settings.local.json` is where the client records the
+permissions a user accepted, so an existing file with content is the common case.
+Merge, or write somewhere nothing else owns. `jq -s '.[0] * .[1]'` is wrong: it
+takes arrays from the right-hand side, so `permissions.deny` is replaced rather
+than extended.
+
+### Where it lives
+
+| File | What it holds |
+|---|---|
+| `crates/proxy/src/control/handler.rs` | The `env` method: variables, policy, `modelSettings`, named account |
+| `crates/proxy/src/launch.rs` | The launch environment's variables and window rules |
+| `crates/proxy/src/render/launch.rs` | Shell exports and the settings document |
+| `crates/proxy/src/commands/launch.rs` | `env`, `settings`, `exec` |
+| `crates/proxy/src/config.rs` | `ClientConfig` and `model_settings` |
 
 ### 2.3 `exec`
 
-Runs a command with the configuration of §2.2 applied, so starting a client is
-one step rather than two.
+Runs a command with the §2.2 configuration applied.
 
 ```
 proxenos exec claude --resume abc
 proxenos exec -- claude --help
+proxenos exec --account personal claude
 ```
 
-The environment half is set on the child. The policy half rides on the client's
-own settings flag, passed inline: **nothing is written to disk**, so there is no
-file to go stale and none to clean up. The document holds no secret — the auth
-token's value is ignored by design — so a command line is a fine place for it.
+The environment is set on the child. The settings document rides on the client's
+own `--settings` flag, inline: nothing is written to disk. Everything from the
+program name onward is forwarded in order; `--` separates a program whose first
+argument would read as this verb's. On Unix the child is `exec`d, so signals, job
+control, the terminal and the exit status pass through.
 
-Everything from the program name onward is opaque and forwarded in order, so the
-client's own flags keep working unchanged. `--` is accepted for a command whose
-first argument would otherwise be read as this verb's.
+A program that does not read `--settings` is given the environment only, and
+stderr says the policy was left out.
 
-**`--account <name>` serves this session as the named account, without moving
-the selection.** The flag is this verb's, consumed before the program name and
-never forwarded: the child's argv gains nothing, and the name travels as the
-`ANTHROPIC_AUTH_TOKEN` value — otherwise ignored by design (§1) — as
-`proxenos-account:<name>`. The daemon reads the tag per turn and it outranks a
-tier's pinned account: relay when the named account is on the second provider,
-translate as it otherwise, exactly the fork the selection would have decided.
-A name the store does not hold is refused twice, each time naming it: at
-launch, before anything starts, and at the turn, so an account removed
-mid-session fails loudly rather than falling back to whoever is selected.
+#### Why
 
-**The environment is rendered for that account too** (§2.2), and the mapping it
-produced is printed on stderr beside the account. The flag decides which
-provider serves the session, and a session served by one provider and handed
-the other's tier ids sends them: seen live as a launch tagged onto an account
-on the second provider being given `gpt-5.6-luna` from the shared table and
-refused by the backend as an unrecognized model, with an explicit `--model` the
-only way past it. The line names the ids the launch carries, and says where a
-tier carries none — the client's own id relays, which is the one known to work
-there.
-`accounts use` is the standing switch; this is the per-session one, the way a
-`kubectl` command can name a context without touching the current one. On Unix the child is
-`exec`d, so signals, job control, the terminal, and the exit status pass through
-untouched.
+No file means none to go stale and none to clean up. The document holds no
+secret — outside client mode the auth-token value is ignored — so argv is a fine
+place for it.
 
-**One argument is rewritten, and only where the session's own account
-relays**: a plain `--model` id whose `[1m]` variant the curated list offers
-(§3) is upgraded to that variant, and the rewrite is named on stderr. The list
-is asked for the account the session is served as, the same one the
-environment is rendered for — a menu is one account's (§7.0), so the
-selection's answers whether *its* ids have a long-context variant rather than
-whether this session's do. The suffix is the client's
-own long-context selector, so the session starts on the million-token window
-instead of silently assuming the standard one. An id already carrying the
-marker, an alias the list does not name, and another program's `--model` are
-forwarded as typed — and a daemon translating to the first provider rewrites
-nothing, because there the marker makes the client assume a window it does not
-have.
+### `--account NAME`
 
-**It refuses, before starting anything, in three cases.**
+Serves this session as the named account without moving the selection. Consumed
+before the program name and never forwarded; it travels as
+`ANTHROPIC_AUTH_TOKEN=proxenos-account:<name>` (§1). The daemon reads the tag per
+turn, and it outranks a tier's pinned account. The environment is rendered for
+that account (§2.2), and stderr prints the account and the tier ids the launch
+carries, saying where a tier carries none. A name the store does not hold is
+refused at launch and again at the turn.
 
-When the daemon is not answering: launching anyway hands the operator a
-connection refused from a client that cannot explain it.
+#### Why
 
-When the daemon predates client policy (§2.2): the session would start with a
-permission rule missing and nothing about it would ever say so.
+`accounts use` is the standing switch; this is the per-session one. A session
+served by one provider and handed the other's tier ids sends them: seen live as a
+launch tagged onto a second-provider account given `gpt-5.6-luna` from the shared
+table and refused as an unrecognized model. Refusing at the turn too means an
+account removed mid-session fails loudly instead of falling back to the selection.
 
-When the forwarded arguments already carry `--settings`. Measured: given two
-settings flags on one argument list, the client keeps the last, drops the first,
-exits 0, and writes nothing to stderr. So leading with this proxy's document
-loses the policy and trailing loses the caller's, both without a word. The
-refusal names the collision and the way out; `proxenos settings` prints
-this proxy's half to merge. A program that does not read the flag is never given
-one, so its own `--settings` is not a collision — and because that launch drops
-a rule the operator configured, it is named on stderr rather than left silent:
-the launch carries the environment only.
+### `--model` is upgraded where the session relays
 
-**The policy half does not reach a grandchild.** A session started this way
-inherits the environment into anything it spawns, but not the argument list, so
-a client started from inside it carries the routing and not the policy. Anything
-that spawns a client composes its own `--settings`.
+Where the session's account relays, a plain `--model` id whose `[1m]` variant is
+on that account's curated list (§3, `models`) is rewritten to the variant, and
+stderr names the rewrite. An id already carrying the marker, an alias the list
+does not name, and another program's `--model` are forwarded as typed. A session
+that translates rewrites nothing.
+
+#### Why
+
+`[1m]` is the client's own long-context selector, so the session starts on the
+million-token window. Translating to the first provider, the marker would make
+the client assume a window it does not have. The list is asked for the session's
+account because a menu is one account's (`proxy-behavior.md` §7.0).
+
+### Refusals before anything starts
+
+- The daemon is not answering.
+- The daemon predates client policy (§2.2).
+- The forwarded arguments already carry `--settings`. The refusal names the
+  collision; `proxenos settings` prints this proxy's half to merge.
+
+#### Why
+
+A client launched against no daemon reports a connection refused it cannot
+explain. Measured: given two `--settings` flags, the client keeps the last, drops
+the first, exits 0 and says nothing, so either order silently loses one policy.
+
+### The policy does not reach a grandchild
+
+A child inherits the environment into anything it spawns, not its argv. A client
+started from inside the session carries routing and not policy. Anything that
+spawns a client composes its own `--settings`.
+
+### Where it lives
+
+| File | What it holds |
+|---|---|
+| `crates/proxy/src/commands/launch.rs` | `exec`: refusals, `--account`, `[1m]` upgrade, client-mode token |
+| `crates/proxy/src/ingress.rs` | `auth_token_value`, the tag's one spelling |
 
 ### 2.4 `stop`
 
@@ -985,58 +1041,40 @@ Asks the running daemon to stop, then reports what it observed afterwards.
 
 ```
 $ proxenos stop
-stopped 0.2.0; launchd started it again as 0.3.0
+stopped 0.2.0+ab12cd3; launchd started it again as 0.3.0+cd34ef5
 ```
 
-The observation is the useful half. Under a supervisor a stop is how a running
-daemon is replaced by the build on disk, which is the answer to "the binary is
-new and nothing changed" — one file is both the daemon and the CLI, and
-replacing it does not restart what is already running (§2.2). Whether anything
-restarts it belongs to the supervisor, so this reports what it saw rather than
-claiming to have done it.
+- The daemon answers before it goes; the run loop is released only once the
+  response is written.
+- An in-flight turn is cut.
+- The CLI watches `instance` on `status`: a different id is a different process.
+  It waits three seconds for the daemon to go and twelve for anything to bring it
+  back, returning as soon as it sees the answer.
+- Where the departing daemon's `supervised` was `true`, the sentence names
+  `launchd`; otherwise it says `something`. With nothing back it says nothing
+  started it again.
+- Builds are named unless the strings are identical, which with a build id (§3)
+  means the same build.
+- A daemon predating the `shutdown` method cannot be stopped this way, and the
+  CLI says that is the situation instead of surfacing `unknown method`.
 
-**The supervisor is named where the daemon said it had one.** `supervised` on
-the `status` payload (§3) is read from the daemon that is about to go — the
-only process that can answer it, since what comes back is a different one and
-often not answering yet — and where it said `true` the sentence names
-`launchd` rather than `something`. Under a supervisor that replacement is the
-mechanism the operator installed, and calling it "something" describes it as a
-coincidence. Where supervision was not established — a platform with no
-supervisor here, or a process launchd started under some other label — the
-wording is unchanged, because naming a supervisor nothing checked for would be
-a claim rather than an observation.
+#### Why
 
-The build is named unless the string is identical, and with a build id on it
-(§3) identical means the same build rather than merely the same version
-number.
+Under a supervisor, `stop` is how a running daemon is replaced by the build on
+disk. Whether anything restarts it belongs to the supervisor, so this reports
+what it saw. A socket falling quiet is about timing, not the daemon: a quick
+supervisor leaves no gap, a throttled one leaves a long one. Twelve seconds
+because launchd holds a respawn ten seconds after the last start. A closed
+connection with no reply cannot be told from a crash. A dropped connection is
+something the client's own retry already handles.
 
-**It watches the `instance`, not the silence.** A socket falling quiet is a
-statement about timing rather than about the daemon: a supervisor quick enough
-leaves no gap to observe, and one that throttles a respawn leaves a gap longer
-than any sensible wait. `status` therefore carries an id minted when the process
-started, and a different id is a different process however the two overlapped.
+### Where it lives
 
-The windows are three seconds for the daemon to go and twelve for anything to
-bring it back, and it returns as soon as it sees the answer. Twelve because
-launchd holds a respawn for ten seconds after the last start, and a shorter
-window would report "nothing started it again" moments before something did,
-sending the reader to `run` straight into the port the supervisor is about to
-take.
-
-**The answer arrives before the process goes.** A caller reading a closed
-connection with no reply cannot tell a clean stop from a crash, and learning what
-happened is the reason to ask over the socket rather than send a signal. The run
-loop is released only once the response has been written.
-
-**An in-flight turn is cut.** Someone typing `stop` means it, and a dropped
-connection is something the client's own retry already handles.
-
-**It cannot stop a daemon older than itself.** The verb exists to replace a
-running daemon with the build on disk, and a daemon that predates the verb has
-no method to ask — so the first upgrade past this version still has to be ended
-by whatever supervises it. Nothing here can fix that; what it does is say which
-situation it is rather than surface `unknown method` and leave the reader to
-work out that a protocol error is really an upgrade problem.
+| File | What it holds |
+|---|---|
+| `crates/proxy/src/commands/daemon.rs` | `stop` and its sentences |
+| `crates/proxy/src/commands/mod.rs` | `STOP_WINDOW`, `RESTART_WINDOW`, `watch` |
+| `crates/proxy/src/control/handler.rs` | The `shutdown` method |
 
 ### 2.5 `start`
 
@@ -1048,39 +1086,38 @@ daemon running (pid 4711), logging to ~/.config/proxenos/daemon.log
 stop it with `proxenos stop`
 ```
 
-A verb of its own rather than a flag on `run`. Backgrounding is what an
-operator asks for and holding the terminal is what a supervisor asks for, and
-while both lived under one name `stop` (§2.4) was the counterpart of neither.
-`run` still starts the daemon in the foreground and takes the same `--port`;
-the flag that used to spell this is **gone, with no alias**.
+- The child is `run` of the same binary in its own process group, stdout and
+  stderr appended to `daemon.log` in the configuration directory. `--port` as for
+  `run`.
+- Exit 0 only once the daemon answers the control socket. A child that dies first
+  is reported with the tail of what it wrote this start, exit nonzero. Ten seconds
+  without either is the same, and the child is ended.
+- A daemon already answering is named and left alone, exit 0:
+  `already running: 0.12.0+ab12cd3 (pid 4711), supervised`. `pid` and
+  `supervised` are said only where the daemon reports them; `false` reads
+  `not supervised`, null says nothing.
 
-The child is a plain `run` of the same binary in its own process group, with
-stdout and stderr appended to `daemon.log` in the configuration directory —
-a backgrounded process's terminal is gone the moment the command returns, so
-its output needs somewhere durable to go. `stop` (§2.4) is the counterpart.
+#### Why
 
-**Success is observed, not assumed.** The command exits 0 only once the daemon
-answers the control socket. A child that dies first — a held port, a broken
-configuration — is reported with the tail of what it wrote this start quoted,
-and the command exits nonzero. Ten seconds without either is reported the same
-way, and the child is ended rather than left to finish coming up after the
-command has already called it a failure.
+Backgrounding is what an operator asks for and holding the terminal is what a
+supervisor asks for, so they are two verbs. A backgrounded process's terminal is
+gone once the command returns. A second daemon would take over the first's socket
+file while the first held the port. The state the verb was asked to produce is
+the state that holds, so an already-running daemon is not a failure.
 
-**A daemon already answering is named, not replaced.** The control socket is
-one per socket path, and a second daemon would take over the socket file of the
-first, leaving the CLI answering for one daemon while another holds the port.
-So nothing is started, and the line says what is there —
-`already running: 0.12.0+ab12cd3 (pid 4711), supervised` — from the `pid` and
-`supervised` of the `status` payload (§3). It exits **0**: the state the verb
-was asked to produce is the state that holds, and a failure would be a report
-of something being wrong when nothing is. Each half is said only where the
-daemon reports it: a build predating `pid` gets no invented number, and
-`supervised` unanswered is silence rather than "not supervised", which is a
-claim (§2.6).
+#### Tried and dropped
+
+`run --detach`. Gone with no alias.
+
+### Where it lives
+
+| File | What it holds |
+|---|---|
+| `crates/proxy/src/commands/daemon.rs` | `start`, `run`, the readiness wait |
 
 ### 2.6 `supervisor`
 
-Installs, removes, and reports the thing that brings the daemon back when it
+Installs, removes, and reports the supervisor that brings the daemon back when it
 dies.
 
 ```
@@ -1092,22 +1129,6 @@ supervising proxenos.daemon, from ~/Library/LaunchAgents/proxenos.daemon.plist
 stop it for good with `proxenos supervisor uninstall`
 ```
 
-`install` writes the unit for this user and hands it to the supervisor;
-`uninstall` removes both, stopping the daemon with it; `status` says whether it
-is installed and what the supervisor makes of it. The verb and its three actions
-are semver-bound like the rest of §6.
-
-**Two platforms are implemented, and every other one refuses by name.** macOS
-gets a per-user LaunchAgent at `~/Library/LaunchAgents/proxenos.daemon.plist`,
-handed to `launchctl bootstrap`. Linux gets a systemd **user** service at
-`$XDG_CONFIG_HOME/systemd/user/proxenos.service` — `~/.config` where nothing
-names one, resolved the way §4 resolves configuration, and deliberately *not*
-moved by `PROXENOS_HOME`, since systemd reads `XDG_CONFIG_HOME` and nothing
-else. Anything else refuses, names both supervisors, and names `proxenos start`
-as the way to start the daemon meanwhile. Nothing writes a file it cannot hand
-to a supervisor: a unit that is installed but never runs reports success and
-supervises nothing, which is worse than having no verb at all.
-
 ```
 $ proxenos supervisor install          # on Linux
 supervising proxenos.service, from /home/someone/.config/systemd/user/proxenos.service
@@ -1118,214 +1139,228 @@ supervising proxenos.service, from /home/someone/.config/systemd/user/proxenos.s
 stop it for good with `proxenos supervisor uninstall`
 ```
 
-**The Linux unit is a *user* unit, and this verb never reaches for `sudo` or a
-system-level one.** A system unit needs root, runs as another user, and would
-bind a control socket in a home directory this operator does not own — a daemon
-that comes up healthy and answers nothing the CLI dials, which is the failure
-the whole verb is shaped around. Where no per-user systemd is reachable —
-no login session, no `XDG_RUNTIME_DIR`, no session bus, which is the ordinary
-state inside a container or over a bare `ssh <host> <command>` — every action
-including `status` refuses **before writing anything**, quotes what `systemctl
---user` said, names the two variables and what each currently holds, and names
-`loginctl enable-linger $USER` where the machine has logind. It does not fall
-back.
+| Action | Effect |
+|---|---|
+| `install` | writes the unit for this user and hands it to the supervisor |
+| `uninstall` | removes both; the daemon it supervised stops |
+| `status` | whether it is installed and what the supervisor makes of it |
 
-**The job runs `run` in the foreground, and logs where the daemon already
-logs.** Not `start`: a process that forks away leaves the supervisor watching
-something that has already exited, and its respawn then fights the daemon it
-cannot see. `Type=simple` says that to systemd, and the absence of a fork says
-it to launchd. `KeepAlive` brings it back on macOS; `Restart=always` with
-`RestartSec=5` does on Linux — five seconds rather than systemd's 100ms default
-because five restarts inside ten seconds put a unit into `failed` and end the
-supervision, and the case that reaches it is real: `run` exits at once against a
-port another daemon holds, so a hand-started daemon makes the supervised job a
-tight crash loop.
+The verb and its three actions are semver-bound (§6). The name is the role, not
+launchd, so a second implementation could join it.
 
-**On Linux the daemon's log is still a file, and journald still holds what the
-unit itself failed with.** `StandardOutput`/`StandardError` are
-`append:` the same `daemon.log` the macOS job writes, so a supervised start and
-a background one leave one file to read on both platforms and `log` in `status
---json` is a path on both. What that file cannot hold is a unit that never
-started — an `ExecStart` that could not be spawned is systemd's failure, not the
-daemon's — so `install` prints `journalctl --user -u proxenos.service` as the
-place that does.
+### Platforms
 
-**It carries no credential**, on either platform. A unit file in the user's home
-is a world-readable file, and the store is what holds credentials. The job's
-environment is a closed set of two — `TMPDIR`, and `PROXENOS_HOME` when the
-installing shell names one — so adding to it is a deliberate edit rather than a
-filter that widened. Nothing writes an `EnvironmentFile=`: a token travels as a
-file path the daemon reads (§2.7), never as a value in a unit.
+| Platform | Unit | Handed to |
+|---|---|---|
+| macOS | `~/Library/LaunchAgents/proxenos.daemon.plist`, label `proxenos.daemon` | `launchctl bootstrap` |
+| Linux | `$XDG_CONFIG_HOME/systemd/user/proxenos.service` (`~/.config` where unset) | `systemctl --user` |
+| anything else | refused, naming both supervisors and `proxenos start` | — |
 
-**Those two are carried for one reason: the socket path.** It is derived from
-`PROXENOS_HOME` when set and from `TMPDIR` otherwise (§3), and a supervised
-process does not necessarily see the `TMPDIR` a login shell does — launchd
-supplies one of its own, and `systemd --user` supplies none at all. If the two
-disagree the daemon comes up healthy on its port while every CLI verb in the
-operator's terminal reports connection refused, because it is dialing a
-different path. Naming both in the unit makes the daemon's bind and the CLI's
-dial the same derivation over the same inputs. A path too long for the
-platform's socket address is refused when the unit is planned, rather than at a
-bind that happens after the HTTP listener is already up.
+`PROXENOS_HOME` does not move the Linux unit; systemd reads `XDG_CONFIG_HOME`
+only.
 
-**`TMPDIR` is carried whether or not the installing shell names one**, and that
-is the subtle half. launchd does not hand a job an empty environment — it
-supplies a `TMPDIR` of its own. So omitting it would not mean "no `TMPDIR`" to
-the supervised daemon; it would mean launchd's, while the path planned at
-install time fell back to `/tmp` and the operator's CLI went on dialing whatever
-its own shell says. Under systemd the same drift arrives from the other
-direction — the unit's environment really is empty of it, so the daemon falls
-back to `/tmp` while the shell dials its own — and the same carried value closes
-both. The unit therefore records the value the derivation actually
-used, including the fallback, which is what leaves the two ends unable to drift.
+#### Why
 
-**`status --json` prints the same report as one document**, with the same keys
-on both platforms — `installed` (`absent`, `current`, `divergent`), `program`,
-`log`, `socket`, `state` and `pid` — and one key that differs because the thing
-it names does: the file is `plist` on macOS and `unit` on Linux. A front-end
-reads whichever is present; naming a systemd unit file `plist` would have it
-tell an operator to look for a file nobody has. `state` and `pid` come from
-`launchctl print` on macOS and from `systemctl --user show -p
-LoadState,ActiveState,SubState,MainPID` on Linux, where the state word is
-systemd's own two-part phrasing — `active (running)`, `activating
-(auto-restart)`. Both are null where the supervisor said nothing. `LoadState` is
-asked for because `show` answers for a unit it has never heard of in exactly the
-shape of one that is installed and stopped (`inactive`/`dead`/`MainPID=0`), and
-a state word for a unit systemd does not have is the plausible answer this
-project refuses; `not-found` reports no state at all.
+A unit installed but never run reports success and supervises nothing, so nothing
+writes a file it cannot hand to a supervisor.
 
-**`status` compares the installed unit against the one this environment would
-write, and says so when they differ.** That is the same hazard seen from the
-other side: an environment that has moved since install leaves a unit whose
-daemon binds one socket while the shell dials another, and the symptom reads as
-a dead daemon when it is not.
+### Linux is a user unit only
 
-**`install` says when a daemon is already answering, and does not stop it.** The
-supervised job runs `run`, and `run` refuses a port another daemon holds, so
-installing while a hand-started daemon is up installs a job that cannot start
-yet — launchd respawns it into the same refusal until the port is free. The
-install itself is real and is not undone by that, so `install` names what is
-answering, by version, says the supervised job cannot take the port yet, and
-names `proxenos stop` as the way to hand over. It never ends that daemon on its
-own: this verb installs a supervisor, and stopping a process the operator
-started by hand is not what it was asked for.
+Never `sudo`, never a system unit. Where no per-user systemd is reachable — no
+login session, no `XDG_RUNTIME_DIR`, no session bus, as inside a container or over
+bare `ssh <host> <command>` — every action including `status` refuses before
+writing anything, quotes what `systemctl --user` said, names both variables and
+their values, and names `loginctl enable-linger $USER` where logind exists.
 
-**What it reports is what will still hold the port, not what was answering when
-the verb was typed.** A reinstall — the ordinary case, a new build or a moved
-binary — ends the job it had already installed (`launchctl bootout`,
-`systemctl --user stop`), so the daemon answering a moment earlier is one this
-verb itself ends. Naming that one would tell the
-operator to hand over a port already theirs, for a job that then starts fine.
-The observation is therefore taken between that stop and the load: before it, a
-reinstall reports a daemon on its way out; after it, the supervised job reports
-itself. A reinstall over the supervisor's own daemon prints nothing, and
-so does an install with nothing answering.
+#### Why
 
-**Nothing is left half-installed.** The unit is written through a rename over a
-temporary carrying this process id, so a `daemon-reload` from any other cause
-never reads a truncated file. If the supervisor then refuses it — `launchctl
-bootstrap` on macOS, `daemon-reload` or `enable --now` on Linux — the file this
-verb wrote does not survive the failure that produced it: on Linux the enable is
-undone first, since `enable --now` can leave the `default.target.wants` symlink
-behind after the start it also asked for has failed, and a symlink to a removed
-file is a complaint on every later reload.
+A system unit runs as another user and binds a control socket in a home this
+operator does not own: a healthy daemon the CLI never reaches.
 
-**What a supervisor changes about the daemon's own `status` (§3):** the
-supervised daemon can say so. On macOS it reads the job label launchd handed
-it; on Linux there is no label, so it asks the manager once at startup whether
-`MainPID` of `proxenos.service` is its own pid, and only after `INVOCATION_ID`
-says some unit started it at all. The §3 field is the one place that reading
-surfaces, and it stays **null** where the manager could not be asked — the
-container and bare-`ssh` case this verb already refuses to install into.
+### The job runs `run` in the foreground
 
-**What a supervisor changes about `stop` (§2.4):** it is how a running daemon is
-replaced by the build on disk. `stop` asks the daemon to go and reports what it
-saw afterwards; under a supervisor what it sees is the new build answering.
-Without one, nothing comes back and `stop` says that too.
+`Type=simple` on systemd, no fork on launchd. `KeepAlive` restarts on macOS;
+`Restart=always` with `RestartSec=5` on Linux. The daemon logs to the same
+`daemon.log` on both (`StandardOutput`/`StandardError` are `append:` it on Linux);
+`install` on Linux names `journalctl --user -u proxenos.service` for failures of
+the unit itself.
+
+#### Why
+
+A process that forks away leaves the supervisor watching something already
+exited. systemd's 100ms default puts a unit in `failed` after five restarts in ten
+seconds, and `run` against a held port is exactly that crash loop.
+
+### The unit carries no credential, and two variables
+
+The job's environment is `TMPDIR`, always, and `PROXENOS_HOME` where the
+installing shell names one. Nothing writes `EnvironmentFile=`. `TMPDIR` records
+the value the socket derivation used, the `/tmp` fallback included. A socket path
+too long for the platform is refused when the unit is planned.
+
+#### Why
+
+A unit file in the home is readable, and the store holds credentials. The socket
+path is derived from those two variables (§3). launchd supplies a `TMPDIR` of its
+own and `systemd --user` supplies none, so a unit that omitted it would bind a
+different socket than the operator's shell dials: a daemon healthy on its port
+while every verb reports connection refused.
+
+### `status`
+
+`status --json` is one document on both platforms: `installed` (`absent`,
+`current`, `divergent`), `program`, `log`, `socket`, `state`, `pid`, and the file
+under `plist` on macOS or `unit` on Linux. `state` and `pid` come from
+`launchctl print`, or `systemctl --user show -p
+LoadState,ActiveState,SubState,MainPID` with the state phrased `active (running)`;
+both are null where the supervisor said nothing, and `not-found` reports no state.
+`divergent` means the installed unit differs from the one this environment would
+write.
+
+#### Why
+
+A systemd unit named `plist` sends an operator looking for a file nobody has.
+`show` answers for an unknown unit in the shape of an installed stopped one, which
+is why `LoadState` is asked. An environment moved since install leaves a daemon
+binding one socket while the shell dials another, which reads as a dead daemon.
+
+### `install` names a daemon that will still hold the port
+
+Where a daemon other than the supervised job answers after the reinstall's own
+stop (`launchctl bootout`, `systemctl --user stop`), `install` names it by
+version, says the job cannot take the port yet, and names `proxenos stop`. It
+never stops that daemon. A reinstall over the supervisor's own daemon, or an
+install with nothing answering, prints nothing extra.
+
+#### Why
+
+`run` refuses a held port, so the job would respawn into the same refusal. The
+observation is taken after the reinstall's stop because the daemon answering
+before it is one this verb ends itself.
+
+#### Tried and dropped
+
+Observing before the stop: every reinstall printed a notice false in both halves.
+
+### Nothing is left half-installed
+
+The unit is written through a rename over a temporary carrying this pid. If the
+supervisor refuses it — `launchctl bootstrap`, `daemon-reload`, `enable --now` —
+the file is removed, and on Linux the enable is undone first.
+
+#### Why
+
+A `daemon-reload` from any other cause must never read a truncated file.
+`enable --now` can leave a `default.target.wants` symlink after a failed start,
+and a symlink to a removed file is a complaint on every later reload.
+
+### What a supervisor changes elsewhere
+
+- `status.supervised` (§3) can be true.
+- `stop` (§2.4) becomes the way to replace the daemon with the build on disk.
+
+### Where it lives
+
+| File | What it holds |
+|---|---|
+| `crates/proxy/src/supervisor.rs` | Unit rendering, labels, `RESTART_SEC`, the supervised reading |
+| `crates/proxy/src/commands/supervisor.rs` | The verb, install ordering, refusals, `status --json` |
 
 ### 2.7 Client mode
 
 A second machine runs only this CLI and is served by a daemon on the first. It
-holds no accounts, no credentials, and no configuration of its own: every verb
-that goes through the control vocabulary goes over §3's HTTP transport instead
-of the local socket, and `exec` points the client it starts at that daemon.
+holds no accounts, credentials or configuration: the control vocabulary goes over
+§3's HTTP transport, and `exec` points the client it starts at that daemon.
 
 | Variable | Meaning |
 |---|---|
-| `PROXENOS_DAEMON` | the daemon's base URL, e.g. `https://macbook.tailnet:8787`. Set, this CLI is a client; unset or empty, everything is exactly as before |
+| `PROXENOS_DAEMON` | the daemon's base URL, e.g. `https://macbook.tailnet:8787`. Set and non-empty, this CLI is a client. A URL carrying a user name or password is refused |
 | `PROXENOS_TOKEN` | the token that daemon's `listen.token` names |
-| `PROXENOS_TOKEN_FILE` | a file holding it instead. Read only where `PROXENOS_TOKEN` is unset or empty |
+| `PROXENOS_TOKEN_FILE` | a file holding it. Read only where `PROXENOS_TOKEN` is unset or empty |
 
-**A URL, not a host.** The scheme decides whether the hop is encrypted, and a
-daemon reached over anything but a private network wants `https` in front of
-it. This project terminates no TLS itself — put a reverse proxy or a private
-overlay network in front of it — so `http://` is honest about what it is.
+### A URL, not a host
 
-**There is no configuration key for any of this, deliberately.** Client mode is
-a property of the machine the CLI is invoked on, and `config.toml` on that
-machine is the *daemon's* configuration shape — a client that read `port` and
-`[tiers]` out of it would be reading settings nothing on that machine applies.
-An environment variable is also the only form a per-shell or per-pane choice
-can take, which is how a second daemon gets tried without editing a file.
+The scheme decides whether the hop is encrypted. This project terminates no TLS.
 
-**The token is never an argument.** There is no `--token` flag on any verb,
-because argv is visible in `ps` to every process on the machine.
+### No configuration key and no flag
 
-`status` carries **`daemon_at`** in client mode — the URL this CLI dialed — so a
-front-end can show "connected to macbook". It is **absent** for a local daemon
-rather than null: a daemon reporting its own address would be reporting a
-loopback URL that means nothing to whoever asked. The daemon does not know what
-address the caller reached it on, so this field is added by the CLI, which does.
+Client mode is only these variables. There is no `--token` on any verb.
 
-**Refused in client mode**, each with a sentence naming the URL and saying to
-run it on that host:
+#### Why
+
+`config.toml` on the client machine is a daemon's configuration shape, and a
+client reading `port` and `[tiers]` from it would read settings nothing there
+applies. An environment variable is the form a per-shell or per-pane choice can
+take. argv is visible in `ps`.
+
+### `status.daemon_at`
+
+In client mode `status` carries `daemon_at`, the URL this CLI dialed, added by
+the CLI. Absent for a local daemon.
+
+### Refused in client mode
+
+Each with a sentence naming the URL and saying to run it on that host.
 
 | Verb | Why |
 |---|---|
-| `run`, `start` | bind a port on the machine they are typed on. Aimed elsewhere they would start a *second* daemon here |
-| `accounts login` | runs the owning program's own login and reads the profile it wrote (`proxy-behavior.md` §8.4). Both happen on this machine; the daemon would never see the result |
-| `accounts add-key` | writes a credential file the daemon reads. Written here, nothing reads it |
-| `supervisor *` | writes, reads, and reports on a supervisor unit on this machine |
+| `run`, `start` | bind a port on this machine; aimed elsewhere they would start a second daemon here |
+| `accounts login` | runs the owning program's login and reads the profile here; the daemon would never see it |
+| `accounts add-key` | writes a credential file the remote daemon never reads |
+| `supervisor` | writes and reports on a unit on this machine |
 
-**`stop` is allowed**, and that is a decision rather than an oversight. It is a
-control method like any other; the daemon acts on it itself, and an operator who
-can already move that daemon's serving account over the same transport can stop
-it too. What client mode cannot do is start it again, which is what the sentence
-`stop` prints says.
+### `stop` is allowed
 
-Everything else works: `status`, `accounts`, `accounts use`, `accounts rename`,
-`accounts remove`, `models`, `tiers`, `tiers set`, `effort`, `usage`, `reload`,
-`record`, `env`, `exec`, `statusline`. `doctor` is unaffected — it runs in the
-CLI against the fixture corpus and never needed a daemon.
+The daemon acts on it itself, and an operator who can move its serving account
+over the same transport can stop it. What client mode cannot do is start it again,
+and `stop`'s sentence says so.
+
+### Everything else
 
 | Verb | In client mode |
 |---|---|
-| `doctor` | works: it runs in the CLI against the fixture corpus and never needed a daemon |
-| `inspect` | works: it reads a process on the machine it is typed on, not the daemon. The `daemon` it reports is whatever that process's `ANTHROPIC_BASE_URL` says, which for a client-mode launch is the remote URL |
+| `status`, `accounts`, `accounts use`, `accounts rename`, `accounts remove`, `models`, `incidents`, `tiers`, `tiers set`, `tiers cross-account`, `effort`, `effort set`, `usage`, `reload`, `env`, `settings`, `exec`, `statusline` | go to the remote daemon |
+| `doctor` | runs in the CLI against the fixture corpus; never needed a daemon |
+| `inspect` | reads a process on this machine. The `daemon` it reports is that process's `ANTHROPIC_BASE_URL` |
+| `record ingress`, `record upstream` | not refused: they start a daemon on this machine, from this machine's configuration |
+| `record surface` | runs here, against this machine's store |
 
-**`--persist` writes the configuration on the daemon's machine**, which is
-correct and worth saying out loud: the file it changes is the one that daemon
-starts from, and there is no file on this side for it to have meant instead.
+`--persist` writes the configuration on the daemon's machine.
 
-**What `exec` sets.** `ANTHROPIC_BASE_URL` becomes the URL this CLI dialed
-rather than the daemon's own loopback answer, and `ANTHROPIC_AUTH_TOKEN` carries
-the token, beside the `--account` tag where one was given —
-`proxenos-token:<secret> proxenos-account:<name>` (§1). Both are set on the
-child, never printed.
+### What `exec` sets
 
-**What `env` and `settings` do instead.** `env` rewrites the base URL and
-**leaves the auth-token export out entirely**, printing instead the one line
-that sets it from the variable this process already read:
+`ANTHROPIC_BASE_URL` is the URL this CLI dialed. `ANTHROPIC_AUTH_TOKEN` carries
+the token, beside the `--account` tag where given:
+`proxenos-token:<secret> proxenos-account:<name>` (§1). Both are set on the child
+and never printed.
+
+### What `env` and `settings` do
+
+`env` rewrites the base URL. With a token, it leaves the `ANTHROPIC_AUTH_TOKEN`
+export out and prints comments instead, including the line to set it from the
+variable this process read:
 
 ```sh
-export ANTHROPIC_AUTH_TOKEN="proxenos-token:$PROXENOS_TOKEN"
+# ANTHROPIC_AUTH_TOKEN is left out: it would carry this daemon's token. Set it with
+#   export ANTHROPIC_AUTH_TOKEN="proxenos-token:$PROXENOS_TOKEN"
+# or start the client with `proxenos exec`, which sets it without printing it.
 ```
 
-Those exports are what an operator pastes into a shell, and into that shell's
-history. `settings` is **refused** in client mode with a token: that document is
-one blob a client reads whole, so it would either carry the secret on stdout or
-be a document that does not work. `exec` is the client-mode launcher, and it
-sets both halves without printing either.
+`settings` is refused in client mode with a token.
+
+#### Why
+
+Exports are pasted into a shell and its history. The settings document is one
+blob a client reads whole: it would either carry the secret on stdout or not
+work. `exec` sets both halves without printing either.
+
+### Where it lives
+
+| File | What it holds |
+|---|---|
+| `crates/proxy/src/control/mod.rs` | `Endpoint`, the three variables, `refuse_remote`, `call_http` |
+| `crates/proxy/src/commands/launch.rs` | Client-mode `env`, `settings`, `exec` |
+| `crates/proxy/src/commands/inspect.rs` | `daemon_at` |
 
 ---
 
@@ -1335,39 +1370,23 @@ sets both halves without printing either.
 proxenos inspect PID [--json]
 ```
 
-**Which account another process's turns go as, asked of the process.** A pane
-holding an agent is a process whose environment `exec` set, and until this verb
-every program that wanted the answer read that environment itself and matched
-`proxenos-account:` by hand — this project's own spelling, parsed somewhere it
-cannot be kept in step with the daemon that writes it. It is parsed here with
-the same function the daemon reads a request's header with (§1), so the
-spelling moves in one place.
-
-**It needs no daemon**, which is what makes it usable where the interesting
-cases are: a client-mode pane, a machine whose daemon has stopped, a script
-sweeping pids. Reading the environment is its only I/O.
+Says which account another process's turns go as, read from that process's
+environment. It needs no daemon and parses the auth-token value with the same
+function the daemon reads a request's header with (§1).
 
 | Platform | Where the environment is read |
 |---|---|
 | Linux | `/proc/<pid>/environ`, NUL-separated |
-| macOS | `ps -Eww -o command= -p <pid>`, the command and then the environment, space-separated. `ps` shows the environment of the caller's **own** processes only, which every agent in one of the caller's panes is |
-
-`--json` is one document:
+| macOS | `ps -Eww -o command= -p <pid>`: the command, then the environment. `ps` shows only the caller's own processes |
 
 ```json
 { "pid": 4242, "through": true, "account": "work-codex", "daemon": "http://127.0.0.1:8787" }
 ```
 
-`through` is true when the process was started through this daemon: its
-`ANTHROPIC_AUTH_TOKEN` carries the account tag or the daemon's token (§1), or
-it holds the `unused` sentinel a launch without `--account` leaves standing
-**beside** an `ANTHROPIC_BASE_URL` — the sentinel alone points at nothing and is
-not a launch. `account` is the tagged name, and **null where the launch tagged
-none**: those turns go as whichever account is serving, which is a question for
-`status` and not for the process. Both `account` and `daemon` are null where
-`through` is false.
-
-The rendered form is one line, for a status line or a sweep:
+- `through` is true when `ANTHROPIC_AUTH_TOKEN` carries the account tag or a
+  token (§1), or holds `unused` beside an `ANTHROPIC_BASE_URL`.
+- `account` is the tagged name, null where the launch tagged none.
+- `account` and `daemon` are null where `through` is false.
 
 ```
 pid 4242: through proxenos as work-codex (http://127.0.0.1:8787)
@@ -1375,455 +1394,540 @@ pid 4242: through proxenos as the serving account (http://127.0.0.1:8787)
 pid 4242: not through proxenos
 ```
 
-**No token is ever printed.** The value being parsed may hold
-`proxenos-token:<secret>` beside the account tag — that is exactly what a
-client-mode launch sets — and the parsed token is dropped where it is read: the
-answer has no field it could reach, in either form.
+- No token is ever printed; the parsed token is dropped where it is read.
+- `no process <pid> is running` and `the environment of process <pid> could not
+  be read` are refusals, not `not through proxenos`. On macOS a command line with
+  no assignment after it is the second.
 
-**A pid that cannot be answered about is refused, saying which of the two it
-is.** `no process <pid> is running` and `the environment of process <pid> could
-not be read` call for different next steps, and `not through proxenos` for
-either would be a wrong answer rather than a missing one. On macOS a command
-line with no assignment after it is the second case: that is what `ps` prints
-for a process that is not the caller's, and it is not an error.
+#### Why
+
+Every program that wanted the answer used to match `proxenos-account:` itself,
+somewhere it could not be kept in step with the daemon. Needing no daemon is what
+makes it usable in a client-mode pane, on a machine whose daemon stopped, or in a
+sweep. `unused` alone points at nothing and is not a launch. An untagged launch
+goes as whoever is serving, which is `status`'s question. The two refusals call
+for different next steps.
+
+### Where it lives
+
+| File | What it holds |
+|---|---|
+| `crates/proxy/src/commands/process.rs` | Reading the environment per platform, refusals, rendering |
+| `crates/proxy/src/process.rs` | Deciding `through`, `account`, `daemon` |
 
 ---
 
 
 ## 3. Control socket
 
-A Unix domain socket, or a named pipe on Windows, carrying JSON-RPC:
+JSON-RPC 2.0. One request per line on a Unix domain socket, or a named pipe on
+Windows. The same vocabulary is served over HTTP at `POST /control` (below).
 
-| Method | Returns | v0.1 |
-|---|---|---|
-| `status` | connection state, the process serving the socket (`pid`) and whether the supervisor of §2.6 started it (`supervised` — `true`, `false`, or **null** where this side cannot tell, which is every platform with no supervisor here, any process launchd started under some other label, and a Linux daemon a unit started while no user manager could be asked which unit), whether the grant has been **refused** — `dead` where this side cannot spend it and `refused` carrying the backend's own words where it was sent and turned away — when the serving account's login has to be renewed (`login_expires_at`, absent where no such date exists), plan and which source reported it, the tier mapping and the effort ceiling, any mapped model the catalog withholds, `missing_tiers` — the tiers whose stated model this account's catalog does not carry at all, present and empty rather than absent — whether the catalog was authoritative, `cross_account_tiers` — whether a tier may pin another account, so a front-end knows before asking rather than from the refusal — `methods`, every method this build answers, so a front-end establishes one is there instead of comparing versions (§12); its absence means a build older than the field, and a caller reading none asks and reads the refusal — the client policy in effect, and the build and `instance` serving the socket | yes |
-| `accounts.select` (re-selection) | selecting the account already serving answers `{"selected", "provider", "previous_provider", "unchanged": true}` and does nothing else: no catalog fetch, no conversation ended, no figure dropped. A switch pays all three to arrive somewhere; this one is already there | no — `unchanged` added after v0.12 |
-| `accounts.remove` | removes one account — the selected one, or `{"account": name}` — and answers with the name it cleared and the one serving turns afterwards; the rest stay usable, and an idle account's removal leaves the serving grant's quota alone. A key is dropped from this daemon's store; a **declared** profile loses its `[profiles]` entry and nothing else — the grant belongs to the program that owns the directory — after which the file is re-read so the daemon stops answering for it. A profile that was found rather than declared is refused, saying so and that `[profiles]` is empty | no — was `disconnect`, then `accounts.forget` |
-| `accounts` | every stored account, what kind of credential each holds, whether the operator wrote it down (`declared`, true only for a profile named in `[profiles]`), and which one serves turns, plus `discovered` — whether these are the operator's own `[profiles]` entries or the stock profile of each program, read because none were declared; each borrowed row also carries the profile it was read from and, for a Claude profile, `login_expires_at` — the date the operator has to sign in again. A borrowed row whose store could not be read carries `unreadable`, the refusal's own words naming the store and the remedy; the key is **absent** on a row that was read, and on every key, so a reader must treat absent as readable rather than looking for a null. No tokens | no — v0.3 |
-| `accounts.select` | `{"account": name}`, the account every following turn is made as, the provider now serving and the one serving a moment ago (absent where nothing was) — one select moves every unpinned turn onto that provider's subscription — whether the catalog was refetched for it, and the tier mapping now in force; refuses, and moves nothing, where that account's mapping names a model its catalog does not have, naming whose menu refused and how to give that account its own mapping | no — v0.3 |
-| `accounts.rename` | `{"account": from, "name": to}`, the name this daemon calls an account by, and whether an account section moved with it; the grant and the account id are untouched | no — v0.3 |
-| `models` | catalog, whether it is the fallback list, and whether it was fetched for an account other than the one it was asked about. `{"account": name}` answers for that account's menu rather than the selection's — which is the curated list where that account relays (§9.1), and otherwise that account's own catalog, fetched as that account when the list in force was not fetched for it or is the fallback (nothing is put in force by it; a fetch that fails answers with the list in force, marked stale) — and is what `exec --account` measures a `--model` id against; a name the store does not hold is refused by name | yes — `{"account": name}` added after v0.16.0 |
-| `tiers` | tier mapping, plus `missing_tiers` — the tiers whose stated model this account's catalog does not carry — and `cross_account_tiers`, as `status` carries it. `{"account": name}` answers with that stored account's own mapping instead (its section of the file as it is now, resolved the way a switch to it would; `account` names it back, and `missing_tiers` is left off, since that account's catalog is not in force); the serving account's name answers as without the parameter; a name the store does not hold is refused by name | no — was `tiers.get`; `missing_tiers` added after v0.17.0, `cross_account_tiers` after v0.19.0 |
-| `usage` | the serving account's quota as of its last turn, or that no turn has been made, plus `models` — the ids this daemon serves — and `accounts`, one entry per stored account with its own figure, its freshness, and `unavailable` where it has none. Each account entry also carries `served_tokens`, the §6.1 tally, and an entry with no figure carries `reason` beside its `detail` — `no_turn`, `no_relayed_turn`, `metered`, `unknown_key_kind`, `not_reported` — the same fact in a word, so a renderer never matches on prose. Each window carries `used_percent`, `window_minutes`, `resets_at`, and — where the provider stated them — `status`, `surpassed_threshold`, `representative`, and `label` for a window no duration identifies. An entry whose provider states a credit balance also carries `credit` — `used_minor`, `limit_minor`, `exponent`, `currency`, `percent`, `severity` — money in the units the provider stated it in, present only where there is a balance to state. An entry whose provider states a subscription it no longer calls active also carries `subscription_status`, that provider's own word verbatim — absent where the subscription is active, which is silence | yes |
-| `incidents` | what the providers say about themselves: `incidents`, the open rows on the status page of every provider a stored account is on — each `id`, `provider`, `name`, `status` (`investigating`, `identified`, `monitoring`; a resolved row is dropped), `impact` (`none`, `minor`, `major`, `critical`), `url`, `since` and `updates` — what the provider has posted about it since it opened, newest first, each `status`, `body` and `at` as the page states them, present and empty where nothing has been posted, so a caller reads its absence as a daemon older than the field (§12) rather than as a quiet incident — worst first, plus `providers`, the ones asked, `errors`, per provider whose page did not answer (its last list is kept beside the reason), and `checked_at`, epoch seconds of the last round, null before the first. The daemon asks each page once a minute (`[upstream].status` and `[upstream.anthropic].status`, §4); nothing on the turn path waits on it. `usage` carries the same `incidents` list, so a reader of the quota sees the provider's standing beside the figure. The table `proxenos incidents` prints does not carry `updates`: a terminal has the row's link, and the field is for a front-end that cannot follow one | no — `updates` added after v0.27.0 |
-| `usage.refresh` | asks the backend for a figure now, **per account** — every stored account whose credential can hold one, each on its own credential and each recorded under its own name. The answer is the serving account's outcome plus `accounts`, one entry per stored account carrying either its figure or the sentence saying why it has none. Nothing about which account serves turns is read or changed | yes |
-| `env` | the §2.2 block: `variables`, and `settings` always present. `{"account": name}` answers for a session served as that account rather than as the selection — the mapping, the window, and the client policy all resolved for it, which is what `exec --account` launches with; a name the store does not hold is refused by name | yes — `{"account": name}` added after v0.15.1 |
-| `shutdown` | `{"stopping": true, "version": ...}`, then the process goes once the answer is written | yes |
-| `record.start` / `record.stop` | fixture capture | yes — `{"mode": "ingress"}` by default, `"upstream"` must be named because it bills every turn that follows |
-| `tiers.set` | tier mapping, validated against the catalog and in effect until the daemon stops; `{"account": name}` writes that account's section instead of the shared table. A tier's value takes the same two forms the file does — a model id, or `{"model": …, "account": …, "effort": …}` with the last two optional: `account` pins the tier to another account, `effort` states the level the client starts the model at (§2.2). The pinned form needs `cross_account_tiers = true` and is refused by name without it, and its model is excluded from catalog validation: the catalog is the serving account's menu and cannot speak for the pinned one. An unrecognized effort is refused naming the tier; two tiers on one model with different efforts are refused naming both | yes |
-| `effort.set` | the effort ceiling, or `null` to remove it; in effect until the daemon stops; `{"account": name}` as for `tiers.set` | yes |
-| `cross_account_tiers.set` | `{"enabled": bool}` — consent for pinned tiers. **Always persisted**, unlike the setters above: consent is the operator changing what the daemon is, and a grant that evaporated at restart would leave the file refusing a mapping the operator permitted. Granting applies to the next call, not the next restart; revoking is refused by name while any tier still pins an account, because the write would produce a file the daemon refuses to start from | yes |
-| `config.reload` | re-reads config.toml into the running daemon and answers `{"reloaded": [...], "needs_restart": [...]}`. It applies `[profiles]`, the tier mapping and the effort ceiling — the mapping through the same checked path a switch takes, except that a tier naming a model the catalog does not carry is **marked rather than refused**, since a reload is the move an operator has left after a daemon came up with one marked — and names what it did not: `instructions`, `client`, `transport`, `upstream`, `port`. Nothing is fetched. A file that does not parse is refused with the parse error and the daemon keeps what it was running on It also carries `serving` — who serves turns afterwards, `null` where the file took the serving profile away — and `remaining`, how many accounts are left, so that case is reported here rather than found out from a refused turn | no — added after v0.12 |
-| `doctor` | probe results | no — `doctor` runs in the CLI, which is where `--live` can be given credentials without a daemon already holding them |
+### Where the socket lives
 
-**The same vocabulary is served over HTTP, at `POST /control` on the daemon's
-own port.** One JSON-RPC request per body — HTTP already frames it, so the
-socket's newline framing is not repeated — and one response object back. Below
-that it is the same call: the same dispatch, the same result, the same error
-code, so **no method can behave one way over the socket and another over
-HTTP**. A JSON-RPC-level failure is still a 200 carrying an `error` member,
-which is what the protocol says and what the socket does; the status codes this
-endpoint uses are about reaching it at all.
+`$PROXENOS_HOME/proxenos.sock` when that variable is set, else
+`$TMPDIR/proxenos.sock`, with `/tmp` where no temporary directory is named. The
+daemon's bind and every CLI call use one derivation. The socket is created `0600`.
 
-**It is served on both doors, and guarded on the same one the ingress is**
-(§1). On the remote door every request carries the token — this endpoint holds
-`accounts.remove` and `accounts.select`, so an unguarded one on a reachable
-address would be worse than an unguarded ingress. On the loopback door it asks
-nothing, which is what keeps `proxenos status` working on the daemon's own
-machine: a local CLI holds no token and has none to present.
+#### Why
 
-The handler itself reads **nothing** about who is calling. It once checked the
-peer address; with two doors that check answers the wrong question — a tokened
-daemon's loopback door is legitimately open and would have failed it — and the
-right question is settled when the router is built. A peer check left in beside
-a door check is an invitation to reason from the wrong one, so it is gone.
+`PROXENOS_HOME` isolates a daemon from the operator's own. While the socket
+ignored it, an isolated CLI sharing a `TMPDIR` reached the real daemon, and every
+login path ends in `accounts.select`.
 
-The socket is unchanged and stays the local path. §2.7 is the CLI side.
+### An unaddressable path is refused by name
 
-**Where the socket lives.** `$PROXENOS_HOME/proxenos.sock` when that variable
-is set, else `$TMPDIR/proxenos.sock`. The home is what isolates a daemon from
-the operator's own, and the socket is part of what has to move with it: while
-the path ignored the home, a CLI isolated into a temporary home still reached
-the real daemon whenever the two shared a `TMPDIR`, and every login path ends in
-`accounts.select` over that socket. One derivation answers for the daemon's bind
-and for every CLI call, so the pair cannot split.
+Both bind and dial check the path against `sun_path` — 104 bytes on macOS, 108 on
+Linux, one of them the terminator — and refuse naming the path and the cap.
 
-**An unaddressable path is refused by name, at bind and at dial.** A unix socket
-address is capped at `sun_path` — 104 bytes on macOS, 108 on Linux — and a
-longer path fails the bind while the HTTP port comes up fine, leaving a daemon
-that serves turns, looks healthy, and answers no verb. Both ends check first and
-say the path and the cap.
+#### Why
 
-**`tiers.get` is gone and `tiers` replaces it.** Every other read on this
-socket is a bare noun — `status`, `models`, `accounts`, `usage`, `env` — and each
-of them coexists with namespaced writers under the same noun, `accounts.select`
-and `usage.refresh` among them. A lone `.get` was one name a caller had to
-remember separately for no capability it bought. Renamed rather than aliased,
-for the reason below.
+A too-long path fails the bind while the HTTP port comes up fine: a daemon that
+serves turns and answers no verb.
 
-**`disconnect` is gone and `accounts.remove` replaces it**, and the answer's
-`disconnected` field is `removed`. `accounts.forget` was the first replacement
-and is gone in turn: the store's own verb is `remove`, every refusal it can
-answer with says "remove", and one method spelling the operation a third way
-was a name an operator had to translate. The old name shipped in v0.1, when there
-was one account and disconnecting from it was the whole idea; with a store of
-several, forgetting one is an account operation and every other account
-operation is `accounts.<verb>`. Keeping it would have left one method outside
-the pattern, and adding the new name beside it would have left two methods
-doing one thing for as long as the other had to stay. Renamed rather than
-either, because nothing but this project's own CLI has ever called the socket
-— see §6 on what that permits and when it stops.
+### Errors
 
-`auth.dead` is the one that is easy to miss: a grant that cannot be spent leaves
-`connected` true, because the account is still there and still readable, while
-every turn after it fails with an authentication error. Without that field a
-front-end shows a healthy provider and no reason to look. It is `true` when the
-credential cannot be spent as it stands — unreadable, or lapsed and waiting on
-the program that owns the profile (`proxy-behavior.md` §8.4).
+| Code | Meaning |
+|---|---|
+| `-32700` | malformed request |
+| `-32600` | not JSON-RPC 2.0 |
+| `-32601` | unknown method |
+| `-32000` | the method refused; `message` says why |
 
-**A persisted change is written before it is applied.** A write that fails
-leaves the daemon exactly as it was, so the error the caller receives is the
-whole story — applying first would leave it running a policy nobody chose,
-reported as a failure, and gone at the next restart.
+An unknown method reaches the caller as an unknown method on both transports.
 
-**`tiers.set` and `effort.set` write the configuration file only when asked** —
-`{"persist": true}`. A front-end changing a mapping to try something is not the
-same as an operator changing what this daemon is, and only the caller knows
-which it is doing. Without it the change lasts until the daemon stops, and every
-answer says which it was rather than leaving it to be discovered.
+#### Why
 
-**The account tables are re-read from disk when they are needed.** They are the
-one part of the configuration this daemon writes — `tiers.set` and `effort.set`
-persist into them, and a rename moves them — so resolving them from the snapshot
-taken at startup means a daemon that cannot see its own writes. A file that
-no longer parses keeps the snapshot: the daemon is already running on it.
+"This daemon does not have that method" is answered by replacing the daemon;
+"that method refused" is not.
 
-**Everything else is read at startup and on `config.reload`, and only some of
-it can move.** `[profiles]`, the tier mapping and the effort ceiling are what a
-running daemon can be handed: the profile set is swapped into the store every
-turn authenticates through, and the mapping goes through the same validated
-path a switch takes, so a file that would refuse a switch refuses a reload too.
-The rest — `instructions`, `client`, `transport`, `upstream`, `port` — is read
-once and handed to something that keeps it, and the answer names those rather
-than leaving an operator to discover from a key that did nothing. A reload
-fetches nothing: it is an edit taking effect, not a reason to spend a request.
-A conversation in flight keeps what it started with, exactly as a `tiers.set`
-mid-turn leaves it.
+### Over HTTP
 
-**A persisted change is written where the value is read from.** An account
-section shadows the shared table for the tiers it names and for the ceiling it
-states (§4), so a change written to the shared table while such a section exists
-would be in force on this daemon and gone at the next start — written, and left
-looking applied. With no `account` named, each tier goes to the serving
-account's section if that section already names it and to the shared table
-otherwise; the ceiling follows the same rule. `{"account": name}` writes that
-account's section regardless.
+`POST /control`, one JSON-RPC request per body, one response object back. Same
+dispatch, same result, same code. A JSON-RPC failure is a 200 carrying `error`;
+the HTTP status is only about reaching the endpoint. Served on both doors, and on
+the remote door every request carries the token (§1). The handler reads nothing
+about the caller.
 
-A change aimed at an account that is not the one serving turns is **written and
-not applied**: the mapping in force belongs to the account being served, and it
-is not validated against that account's catalog either, since a list fetched for
-one account makes no claim about another. Without `persist` such a call would
-change nothing anywhere, and is refused rather than answered as though it had
-done something. Both answers carry `account` — null for the shared table — and a
-`detail` that distinguishes written-and-applied from written-only.
+#### Why
 
-**`effort.set` with `null` removes an override, not every ceiling.** Under an
-account it clears that account's line, and the shared ceiling applies again; the
-answer and the running daemon both report the ceiling that results rather than
-the `null` that was asked for, because reporting no ceiling would be a figure
-that lasted until the next start.
+No method may behave one way over the socket and another over HTTP. This endpoint
+holds `accounts.remove` and `accounts.select`, so an unguarded one on a reachable
+address would be worse than an unguarded ingress. The loopback door is open
+because a local CLI holds no token.
 
-**A rename onto a name whose section is still in the file is refused.**
-Forgetting an account leaves its section behind, so a name can be free in the
-store and taken in the file; moving onto it would define one table twice, which
-TOML refuses, and the daemon would fail to start on a file the operator never
-edited. The store is renamed first and the file second, because the store is the
-half that can refuse — and a write that fails puts the name back rather than
-leaving an account and its section apart.
+#### Tried and dropped
 
-A persisted change is a **text edit**, not a re-serialization. The file is a
-document whose comments explain why each key is what it is, and most of them
-exist because the obvious value is wrong in a way that does not fail loudly;
-rewriting it from the parsed configuration would discard all of that, and the
-loss would be invisible — the file would still parse, still work, and never again
-explain itself. One value on one line changes; everything else survives byte for
-byte. The file is read fresh at write time, so an edit the operator made since
-startup is not overwritten to persist an unrelated one.
+A peer-address check in the handler. With two doors it answered the wrong
+question — a tokened daemon's loopback door is legitimately open — and a peer
+check beside a door check invites reasoning from the wrong one.
 
-`tiers.set` is **partial**: naming one tier changes that tier. Treating the
-argument as the whole mapping would let a caller that knows about one tier
-silently unset the three it did not mention. Every set is validated against the
-catalog — that check is why this daemon owns the mapping rather than a
-front-end, since it is the side holding the catalog. It **refuses** a model the
-catalog does not carry rather than marking the tier, as a switch does and unlike
-a start or a reload: a set is something the caller typed a moment ago, so the
-refusal is immediate feedback and nothing that was serving stops serving.
+### Methods
 
-**A rename takes the account's configuration with it.** An account section is
-keyed by the name (§4), so a rename that left it behind would detach a mapping
-from the account it was written for — and a section naming nobody is not an
-error, so nothing would say so. Only the table headers change; every key and
-comment under them survives byte for byte. The file is written before the store,
-because the other order can leave an account with no mapping, and this one can
-only leave an orphan section. An account with no section is renamed without the
-file being touched at all.
+The bound set is `METHODS` in `control/protocol.rs`, and `status.methods` lists it
+at runtime. A method's section says what it takes and returns. "Added after vX" is
+a capability a caller checks for (§6), not a version to compare.
 
-**A selection re-resolves the mapping, and can be refused.** The account's own
-tiers and ceiling (§4) are resolved and validated against the catalog fetched
-for it, before anything else moves; a mapping naming a model that account's
-catalog does not have refuses the switch and leaves the daemon serving what it
-was, catalog included. The answer carries the mapping now in force, because
-after a switch it is not necessarily the one that was routing turns a moment
-ago. Validation is skipped where the catalog cannot speak for this account — a
-fallback list, or a refetch that failed and left the previous account's list in
-force — for the reason startup skips it: a fetch that did not answer is not
-evidence that a model went away. There `catalog_stale` says the list is not
-this account's.
+### `status`
 
-**A selection moves what routes turns.** `accounts.select` writes to the store
-the ingress authenticates through, so the next turn is made as the account
-named rather than the one this socket merely reports. Quota does not move with
-it and does not need to: every figure is held under the account that earned it
-(`proxy-behavior.md` §8.3), so what `usage` reports at the top follows the
-selection by itself, and each account's own figure stays valid. `accounts.remove`
-drops the figure of the account it removes, serving or idle, because that
-entitlement belongs to an account this daemon can no longer spend.
+No parameters.
 
-Live conversations are dropped with it. A conduit fixes its account on the
-connection when it dials and reuses that connection for the conversation's life
-(`proxy-behavior.md` §4.1), so a session left alone would go on being billed to
-the account the operator has just moved off. Each dropped session pays a full
-upload on its next turn, which is the direction §4.3 resolves every ambiguity
-toward anyway.
+| Field | Meaning |
+|---|---|
+| `port`, `base_url` | the daemon's port and loopback URL |
+| `auth.connected` | there is a credential to spend, of either kind |
+| `auth.dead` | the credential cannot be spent as it stands: unreadable, or lapsed and waiting on the program that owns the profile (`proxy-behavior.md` §8.4) |
+| `auth.refused` | the backend's own words where it turned the credential away; null otherwise |
+| `auth.account` | what this daemon calls the serving account; what selects it |
+| `auth.account_id` | what the backend calls it |
+| `auth.kind` | `grant` or `key` |
+| `auth.provider` | `codex` or `anthropic` |
+| `auth.key_flavour` | on a key only, where recorded: `subscription_token` or `api_key` (`proxy-behavior.md` §8.2). Absent otherwise |
+| `auth.source`, `auth.identity_changed`, `auth.email`, `auth.expires_at` | where the account was read from, whether it became a different account, its address, its expiry |
+| `auth.plan`, `auth.plan_source` | plan, and `backend` or `grant`; null where neither said |
+| `auth.login_expires_at` | when the operator must sign in again; null where no such date exists |
+| `auth.accounts` | every account, as `accounts` lists them. Present and empty rather than absent |
+| `tiers` | the mapping in force |
+| `effort_ceiling` | null for no ceiling |
+| `unlisted_tiers` | mapped models the catalog knows but withholds |
+| `missing_tiers` | tiers whose stated model this account's catalog does not carry. Present and empty |
+| `cross_account_tiers` | whether a tier may pin another account |
+| `catalog_authoritative`, `catalog_curated`, `catalog_stale`, `catalog_account` | whether the catalog is the backend's, the curated relay list, not this account's, and whose it is |
+| `methods` | every method this build answers |
+| `version` | the build id (below) |
+| `instance` | an id minted when the process started |
+| `pid` | this process |
+| `supervised` | `true`, `false`, or null (below) |
+| `client` | the client policy in effect: `deny_skills` as a launch would apply it, `disable_connectors`, `disable_remote_control` |
+| `recording` | whether a capture is running |
 
-`auth.dead` needs nothing of the sort: it is read from the profile every time it
-is asked, so it clears by itself the moment the program that owns the grant
-refreshes it.
+`auth` holds only `connected` and `accounts` where nothing is selected. No tokens
+appear anywhere.
 
-**An account on the second provider answers from a curated list.** The fetched
-catalog was never these models' menu (`proxy-behavior.md` §9.1), and the second
-provider's own list endpoint names ids but states no windows — so `models`
-answers from a list built into the binary, windows included, and says
-`curated: true` rather than presenting it as a fetch. Which account decides
-that is the one the call named, or the selection where it named none, so a
-launch onto an account on the second provider is measured against that
-account's menu rather than the selection's. The same answer carries
-`provider`, that account's stored id, so a renderer can name whose list it is
-instead of describing it by role. It is
-a menu for reading, never a list to refuse by: no mapping is validated against
-it, and `status` reports the catalog as curated instead of unvalidated.
+#### Why
 
-**Operator-facing rows name a provider by its stored id** — `codex`,
-`anthropic` — the same ids `accounts` prints. That covers the `routing` and
-`catalog` lines of `status`, the curated note on `models`, and every
-per-account reason in `usage`. The `auth` line names it on every connected row,
-including an oauth account on the provider this proxy started with: with two
-providers in the store, the row that leaves it out is the one an operator has
-to guess about.
+A dead grant leaves `connected` true while every turn fails; without `dead` a
+front-end shows a healthy provider. `key_flavour` absence is reported, not
+resolved into the likelier value, and `subscription_token` is the shape's answer,
+not the credential's: `sk-ant-oat` is worn by a setup token and by the harness's
+OAuth access token alike. `methods` lets a front-end establish a method exists
+instead of comparing versions.
 
-**A catalog belongs to the account it was fetched for** (`proxy-behavior.md`
-§7.0). `accounts.select` and an `accounts.remove` that hands over to another account
-fetch it again as whoever serves now, and their answers carry
-`catalog_refreshed` — a fetch that failed keeps the previous list in force, and
-everything downstream of it still describes that account. A CLI `accounts add-key` calls
-`accounts.select` when it lands **and only when it selected** — storing a key
-that left the selection where it was moved nothing for the catalog to follow.
-Where nothing refetched — a key stored while no daemon was running, or a profile
-signed into elsewhere after this daemon started — `status.catalog_stale` and
-`models.stale` say the list is not this account's and `status.catalog_account`
-names whose it is.
+### `status.supervised`
 
-**A status line is told who is paying, before it is told anything about
-quota.** The `usage` answer carries a `serving` block — name, provider, address,
-plan, and account id — and `statusline` copies it into the payload whether or
-not a figure is known: on a daemon that has served no turn it is the only thing
-worth rendering, and a borrowed account is what makes it worth rendering at all
-(`proxy-behavior.md` §8.4). It is subject to the same session check as the
-figure: a session this daemon does not serve is told neither.
+- **macOS**: read from the job label launchd hands the process. `proxenos.daemon`
+  is true, no label is false, any other label is null.
+- **Linux**: no `INVOCATION_ID` is false. With one, the manager is asked once at
+  startup whether `MainPID` of `proxenos.service` is this pid. Unreachable manager
+  is null.
+- Everywhere else: null.
 
-**`status` says which process is serving, and what supervises it.** `pid` is
-this process. `supervised` is read from the job label launchd hands a job it
-starts: the label §2.6 installs is a positive answer and no label at all is a
-negative one. Any other label answers **null**, because "not supervised by
-`proxenos.daemon`" and "nothing supervises this" are different statements and
-only the first would be established.
+The reading is taken once at startup and carried for the life of the process.
 
-**On Linux there is no label, so the answer is the manager's.** systemd puts no
-unit name into the environment of the process it starts, and the reading is
-therefore two facts. `INVOCATION_ID` is set for every process systemd executes,
-so its absence is a real negative — nothing this manager runs started this one,
-and no `systemctl` is spawned to learn what the environment already settled.
-Its presence says only that *a* unit did, since a terminal emulator is itself a
-user unit and every shell under it inherits the id, so the second fact names the
-unit: `MainPID` of `proxenos.service`, asked of the manager **once, at startup**,
-and compared against this process's own pid. The unit is `Type=simple` and its
-`ExecStart` is this binary, so its main process is this daemon and nothing else
-— equality is identity rather than resemblance, which comparing `InvocationID`
-would not be, since any child the unit spawned carries that too. Where the
-manager cannot be asked at all the answer stays **null**: that is the one case
-nothing established, and reporting an unsupervised daemon on the strength of an
-unreachable bus is the plausible answer this field exists to refuse.
+#### Why
 
-**Asked once, not per call.** The reading is taken when the daemon starts, where
-its other startup I/O already happens, and carried for the life of the process;
-nothing adopts a running daemon into a unit, so there is no later answer to
-re-read, and a `status` served over either transport reports the same thing
-without spawning anything.
+"Not supervised by `proxenos.daemon`" and "nothing supervises this" are different
+statements. A terminal emulator is itself a user unit, so `INVOCATION_ID` alone
+says only that some unit started the process; the unit is `Type=simple` running
+this binary, so `MainPID` equality is identity. Nothing adopts a running daemon
+into a unit, so there is no later answer to re-read.
 
-Both fields are additive: a caller that needs them checks for them (§6), and a
-daemon predating them omits `pid` and answers no `supervised` at all.
+### `status.version`
 
-**`status` names the account.** `auth.account` is what this daemon calls the one
-serving turns and is what selects it; `auth.account_id` is what the backend
-calls it and is what appears on a request; `auth.kind` is `grant` or `key`,
-which decides which endpoint it is spent against and what it can be asked for;
-`auth.provider` is the other half of that decision — which provider's endpoint,
-`codex` unless the account says otherwise, and each entry of `auth.accounts`
-carries the same field. Stored entries without one are the first provider's:
-every credential file written before the field existed reads unchanged, and the
-CLI renderings name a provider only where it is not `codex`.
-`auth.key_flavour` is present only on a key, and only where the store recorded
-which meter it is on: `subscription_token` or `api_key` (`proxy-behavior.md`
-§8.2). It is a classification of the credential's shape, never any part of the
-secret. It is **absent** on every entry written before the field existed and on
-any key whose shape matched neither, and absence is reported rather than
-resolved into whichever is likelier — a `usage` row for such an account says
-this daemon does not know which meter it is on, and claims nothing about
-whether a figure will arrive.
-`subscription_token` is the shape's answer and not the credential's: the
-`sk-ant-oat` stem is worn both by a setup token and by the harness's own OAuth
-access token, and no field here separates them (`proxy-behavior.md` §8.2).
-`auth.connected` means there is a credential to spend, of either kind — a key
-has no grant behind it, and reading only the grant reported a daemon that could
-serve every turn as not connected. `auth.accounts` lists every account this
-daemon can serve — present and empty rather than absent — carrying names, ids,
-addresses, plans as last read, and expiries. It carries no tokens: this is the one
-credential-shaped answer that leaves the process.
+The version number, `+`, the short commit, and `-dirty` where the tree had
+uncommitted changes: `0.12.0+ab12cd3`, `0.12.0+ab12cd3-dirty`, `0.12.0+unknown`
+where there was no git. Compare for equality or not at all; never parse it. The
+same string is what `--version`, the `daemon` line of `status`, `stop` and
+`supervisor install` print. It is not `[upstream].client_version`.
 
-**A window states more than a percentage where the provider stated more.** Each
-window carries its reset epoch, and — where the provider gives them — its own
-status, the threshold behind that status, whether the provider named it the
-representative window, and a label for a window duration cannot identify (an
-overage window has no length). `usage` renders each of those beside the figure,
-and marks a window whose reset has already passed: the figure is real but
-describes a window that has since turned over, and nothing else in the answer
-would say so. Staleness is per window — one snapshot can hold a five-hour window
-that has turned over beside a seven-day one that has not — and a window with no
-reset stated is never marked.
+#### Why
 
-**`accounts use` says which provider now serves.** One select moves every
-unpinned turn onto that account's provider and spends that provider's
-subscription. The operator asked for it, but a name does not state a provider,
-and only the daemon holds the answer.
+Two builds of one version number are different strings, which makes "the binary
+is new and nothing changed" answerable. §6 already forbids comparing versions.
 
-**`usage.refresh` can block while the owning client runs.** Where the account
-it is asked about is a borrowed profile of either provider whose grant has
-lapsed, the owning client is run once before the figure is asked for, and the
-answer waits for it
-(`proxy-behavior.md` §8.4) — the figure the caller wants is the one after the
-refresh. **The bound is one client run for the whole call**, not one per
-account: a sweep over four lapsed profiles would otherwise be four minutes of a
-caller that looks hung, and neither this socket nor the CLI times out. An
-account the budget ran out before is still asked for its figure, without the
-refresh, and its row says it was not asked and what to do about it. One run per
-profile is serialised by a lock, and the one case that cannot be helped refuses
-instead: a profile whose refresh token has lapsed too, where running the client
+### `accounts`
+
+No parameters. Returns `selected`, `accounts`, `discovered`, and
+`ignored_grants`.
+
+- Each account: its name, kind, provider, `declared` (true only for a profile in
+  `[profiles]`), whether it serves turns, and, for a borrowed row, the profile it
+  was read from and `login_expires_at` for a Claude profile.
+- A borrowed row whose store could not be read carries `unreadable`, the refusal's
+  words. The key is **absent** otherwise, so absent means readable.
+- `discovered` is whether the rows are the operator's `[profiles]` or the stock
+  profile of each program, read because none were declared.
+- `ignored_grants` names grants an older version left in `credentials.json`.
+
+No tokens.
+
+### `accounts.select`
+
+`{"account": name}`. Returns `selected`, `provider`, `previous_provider` (absent
+where nothing was selected), `catalog_refreshed`, and `tiers`, the mapping now in
+force. Selecting the account already serving returns
+`{"selected", "provider", "previous_provider", "unchanged": true}` and does
+nothing else.
+
+- The account's own tiers and ceiling (§4) are resolved and validated against the
+  catalog fetched for it before anything moves. A model that catalog lacks refuses
+  the switch, naming whose menu refused and how to give that account its own
+  mapping; the daemon keeps serving what it was, catalog included.
+- Validation is skipped where the catalog cannot speak for the account: the
+  fallback list, or a failed refetch. `catalog_stale` then says so.
+- The ingress authenticates through the same store, so the next turn is made as
+  the account named.
+- Live conversations are dropped, each paying a full upload on its next turn.
+- Quota figures stay under the accounts that earned them.
+
+#### Why
+
+A conduit fixes its account when it dials and keeps the connection for the
+conversation's life (`proxy-behavior.md` §4.1), so a session left alone would go
+on billing the account the operator moved off. A full send is the direction §4.3
+of the behavior spec resolves every ambiguity toward. A fetch that did not answer
+is not evidence a model went away. A re-selection is already where a switch pays
+to arrive.
+
+### `accounts.rename`
+
+`{"account": from, "name": to}`. Returns `renamed`, `name`, and
+`moved_configuration`. The grant and account id are untouched.
+
+- An account section in `config.toml` moves with the name; only the table headers
+  change, everything under them byte for byte. The file is written before the
+  store.
+- An account with no section is renamed without touching the file.
+- A rename onto a name whose section is still in the file is refused.
+
+#### Why
+
+A section keyed by the old name would detach silently, since a section naming
+nobody is not an error. The file-first order can at worst leave an orphan
+section; the other order can leave an account with no mapping. Removing an account
+leaves its section, and moving onto it would define one table twice, which TOML
+refuses at the next start.
+
+### `accounts.remove`
+
+The selected account, or `{"account": name}`. Returns `removed`, `serving` (who
+serves afterwards), `remaining`, and `catalog_refreshed`.
+
+- A key is dropped from the store.
+- A declared profile loses its `[profiles]` entry, then the file is re-read. The
+  grant belongs to the program that owns the directory.
+- A found profile is refused, saying so and that `[profiles]` is empty.
+- The removed account's quota figure is dropped. An idle account's removal leaves
+  the serving account's figure alone.
+- Where removal hands over to another account, the catalog is fetched again.
+
+#### Tried and dropped
+
+`disconnect`, then `accounts.forget`. The store's verb and every refusal say
+"remove"; a third spelling was a name to translate.
+
+### `models`
+
+Optional `{"account": name}` (added after v0.16.0). Returns `models` (each `id`,
+`context_window`, `effective_window`, null where unknown), `authoritative`, and
+`stale`.
+
+- For an account on the second provider — named, or the selection — the answer is
+  a list built into the binary with windows, and carries `curated: true` and
+  `provider`. No mapping is ever validated against it.
+- Otherwise it is that account's catalog, fetched as that account where the list
+  in force was not fetched for it or is the fallback. Nothing is put in force by
+  it; a failed fetch answers with the list in force, `stale: true`.
+- A name the store does not hold is refused by name.
+
+`exec --account` measures `--model` against this.
+
+#### Why
+
+The fetched catalog was never the second provider's menu (`proxy-behavior.md`
+§9.1), and that provider's list endpoint states no windows.
+
+### `tiers`
+
+Optional `{"account": name}`. Returns `tiers`, `missing_tiers`, and
+`cross_account_tiers` (added after v0.19.0; `missing_tiers` after v0.17.0).
+
+With a name other than the serving account, the answer is that account's section
+as the file holds it now, resolved as a switch would, with `account` naming it and
+no `missing_tiers`. The serving account's name answers as without the parameter.
+An unknown name is refused.
+
+#### Tried and dropped
+
+`tiers.get`. Every other read is a bare noun beside namespaced writers.
+
+### `tiers.set`
+
+`{"tiers": {<tier>: value, ...}, "account"?: name, "persist"?: bool}`. Returns
+`tiers`, `persisted`, `account` (null for the shared table), and `detail`.
+
+A value is a model id, or `{"model", "account"?, "effort"?}`: `account` pins the
+tier, `effort` is the level the client starts the model at (§2.2).
+
+- **Partial**: naming one tier changes that tier.
+- Each model is validated against the catalog and **refused** where the catalog
+  lacks it. A pinned model is excluded from validation.
+- The pinned form needs `cross_account_tiers` and is refused by name without it.
+- An unrecognized effort is refused naming the tier; two tiers on one model with
+  different efforts are refused naming both.
+
+#### Why
+
+A caller that knows one tier must not unset the three it did not mention. This
+daemon owns the mapping because it holds the catalog. A set is feedback on
+something typed a moment ago, so it refuses where a start or reload only marks.
+The catalog is the serving account's menu and cannot speak for a pinned one.
+
+### `effort.set`
+
+`{"effort": level | null, "account"?: name, "persist"?: bool}`. Returns `effort`,
+`persisted`, `account`, and `detail`. `null` removes an override: under an account
+it clears that account's line and the shared ceiling applies again. The answer
+reports the ceiling that results.
+
+#### Why
+
+Reporting no ceiling after clearing an account's line would be a figure that
+lasted until the next start.
+
+### Setters: persistence and scope
+
+These rules hold for `tiers.set` and `effort.set`.
+
+- **In effect until the daemon stops**, unless `persist` is true. Every answer
+  says which.
+- **Written before applied.** A failed write leaves the daemon unchanged.
+- **Written where the value is read from.** With no `account`, a tier goes to the
+  serving account's section where that section already names it, else the shared
+  table; the ceiling follows the same rule. With `account`, that section.
+- **Aimed at a non-serving account: written, not applied**, and not validated
+  against the serving catalog. Without `persist` such a call is refused. `detail`
+  distinguishes written-and-applied from written-only.
+- **A text edit, not a re-serialization.** One value on one line changes; the file
+  is read fresh at write time.
+- **Account tables are re-read from disk when needed.** A file that no longer
+  parses keeps the startup snapshot.
+
+#### Why
+
+Trying a mapping is not changing what the daemon is, and only the caller knows
+which it is doing. Applying before writing would leave a policy nobody chose,
+reported as a failure. An account section shadows the shared table, so a write to
+the shared table would be in force now and gone at restart. The file's comments
+explain why keys are what they are; re-serializing would silently discard them. A
+daemon that resolved its own writes from a startup snapshot could not see them.
+
+### `cross_account_tiers.set`
+
+`{"enabled": bool}`. Always persisted. Granting applies to the next call.
+Revoking is refused by name while any tier pins an account.
+
+#### Why
+
+Consent changes what the daemon is, and a grant that evaporated at restart would
+leave the file refusing a mapping the operator permitted. Revoking under a pin
+would write a file the daemon refuses to start from.
+
+### `config.reload`
+
+No parameters. Re-reads `config.toml` and returns `reloaded`, `serving` (null
+where the file took the serving profile away), `remaining`, and `needs_restart`.
+
+- Applies `[profiles]`, the tier mapping and the effort ceiling. The mapping goes
+  through the checked path a switch takes, except a model the catalog lacks
+  **marks** its tier instead of refusing.
+- `needs_restart` is always `instructions`, `client`, `transport`, `upstream`,
+  `port`.
+- Nothing is fetched. A conversation in flight keeps what it started with.
+- A file that does not parse is refused with the parse error; the daemon keeps what
+  it was running.
+
+#### Why
+
+A reload is the move left after a daemon came up with a tier marked, so it cannot
+refuse on the same grounds. A key that did nothing must be named rather than
+discovered.
+
+### `usage`
+
+No parameters. Returns the serving account's quota as of its last turn, or that no
+turn has been made, plus:
+
+- `models`, the ids this daemon serves (§2.1);
+- `serving`: name, provider, address, plan, account id;
+- `incidents`, the same list the `incidents` method returns;
+- `accounts`, one entry per stored account with its figure, its freshness, and
+  `unavailable` where it has none. Each entry carries `served_tokens`
+  (`proxy-behavior.md` §6.1). An entry with no figure carries `reason` beside
+  `detail`: `no_turn`, `no_relayed_turn`, `metered`, `unknown_key_kind`,
+  `not_reported`.
+
+Each window carries `used_percent`, `window_minutes`, `resets_at`, and where the
+provider stated them `status`, `surpassed_threshold`, `representative`, and
+`label` for a window no duration identifies. An entry with a credit balance
+carries `credit`: `used_minor`, `limit_minor`, `exponent`, `currency`, `percent`,
+`severity`. An entry whose subscription is not active carries
+`subscription_status`, the provider's word; absent where active.
+
+#### Why
+
+`reason` is the fact in a word, so a renderer never matches on prose. Staleness is
+per window, since one snapshot can hold a turned-over five-hour window beside a
+current seven-day one.
+
+### `usage.refresh`
+
+No parameters. Asks the backend for a figure now, per stored account whose
+credential can hold one, each on its own credential and recorded under its own
+name as asked-for. Returns the serving account's outcome plus `accounts`, each
+with its figure or the sentence why not. Nothing about the selection moves.
+
+- A failure belongs to its own entry.
+- A key, or a credential whose provider states quota only on turns, is not asked.
+- A non-serving account's expired grant is never refreshed; its row says so and
+  what to do. The serving account is the exception.
+- Where a borrowed profile's grant has lapsed, the owning client runs once first,
+  and the call waits. **The budget is one client run for the whole call.** An
+  account past the budget is asked without the refresh, and its row says so. Runs
+  per profile are serialised by a lock. A profile whose refresh token has also
+  lapsed is refused.
+
+#### Why
+
+The stream snapshot is free and primary. This exists for a daemon that has served
+no turn and for an idle account whose headroom is the question before switching
+to it. A refresh rotates a token family, and a second holder would be left with a
+retired token. Neither the socket nor the CLI times out, so four lapsed profiles
+at one run each would look hung. Running the client over a lapsed refresh token
 would blank what is left of the grant.
 
-**`usage.refresh` is not the primary path and does not replace it.** The backend
-volunteers a snapshot at the head of every stream; that one is free, rides a turn
-already being made, and is what `usage` reports. This exists for the cases that
-path cannot cover — a front-end with a figure to show on a daemon that has served
-no turn yet, and an account that is held but not serving, whose headroom is the
-question asked *before* switching to it. Each account's answer is recorded where
-the stream path records its own, under that account's own name, so everything
-reading a quota reads one value. It is recorded as asked for rather than as
-volunteered: both are true figures and they go stale differently, so `usage`
-states which one each account's figure is.
+### `incidents`
 
-**Asking is per account, and so is failing.** One account's refusal, expiry, or
-dead endpoint is reported on that account's own entry and stands in for no
-other's. A row whose credential cannot hold a subscription figure at all — a
-key, or a credential of the provider that states quota only on turns — is not
-asked; it keeps the sentence it already had rather than gaining a failed
-request, and no figure is invented for it. And asking never refreshes the grant
-of an account the operator did not select: a refresh rotates a token family, and
-a second holder of the same grant would be left holding a token retired by a
-sweep it never asked for. Such a row says its grant has expired and what to do
-about it. The serving account is the exception, because every turn already
-refreshes it.
+No parameters. Returns:
 
-**The tier table is printed in ladder order.** `tiers` is an unordered object
-and arrives sorted by name, which is `fable, haiku, opus, sonnet` — an order
-nothing else uses. `status` prints `opus, sonnet, haiku, fable`, which is the
-order `models` already lists the same four tiers in.
+- `incidents`, worst first: each `id`, `provider`, `name`, `status`
+  (`investigating`, `identified`, `monitoring`; resolved rows are dropped),
+  `impact` (`none`, `minor`, `major`, `critical`), `url`, `since`, and `updates`
+  (added after v0.27.0) — newest first, each `status`, `body`, `at`, present and
+  empty where nothing was posted;
+- `providers`, the ones asked;
+- `errors`, per provider whose page did not answer, with its last list kept;
+- `checked_at`, epoch seconds of the last round, null before the first.
 
-**`status` reports the version of the build serving the socket.** It is not
-necessarily the build that asked: one file is both, and replacing it does not
-restart a running daemon. The CLI says so only when the two differ, because a
-line printed on every run is one nobody reads on the run that matters.
+The daemon asks each page once a minute (`upstream.status`,
+`upstream.anthropic.status`, §4). Nothing on the turn path waits on it. The CLI
+table omits `updates`.
 
-**`version` carries a build id, and is compared for equality or not at all.**
-The string is the version number, a `+`, the short commit the binary was built
-from — `unknown` where there was no git to ask, a tarball build being the case
-— and `-dirty` where the tree had uncommitted changes: `0.12.0+ab12cd3`,
-`0.12.0+ab12cd3-dirty`, `0.12.0+unknown`. Two builds of one version number are
-therefore different strings, which is what makes "the binary is new and nothing
-changed" answerable by `status` and `stop` (§2.4) rather than only by a release
-bump. **A caller must not parse it**: §6 already says not to compare versions,
-and the suffix is exactly the part a comparison would get wrong. The same
-string is what `--version`, the `daemon` line of `status`, both halves of
-`stop`, and the notice from `supervisor install` (§2.6) print. It is not what
-goes upstream — `[upstream].client_version` is a claim about a client the
-backend filters its catalog by, and a build id there would describe a different
-program.
+### `env`
 
-**`env` keeps its name although its payload now carries more than an
-environment.** The two halves are named inside it — `variables` and `settings` —
-and a caller reading only the first is untouched by the second. Renaming the
-method would cost a shim in a caller that already speaks it and buy no
-capability, so the honesty went into the field names and the CLI verb: `settings`
-is the name for the document, and `env` stays the name for the exports.
+Optional `{"account": name}` (added after v0.15.1). Returns `variables` and
+`settings` (§2.2).
 
-The names are reserved whether or not v0.1 answers them: they are semver-bound
-(§6), and a method that appears later must mean what its name said all along. A
-reserved method reports that it is unimplemented rather than failing as though
-it were unknown.
+#### Why the name stayed
 
-The daemon holds authoritative state and any front-end is a client of this
-interface. The CLI has no privileged path of its own; a second front-end needs no
-new daemon work.
+The payload carries more than an environment, but its halves are named inside it,
+and renaming the method would cost a caller a shim for no capability. `settings`
+is the CLI name for the document.
+
+### `shutdown`
+
+No parameters. Returns `{"stopping": true, "version": ...}`, then the process goes
+once the answer is written.
+
+### `record.start` and `record.stop`
+
+`record.start` takes `{"mode": "ingress" | "upstream"}`, `ingress` by default, and
+returns `{"recording": true, "mode"}`. `record.stop` returns
+`{"recording": false}`.
+
+#### Why
+
+`upstream` bills every turn that follows, so it has to be named.
+
+### `doctor`
+
+Reserved and not implemented; it answers that it is not implemented rather than
+unknown. `doctor` runs in the CLI, where `--live` can resolve credentials without a
+daemon.
+
+### Front-ends
+
+The daemon holds authoritative state and every front-end is a client of this
+interface. The CLI has no privileged path.
+
+### Operator-facing rows name the provider id
+
+Rendered output names a provider by its stored id, `codex` or `anthropic`: the
+`routing`, `catalog` and `auth` lines of `status`, the curated note on `models`,
+and every per-account reason in `usage`.
+
+#### Why
+
+With two providers stored, a row that leaves the provider out is the one an
+operator has to guess about.
+
+### Where it lives
+
+| File | What it holds |
+|---|---|
+| `crates/proxy/src/control/protocol.rs` | Request and response shapes, codes, `METHODS` |
+| `crates/proxy/src/control/handler.rs` | Every method |
+| `crates/proxy/src/control/mod.rs` | Socket path, bind, dial, HTTP client |
+| `crates/proxy/src/ingress.rs` | `POST /control` |
+| `crates/proxy/src/config/edit.rs` | Text edits for persisted changes |
+| `crates/proxy/src/usage.rs` | Quota figures, refresh sweep |
+| `crates/proxy/src/incidents.rs` | Status-page polling |
+| `crates/proxy/src/catalog.rs` | Catalog, fallback, curated relay list |
+| `crates/proxy/src/version.rs` | The build id |
 
 ---
 
 ## 4. Configuration
 
-TOML in the platform configuration directory — `$PROXENOS_HOME`, else
-`$XDG_CONFIG_HOME/proxenos`, else `~/.config/proxenos`. Credentials
-are never stored here.
+TOML at `config.toml` in `$PROXENOS_HOME`, else `$XDG_CONFIG_HOME/proxenos`, else
+`~/.config/proxenos`. The file is optional and every key has a default.
 
 ```toml
 port = 8787
+cross_account_tiers = false
 
 # Optional. A ceiling on reasoning effort, whatever the client asks for.
 effort = "low"
 
-# Optional. Where the Claude CLI is, for the two things this daemon runs it
-# for itself. Unset, the bare name `claude` is resolved through the daemon's
-# PATH, which is not the shell's — a daemon started by launchd inherits a
-# minimal one and the name does not resolve there.
+# Optional. The Claude and Codex CLIs this daemon runs on its own behalf.
 claude_program = "/opt/homebrew/bin/claude"
-
-# Optional. Where the Codex CLI is, for the cheap turn this daemon runs to
-# refresh a borrowed Codex grant it owns. Unset, the bare name `codex` is
-# resolved through the daemon's PATH, with the same launchd caveat.
-codex_program = "/opt/homebrew/bin/codex"
+codex_program  = "/opt/homebrew/bin/codex"
 
 [tiers]
-opus   = "..."
-sonnet = "..."
-haiku  = "..."
-fable  = "..."
+opus   = "gpt-5.6-terra"
+sonnet = "gpt-5.6-luna"
+haiku  = "gpt-5.6-luna"
+fable  = "gpt-5.6-sol"
 
 # Optional, one per account, keyed by the name `accounts` lists it under.
 [accounts.spare]
@@ -1833,8 +1937,6 @@ effort = "low"
 opus = "..."
 
 # Optional. A second door beside the loopback one, and the token it demands.
-# The default is loopback alone with no token — the posture this project
-# shipped with.
 [listen]
 address    = "100.64.0.2"
 token_file = "/Users/me/.config/proxenos/token"
@@ -1858,20 +1960,20 @@ disable_commit_attribution = true
 [upstream]
 client_version           = "2.0.0"
 effective_window_percent = 95.0
-endpoint                 = "https://..."
-websocket                = "wss://..."
-catalog                  = "https://..."
+endpoint                 = "https://chatgpt.com/backend-api/codex/responses"
+websocket                = "wss://chatgpt.com/backend-api/codex/responses"
+catalog                  = "https://chatgpt.com/backend-api/codex/models"
 usage                    = "https://chatgpt.com/backend-api/wham/usage"
 status                   = "https://status.openai.com/api/v2/summary.json"
 
 [upstream.key]
-endpoint = "https://..."
-catalog  = "https://..."
+endpoint = "https://api.openai.com/v1/responses"
+catalog  = "https://api.openai.com/v1/models"
 
 [upstream.anthropic]
-endpoint = "https://..."
-usage    = "https://..."
-profile  = "https://..."
+endpoint = "https://api.anthropic.com/v1/messages"
+usage    = "https://api.anthropic.com/api/oauth/usage"
+profile  = "https://api.anthropic.com/api/oauth/profile"
 status   = "https://status.claude.com/api/v2/incidents/unresolved.json"
 
 # Optional. The profile directories grants are borrowed from, keyed by the
@@ -1884,385 +1986,403 @@ path     = "/Users/me/Library/Application Support/Agent Profiles/codex/p/997619b
 provider = "anthropic"
 ```
 
-`[profiles]` says where another program keeps a grant this daemon spends
-(`proxy-behavior.md` §8.4). Paths only: no credential is written into this file,
-and none is read out of it.
+The `[tiers]` and `[upstream*]` values shown are the defaults.
 
-`provider` names which program owns the profile, and therefore which endpoint
-its grant is spent against. `path` is the profile directory — a `CODEX_HOME`, or
-a `CLAUDE_CONFIG_DIR`.
+### A missing file is a first run
 
-`claude_program` is the Claude CLI this daemon runs **on its own behalf**, and
-never to serve a turn: once to ask the program that owns a borrowed Anthropic
-profile to refresh its own grant (`proxy-behavior.md` §8.4), and once to read
-the version the quota request for that grant is made as. Unset, it is the bare
-name `claude`, resolved through the daemon's `PATH` — which is not the shell's.
-A daemon started by launchd inherits a minimal one and resolves nothing, so
-write the path out where that is how it starts; `usage --refresh` otherwise
-refuses with `could not run \`claude\``.
+The daemon logs where the file would go and starts on the defaults. A file present
+but unparseable is an error.
 
-`codex_program` is the same thing for the Codex CLI: a cheap `codex exec` turn
-this daemon runs on its own behalf to refresh a borrowed Codex grant it owns.
-Unset, it is the bare name `codex`, resolved through the daemon's `PATH`, with
-the same launchd caveat.
+#### Why
 
-**Leaving `path` out means the stock profile**, the one that program uses when
-no variable designates a directory. That is a *different* profile from one
-naming the stock directory explicitly: on macOS the client files its grant under
-a keychain item chosen by whether `CLAUDE_CONFIG_DIR` was set at all, so writing
-the path out selects a different item (`proxy-behavior.md` §8.4). Writing it out
-is not a way of saying "the default".
+Falling back there would run a daemon that ignores what the operator wrote.
 
-A path must be absolute, and a leading `~` is refused rather than expanded: the
-daemon's working directory is not the operator's, and for a Claude profile the
-spelling of the path is part of the identity. Two entries naming one provider
-and one directory are refused naming both, because one directory holds one grant
-and is therefore one account. Two entries naming one directory under *different*
-providers are two profiles, which is what a directory holding both programs'
-state looks like.
+### An unrecognized key is refused
 
-`[upstream.key]` is where an API key is spent, which is not where a grant is
-(`proxy-behavior.md` §8.2). There is no socket in it: the WebSocket protocol
-belongs to the subscription backend, so a key account uses HTTP. Sending either
-credential to the other's endpoint is refused before anything leaves.
+Every table refuses unknown keys, and the error says top-level keys must sit above
+`[tiers]` and `[transport]`.
 
-`[upstream.anthropic]` is where a relayed turn goes (`proxy-behavior.md` §9),
-and `usage` is where that provider states quota for a borrowed grant
-(`proxy-behavior.md` §8.4). Only a grant can ask there: a key has no
-subscription behind it, and the long-lived subscription token wearing the same
-stem is refused for want of a scope. `profile` is where the same provider
-states the account's plan with its multiplier (`max 20x`); it is asked beside
-a quota refresh, at most hourly, and an answer it declines to give leaves the
-plan absent rather than invented. Otherwise the relay does one thing: it speaks the surface this proxy
-already exposes, so there is no catalog to translate and no socket protocol to
-speak.
+#### Why
 
-`[upstream]` is entirely optional; every key defaults to what ships. It exists so
-a pinned binary can be repointed rather than rebuilt, and because two of the keys
-fail in ways nothing else can diagnose.
+In TOML a bare key after a table header belongs to that table: `effort` below
+`[tiers]` is `tiers.effort`. Ignored, the operator believes they capped spending
+while every request runs at the backend's default.
 
-`client_version` is what the proxy reports when asking for the model list — not
-this crate's version. The backend filters the list by it, and a version below
-every model's minimum returns an **empty list rather than an error**, which reads
-exactly like an account with no models. Startup says so by name when the catalog
-comes back empty.
+### When the file is read
 
-`usage` is where a quota figure can be asked for rather than waited for: the
-backend volunteers a snapshot at the head of every stream (`proxy-behavior.md`
-§6), and this is the route for a front-end that has to show a figure before any
-turn has been made.
-
-`effective_window_percent` is the share of a context window left usable once
-instructions, tool overhead, and output are accounted for, applied where the
-catalog states no share of its own. It is the figure the client is told, so it
-decides when compaction fires: lower compacts sooner and wastes window, higher
-risks a turn refused for length. A value outside `(0, 100]` is refused at
-startup rather than clamped.
-
-**Every key has a default, and the file itself is optional.** A missing
-configuration is a first run, not a failure: the daemon logs where the file would
-go and starts on the defaults. A file that is present but unparseable is still an
-error — falling back there would run a daemon that ignores what the operator
-wrote.
-
-**An account section states what differs for one account.** A catalog is one
-account's menu (`proxy-behavior.md` §7.0), so a mapping is only ever right for
-the models every account has: two subscriptions on different plans are offered
-different models, and a key account beside a subscription need not overlap at
-all. `[accounts.<name>.tiers]` replaces the tiers it names and no others, and
-`effort` under `[accounts.<name>]` replaces the shared ceiling rather than being
-capped by it — an operator who writes a different one for an account means that
-one. The key is the name `accounts` lists, because that is the string every
-account verb takes and a key account has no id to be named by. An account with
-no section takes the shared tables, which is also what a daemon with nothing
-selected uses.
-
-The four tiers default to the mapping above. An omitted tier takes its default; a
-tier written blank is refused, because an omission accepts the shipped answer
-while a blank is a mistake. Each mapped model is checked against the live
-catalog when one is reachable. That check happens once, at startup: the
-catalog is not refetched, so a mapping cannot go stale while the daemon runs.
-
-**A model the catalog does not carry does not stop the daemon.** A *defaulted*
-model is this proxy's guess and is replaced with one the account has; a *stated*
-model is the operator's decision, is never replaced, and instead marks its tier.
-A marked tier refuses its own turns — naming the tier, the model, and what the
-catalog does have — and the other three go on serving. The startup log carries
-that sentence once at WARN, `status` and `models` name the marked tier, and
-`reload` clears the mark once config.toml is fixed. Where every tier is marked
-the daemon still starts and says so, because a process that exited could not be
-reloaded (`proxy-behavior.md` §7.1).
-
-A tier entry is a model id, or a table pinning one to another account:
-`haiku = { account = "spare", model = "..." }` serves that tier's turns as
-`spare` whatever account serves the rest of the session. The table form is
-gated by the top-level `cross_account_tiers = true` — it routes one client's
-traffic across accounts' quotas, which is a decision the operator owns, so its
-absence refuses the daemon at startup rather than falling back to the serving
-account. Falling back would spend the wrong account's quota invisibly. The
-bare-string form is ungated and keeps the meaning it has always had.
-
-The same table may state the effort the client starts the tier's model at:
-`opus = { model = "…", effort = "high" }`, with or without `account`. It is
-checked at startup — a level other than the client's own low, medium, high,
-xhigh and max refuses the daemon naming the tier,
-and two tiers on one model must agree, because the client keeps one effort per
-model — and delivered in the launch settings as that model's own effort (§2.2).
-It is the effort a session asks for when it names none; the ceiling above is
-what caps every request whatever it asked for, and the two compose: a tier at
-`high` under a `medium` ceiling is served at `medium`.
-
-The pin decides which credential authenticates: every upstream request that tier
-produces goes up as the pinned account, and unpinned tiers are unchanged. A pin
-naming an account the store does not hold refuses the turn with
-`invalid_request_error`, naming the account and listing what is stored, and
-nothing reaches the backend as somebody else. A pinned account holding a
-credential the endpoint does not take is refused the same way, naming the pinned
-account. `proxy-behavior.md` §7.1 carries the rest, including what a refresh on
-a pinned grant does.
-
-`[client]` is policy the client applies to itself, which settings mostly carry
-and environment variables mostly cannot — see `proxy-behavior.md` §7.3 for why
-each default is what it is. `deny_skills` names skills refused for a session
-served here; the proxy writes the `Skill(...)` rule the client understands,
-because a rule built by hand and built wrong denies nothing and reports nothing.
-An empty list allows everything. **Left unset, the default is resolved per
-launch**: `claude-api` is denied for a launch whose turns translate, and
-nothing is denied for one whose turns are all relayed — the skill documents
-the second provider's API, the wrong reference for a translated session and
-the right one for a relayed session. A written list is the operator's rule and
-applies on either path. `status` reports the list a launch would actually
-apply. `disable_connectors` does two things through
-one intent: the settings key (`disableClaudeAiConnectors`) suppresses the
-connector notice the client prints whenever an auth token is set, which here is
-always, and the export (`ENABLE_CLAUDEAI_MCP_SERVERS=false`) is the client's
-documented opt-out for the claude.ai-hosted servers themselves — the half that
-still reaches a client launched from `proxenos env` alone.
-`disable_remote_control` writes `remoteControlAtStartup: false`, keeping the
-client from starting its remote-control session at launch: a session started
-through a local proxy is a local decision. `disable_commit_attribution` writes
-`attribution.commit: ""` — an empty template, which is the client's own way of
-appending no trailer to a commit a launched session makes. Which model served a
-turn is not a fact a commit message is the place to record, so it ships on every
-launch, translate or relay.
-
-`effort` caps reasoning effort on every request, whatever the client asks for —
-one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`
-(`ultracode`, Claude Code's mode that runs at xhigh with workflows on top, is
-read as `xhigh`). It is a
-ceiling, not a fixed value, and is capped again by what the model accepts — and
-raised by it: an effort below the lowest one the model lists is snapped up to
-that floor, this ceiling included, because there is nothing cheaper the model
-would take (`proxy-behavior.md` §2.7). Omit it for no ceiling; omitting it does not mean zero effort, it means the backend's
-own default. An unrecognized value is refused at startup rather than ignored.
-
-It is a top-level key and must sit above the tables — see the note on
-misplacement below.
-
-`[instructions]` is what the proxy puts around the client's system prompt
-(`proxy-behavior.md` §2.1). `identity` leads with one line naming the model that
-is actually answering, and is **on by default** — a model told it is a different
-product is being given a false premise on every turn, which is not a neutral
-default to pick on an operator's behalf. `append` is operator text placed after
-the system prompt, where an instruction has to be to take precedence over it.
-
-`working_budget` is a short block asking the model to read the smallest slice
-that answers the question rather than whole files, and to act once a read is
-enough. **On by default**, deliberately: the conversation is replayed upstream on
-every turn and echoed back three times, so broad reading spends the window fast.
-It sits after the client's prompt, which it exists to overrule on this point, and
-before `append`, which an operator wrote on purpose and which therefore outranks
-it.
-
-All three must be constant for a conversation. Text that changes between turns
-changes `instructions`, and that costs every delta and every cache hit.
-
-The file is read at startup and again on `config.reload` — **nothing watches
-it**, so a change takes effect when a reload asks for it or on the next `run`.
-What a reload can move and what it cannot is §3's list. `--port` is the only
-override outside the file.
-The estimator backend is likewise not a configuration key in v0.1 — the
-tokenizer is a compile-time feature (`--features tokenizer`), because which
-estimator wins is a measurement rather than an operator's choice
+At startup, on `config.reload` (§3 lists what that moves), and, for account
+tables, whenever a setter needs them. Nothing watches it. Outside the file, `--port`
+or `PROXENOS_PORT` overrides `port`, and `PROXENOS_HOME` moves the directory. The
+token estimator is a compile-time feature (`--features tokenizer`), not a key
 (`proxy-behavior.md` §6.3).
 
-**An unrecognized key is refused, not ignored.** Tolerating one looks forgiving
-and is not: in TOML a bare key written after a table header belongs to that
-table, so `effort` placed below `[tiers]` is `tiers.effort`. Ignored quietly,
-the operator believes they capped their spending while every request runs at
-the backend's default. Top-level keys therefore sit above the tables, and the
-error says so when they do not.
+### `port`
 
----
+The port both doors bind. Default 8787.
 
-**`[listen]` is the one table that can hold a secret, and that is stated rather
-than left to be discovered.** §4 opens by saying credentials are never stored
-here, and `listen.token` is a deliberate exception to it. The rest of that rule
-stands and is a different rule: `[profiles]` names a *directory*, and the
-subscription grant it points at is borrowed from the program that owns it and
-never copied here. The token is not a credential for anything upstream — it
-buys access to this daemon and nothing else, it is minted by the operator, and
-rotating it costs one edit and one restart. It is written down because there is
-nowhere else for it to be: it is the thing that decides whether this daemon
-answers at all, so it has to be readable before anything else this daemon does.
+### `[tiers]`
 
-`token_file` is the better half of the pair and the one to prefer. A secret in
-a file of its own can be `0600`, can be rotated without editing configuration,
-and can be excluded from whatever backs up or syncs a config directory. It is
-**refused when the file is group- or world-readable**, naming the mode and the
-`chmod` that fixes it — a token anybody on the machine can read is not one, and
-the failure is otherwise silent: the daemon comes up, the token works, and
-every other account on the box has it. Stating the token twice — both keys — is
-refused rather than resolved: an operator with a stale `token` beside a live
-file has two answers and no way to tell which one the daemon took.
+The four tiers, each a model id or a table (below). An omitted tier takes its
+default; a tier written blank is refused.
 
-**`address` and the token are one decision, resolved together before anything
-binds.** A non-loopback address with no token is refused at startup, naming both
-keys. `port` stays at the top level rather than moving into this table: it
-shipped there, and §6 forbids moving a key.
+Each mapped model is checked against the catalog at startup, on
+`accounts.select`, and on `config.reload`. A model the catalog lacks does not stop
+the daemon:
 
-**`address` names the door to ADD, not the address to move to.** `127.0.0.1` is
-bound whatever this says, and a stated address is a second listener beside it
-(§1). "Bind the tailnet address" therefore means *that address **and**
-loopback*, which is what keeps the daemon's own machine working.
+- A **defaulted** model is replaced with one the account has.
+- A **stated** model is never replaced; it marks its tier. A marked tier refuses
+  its own turns, naming the tier, the model, and what the catalog has. The other
+  tiers serve. The startup log says it once at WARN, `status` and `models` name
+  the tier, and `reload` clears the mark once the file is fixed. Where every tier
+  is marked the daemon still starts (`proxy-behavior.md` §7.1).
 
-**A wildcard is refused by name.** `0.0.0.0` and `::` already cover
-`127.0.0.1`, so the two doors cannot both be bound — and what happens if you
-try is platform-dependent, which is worse than a refusal. Measured on macOS
-15: with `SO_REUSEADDR` the BSDs let `0.0.0.0:P` and `127.0.0.1:P` both bind
-and hand a loopback connection to the more specific socket, while Linux refuses
-the second bind outright. One of those is an unguarded posture arrived at by
-accident and the other is a daemon that will not start, and neither says which
-it is. Write the address other machines reach this one on.
+#### Why
 
-**A token beside a loopback `address` guards nothing, and the daemon says so**
-at startup, at `WARN`. There is no remote door for it to guard and the loopback
-door asks for nothing, so the key is doing nothing — which is the shape this
-project refuses to leave silent. It is not an error: moving an address back to
-loopback for an afternoon should not mean deleting the token to do it.
+An omission accepts the shipped answer; a blank is a mistake. A defaulted model is
+this proxy's guess, a stated one is the operator's decision. A daemon that exited
+could not be reloaded.
+
+### Tier table: `account`
+
+`haiku = { account = "spare", model = "..." }` serves that tier's turns as
+`spare`. Gated by top-level `cross_account_tiers = true`; without it the daemon
+refuses to start. A pin naming an account not stored refuses the turn with
+`invalid_request_error`, naming it and listing what is stored; a pinned account
+holding a credential the endpoint does not take is refused the same way.
+`proxy-behavior.md` §7.1 has the rest.
+
+#### Why
+
+A pin routes one client's traffic across accounts' quotas, which the operator
+owns. Falling back to the serving account would spend the wrong quota invisibly.
+
+### Tier table: `effort`
+
+`opus = { model = "…", effort = "high" }`, with or without `account`. One of the
+client's own levels: `low`, `medium`, `high`, `xhigh`, `max`. Anything else refuses
+the daemon naming the tier. Two tiers on one model must agree. Delivered in the
+launch settings as that model's effort (§2.2). It is what a session asks for when
+it names none; the ceiling still caps it, so `high` under a `medium` ceiling is
+served at `medium`.
+
+#### Why
+
+A backend level the client lacks (`none`, `minimal`, `ultra`) would reach the
+client as a setting it refuses. The client keeps one effort per model.
+
+### `cross_account_tiers`
+
+Top-level. Consent for pinned tiers. Default false. `cross_account_tiers.set`
+writes it.
+
+### `effort`
+
+Top-level ceiling on reasoning effort for every request: `none`, `minimal`, `low`,
+`medium`, `high`, `xhigh`, `max`, `ultra`. `ultracode` is read as `xhigh`. Capped
+again by what the model accepts, and raised to the model's lowest listed effort
+where below it (`proxy-behavior.md` §2.7). Omitted means the backend's default,
+not zero. An unrecognized value is refused.
+
+#### Why
+
+`ultracode` is Claude Code's session mode that runs at xhigh with workflows on top,
+not a level.
+
+### `[accounts.<name>]`
+
+What differs for one account. `[accounts.<name>.tiers]` replaces the tiers it
+names and no others. `effort` replaces the shared ceiling rather than being capped
+by it. Keyed by the name `accounts` lists. An account with no section, and a daemon
+with nothing selected, take the shared tables.
+
+#### Why
+
+A catalog is one account's menu (`proxy-behavior.md` §7.0): two plans offer
+different models, and a key beside a subscription need not overlap at all. A key
+account has no id to be keyed by.
+
+### `claude_program` and `codex_program`
+
+The Claude and Codex CLIs this daemon runs on its own behalf, never to serve a
+turn. `claude` is run to refresh a borrowed Anthropic grant and to read the version
+its quota request is made as; `codex` runs a cheap `codex exec` turn to refresh a
+borrowed Codex grant (`proxy-behavior.md` §8.4). Unset, the bare name resolves
+through the daemon's `PATH`.
+
+#### Why
+
+The daemon's `PATH` is not the shell's. A daemon launchd started inherits a minimal
+one where the bare name does not resolve, and `usage --refresh` then refuses with
+`could not run \`claude\``.
+
+### `[profiles.<name>]`
+
+Where another program keeps a grant this daemon spends (`proxy-behavior.md` §8.4).
+`provider` is `codex` or `anthropic`. `path` is the profile directory — a
+`CODEX_HOME` or `CLAUDE_CONFIG_DIR`. No credential is written here or read from
+here.
+
+- **No `path` means the stock profile**, which differs from naming the stock
+  directory explicitly.
+- A path must be absolute; a leading `~` is refused, not expanded.
+- An empty name is refused.
+- Two entries on one provider and one directory are refused, naming both. The same
+  directory under different providers is two profiles.
+
+#### Why
+
+On macOS the Claude client files its grant under a keychain item chosen by whether
+`CLAUDE_CONFIG_DIR` was set at all, so writing the path out selects a different
+item. The daemon's working directory is not the operator's, and for a Claude
+profile the spelling of the path is part of the identity. One directory holds one
+grant, so it is one account.
+
+### `[listen]`
+
+| Key | Meaning |
+|---|---|
+| `address` | a door to add beside loopback (§1). Default `127.0.0.1` |
+| `token_file` | a file holding the token. Preferred |
+| `token` | the token inline |
+
+- `address` names the door to **add**, not the address to move to.
+- A non-loopback `address` with no token is refused at startup, naming both keys.
+- A wildcard (`0.0.0.0`, `::`) is refused by name.
+- `token_file` is refused when group- or world-readable, naming the mode and the
+  `chmod`.
+- Both `token` and `token_file` is refused.
+- A token beside a loopback `address` logs a WARN at startup and is not an error.
+- `port` stays top-level.
+
+#### Why
+
+`listen.token` is the one secret this file can hold. It is not a credential for
+anything upstream: it gates this daemon, is minted by the operator, and decides
+whether the daemon answers at all, so it has to be readable first. A token file can
+be `0600`, rotated without editing configuration, and excluded from backups. A
+readable token file works while every account on the machine has it. Two stated
+tokens leave no way to tell which the daemon took. A wildcard covers
+`127.0.0.1`, so the two doors cannot both be bound, and the result is
+platform-dependent: measured on macOS 15, the BSDs bind both and hand loopback to
+the more specific socket, while Linux refuses the second bind. A loopback address
+for an afternoon should not mean deleting the token. `port` shipped top-level and
+§6 forbids moving a key.
+
+### `[transport]`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `websocket` | true | use the WebSocket transport where the account supports it; false is HTTP only |
+| `compression` | true | zstd on HTTP bodies, `permessage-deflate` on the socket |
+
+`proxy-behavior.md` §4 has the transports.
+
+### `[instructions]`
+
+What the proxy puts around the client's system prompt (`proxy-behavior.md` §2.1).
+All three must stay constant for a conversation.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `identity` | true | lead with one line naming the model actually answering |
+| `working_budget` | true | a short block, after the client's prompt and before `append`, asking the model to read the smallest slice that answers and act once a read is enough |
+| `append` | unset | operator text after the system prompt |
+
+#### Why
+
+A model told it is a different product is given a false premise every turn. The
+conversation is replayed upstream every turn and echoed back three times, so broad
+reading spends the window fast. `append` outranks `working_budget` because an
+operator wrote it on purpose. Text changing between turns costs every delta and
+every cache hit.
+
+### `[client]`
+
+Policy the client applies to itself (`proxy-behavior.md` §7.3).
+
+| Key | Default | Delivers |
+|---|---|---|
+| `deny_skills` | per launch | `permissions.deny` with `Skill(...)` rules. Unset: `claude-api` denied for a launch whose turns translate, nothing for one wholly relayed. A written list applies on either path; empty allows everything |
+| `disable_connectors` | true | `disableClaudeAiConnectors` in settings, and `ENABLE_CLAUDEAI_MCP_SERVERS=false` in the environment |
+| `disable_remote_control` | true | `remoteControlAtStartup: false` |
+| `disable_commit_attribution` | true | `attribution.commit: ""` |
+
+`status` reports the deny list a launch would apply.
+
+#### Why
+
+A rule built by hand and built wrong denies nothing and says nothing. The skill
+documents the second provider's API: wrong for a translated session, right for a
+relayed one. The connector setting suppresses the notice the client prints whenever
+an auth token is set, which here is always; the export still reaches a client
+launched from `env` alone. A session started through a local proxy is a local
+decision, so remote control is off. Which model served a turn is not a commit
+message's business.
+
+### `[upstream]`
+
+Where the first provider is reached, so a pinned binary can be repointed rather
+than rebuilt.
+
+| Key | Meaning |
+|---|---|
+| `client_version` | the client version reported when fetching the model list |
+| `effective_window_percent` | share of a context window left usable, where the catalog states none. Must be in `(0, 100]`, refused otherwise |
+| `endpoint`, `websocket`, `catalog` | the subscription backend's HTTP, socket and model-list URLs |
+| `usage` | where a quota figure is asked for rather than waited for |
+| `status` | the provider's status page, polled for `incidents` |
+
+#### Why
+
+The backend filters the catalog by `client_version`, and a version below every
+model's minimum returns an empty list, not an error, which reads like an account
+with no models; startup says so by name. `effective_window_percent` is the figure
+the client is told, so it decides when compaction fires: lower wastes window,
+higher risks a turn refused for length.
+
+### `[upstream.key]`
+
+Where an API key is spent (`proxy-behavior.md` §8.2): `endpoint` and `catalog`. No
+socket: a key account uses HTTP. Sending either credential kind to the other's
+endpoint is refused before anything leaves.
+
+### `[upstream.anthropic]`
+
+The second provider.
+
+| Key | Meaning |
+|---|---|
+| `endpoint` | where a relayed turn goes (`proxy-behavior.md` §9) |
+| `usage` | where that provider states quota for a borrowed grant. Only a grant can ask |
+| `profile` | where it states the plan with its multiplier (`max 20x`); asked beside a quota refresh, at most hourly. A declined answer leaves the plan absent |
+| `status` | the status page, polled for `incidents` |
+
+#### Why
+
+A key has no subscription behind it, and the long-lived setup token wearing the
+same stem is refused there for want of a scope. The relay speaks the surface this
+proxy already exposes, so there is no catalog to translate.
+
+### Where it lives
+
+| File | What it holds |
+|---|---|
+| `crates/proxy/src/config.rs` | Every key, defaults, validation, directory resolution |
+| `crates/proxy/src/config/edit.rs` | Persisted text edits |
+| `crates/proxy/src/commands/daemon.rs` | Startup checks: listen, tiers, marks |
+| `crates/proxy/src/incidents.rs` | Default status-page URLs |
 
 ## 5. Limitations
 
-Stated because each is permanent under the current design, not because they are
-pending work.
+Each is permanent under the current design.
 
 - **The context percentage Claude Code displays is wrong.** It is computed
-  client-side against an assumed window and cannot be corrected from the proxy.
-  Token counts are exact; the percentage is not.
+  client-side against an assumed window. Token counts are exact; the percentage is
+  not.
 - **Sessions compact earlier than necessary**, for the same reason. The assumed
   window sits below the real one, which is the safe direction.
-- **`cache_creation_input_tokens` is always zero.** No upstream write event
-  exists to report.
-- **`count_tokens` is an estimate.** It is answered by the conversation's own
-  estimator, so it is uncalibrated before that conversation's first completed
-  request and improves after it. It is never exact: there is no upstream
-  token-counting endpoint to be exact against.
+- **`cache_creation_input_tokens` is always zero.** No upstream write event exists.
+- **`count_tokens` is an estimate**, from the conversation's own estimator:
+  uncalibrated before its first completed request, never exact, since there is no
+  upstream counting endpoint.
 - **`cache_control` and `thinking` blocks are dropped** on the request path.
   Reasoning is reconstructed on responses from summary events.
-- **Image URLs are not prefetched** and resolve only if the backend can reach
-  them.
-- **The catalog fallback list is fixed** and needs updating if models are renamed
-  or retired while the live fetch is unavailable. Its entries carry no context
-  window, so the window guard does not fire for a model the fallback named.
-- **The credential directory has to be on a filesystem that locks.** Every write
-  of the credential file takes a lock beside it, and a filesystem that cannot
-  take one — a network mount is the case that exists — fails the write rather
-  than proceeding without it. The error names `PROXENOS_HOME`, which
-  points the whole directory somewhere else.
-- **A key account's catalog carries no windows or efforts.** The list is real
-  and is the account's own, and the endpoint states neither for any entry. The
-  window guard therefore never fires for a key account and the model half of the
-  effort cap has nothing to cap against. The ceiling set in configuration still
-  applies.
-
+- **Image URLs are not prefetched** and resolve only if the backend can reach them.
+- **The catalog fallback list is fixed.** Its entries carry no window, so the window
+  guard does not fire for a model it named.
+- **The credential directory must be on a filesystem that locks.** A write that
+  cannot take its lock fails, naming `PROXENOS_HOME`.
+- **A key account's catalog carries no windows or efforts.** The window guard never
+  fires for it and the model half of the effort cap has nothing to cap against. The
+  configured ceiling still applies.
 - **Claude Code never reaches the `input_file` path.** It rasterises PDFs into
-  image blocks, so documents from that client reach the model as images. The
-  `document` translation is for a client that sends one, and the backend does
-  accept it — measured by posting a `document` block directly, which returned a
-  code that existed only inside the PDF.
-
-- **Compression saves bytes and no tokens.** Subscription HTTP bodies are
-  zstd-compressed and WebSocket frames use `permessage-deflate`, negotiated
-  during the upgrade. Roughly two thirds off in both directions, and the inbound
-  half is the larger one — the backend echoes the whole request back three times
-  per turn. Quota is unaffected. A key request is neither: it is never
-  compressed, and there is no socket for it to compress.
-
-- **A web search that produced no citations reports the pages the model opened**,
-  which carry a URL but no title. That is worse than a real citation and better
-  than an empty result, which the client reads as "nothing found".
-
-- **What a matrix proves depends on what answered it.** A replayed run
-  establishes that the proxy does its half; only `--live` establishes that the
-  backend does its own. `doctor` states which on the face of its output, and
-  `roadmap.md` §L records what has been settled against a live backend and what
-  has not.
+  image blocks. The `document` translation is for a client that sends one, and the
+  backend accepts it — measured by posting a `document` block that returned a code
+  existing only inside the PDF.
+- **Compression saves bytes and no tokens.** Roughly two thirds off in both
+  directions; the inbound half is larger because the backend echoes the request
+  three times per turn. A key request is never compressed.
+- **A web search with no citations reports the pages the model opened**, with a URL
+  and no title. Better than an empty result, which the client reads as "nothing
+  found".
+- **What a matrix proves depends on what answered it.** Replayed establishes the
+  proxy's half; only `--live` establishes the backend's. `roadmap.md` §L records
+  what is settled live.
 
 ---
 
 ## 6. Stability
 
 The CLI verb set, the control-socket method names, the configuration keys, and
-the error-type vocabulary are semver-bound. A shipped name is never repurposed or
-removed within a major version; only new ones are added.
+the error-type vocabulary are semver-bound. A shipped
+name is never repurposed or removed within a major version; only new ones are
+added.
 
-**Names bound by this release.** Configuration: `listen.address`,
-`listen.token`, `listen.token_file`. Environment: `PROXENOS_DAEMON`,
-`PROXENOS_TOKEN`, `PROXENOS_TOKEN_FILE`. Ingress: the auth-token tag
-`proxenos-token:` and the endpoint `POST /control`. The `status` field
-`daemon_at` is a field, so §6's rule about added fields governs it: a caller
-that needs it checks for it, and its absence means a local daemon.
+### The bound names
 
-**No method name was added, renamed or removed.** The HTTP transport carries
-the same eighteen; that is the point of it. `inspect` (§2.8) is a CLI verb
-added and not a method: it reads a process rather than asking a daemon, so
-there is nothing on the socket for it to have needed.
+- **Methods** (nineteen, `METHODS` in `control/protocol.rs`): `status`,
+  `shutdown`, `accounts`, `accounts.select`, `accounts.rename`, `accounts.remove`,
+  `models`, `tiers`, `tiers.set`, `effort.set`, `cross_account_tiers.set`,
+  `usage`, `incidents`, `usage.refresh`, `env`, `doctor`, `record.start`,
+  `record.stop`, `config.reload`. `doctor` is bound though unimplemented.
+- **Verbs**: `start`, `run`, `accounts` (`list`, `login`, `add-key`, `use`,
+  `rename`, `remove`), `status`, `models`, `incidents`, `env`, `settings`,
+  `reload`, `stop`, `tiers` (`set`, `cross-account`), `effort` (`set`), `exec`,
+  `doctor`, `usage`, `statusline`, `record` (`ingress`, `upstream`, `surface`),
+  `supervisor` (`install`, `uninstall`, `status`), `inspect`.
+- **Environment**: `PROXENOS_DAEMON`, `PROXENOS_TOKEN`, `PROXENOS_TOKEN_FILE`.
+- **Ingress**: the auth-token tag `proxenos-token:` and `POST /control`.
+- **Socket names** in §3 are frozen.
 
-**Before 1.0 that rule has one deliberate exception, and it closes on its own.**
-Semantic versioning does not bind a zero major, and nothing outside this
-project's own CLI has ever spoken the socket — the CLI and the daemon are one
-binary, so a rename lands on both at once. A name that turns out wrong is
-therefore renamed on a minor bump, said in the changelog, and gone rather than
-left beside its replacement. `accounts.forget` arrived that way and left the
-same way, renamed to `accounts.remove`; so did the project's own name: everything `codex-cc-proxy` and `CODEX_CC_PROXY_*` named is
-`proxenos` and `PROXENOS_*` from v0.5.0, one rename with no aliases kept. The exception
-ends when a second caller exists — the graphical front-end is the one planned,
-and any other program that speaks this socket ends it just as well — and it ends
-whether or not 1.0 has been reached: the moment something else has to be
-upgraded in step, only additions are safe. It is a statement about callers, not
-about a version number.
+#### Why
 
-**The bound method set is the whole of §3's table, named here so the freeze is
-a contract rather than folklore.** From the moment a second caller exists — the
-exception above is a statement about callers, not about a version number —
-these eighteen names are fixed: `status`, `shutdown`,
-`accounts`, `accounts.select`, `accounts.rename`,
-`accounts.remove`, `models`, `tiers`, `tiers.set`, `effort.set`,
-`cross_account_tiers.set`, `usage`, `usage.refresh`, `env`, `doctor`,
-`record.start`, `record.stop`, `config.reload`. `doctor` is bound although it
-is not implemented:
-a reserved name that appears later must mean what its name said all along. The
-same list is a constant in the daemon, so removing or renaming one is a visible
-change to the code and not only to this document.
+A reserved name that appears later must mean what its name said all along. The
+method list is a constant in the daemon, so removing one is a visible code change.
 
-**An unknown method reaches the caller as an unknown method.** The error code
-survives the round trip rather than being flattened into one kind, because
-"this daemon does not have that method" and "that method refused what you asked"
-are different situations and only the first is answered by replacing the daemon.
+### Before 1.0, a wrong name may be renamed
 
-**A field added to a response is a capability, and a caller that needs it checks
-for it.** Adding one is not a breaking change: an older caller ignores what it
-does not know, and must not be "fixed" into a strict check, because that would
-make every upgrade have to be simultaneous. The obligation runs the other way. A
-newer caller that requires a field has to establish it is there rather than infer
-it from a version string — comparing versions forces a policy about which
-differences matter and gets it wrong for a patched build or a forgotten bump.
-Where a field's absence would otherwise be ambiguous, it is emitted empty rather
-than omitted, so that absence keeps meaning "this daemon predates it" and nothing
-else.
+A name that turns out wrong is renamed on a minor bump, said in the changelog, and
+removed rather than kept beside its replacement. The exception ends when a second
+caller of the socket exists, whether or not 1.0 has been reached.
 
-The ingress shape is not ours — it tracks the Anthropic Messages API, and
-changes there are not breaking changes in this project's versioning.
+#### Why
+
+Semantic versioning does not bind a zero major, and so far only this project's own
+CLI speaks the socket — one binary, so a rename lands on both halves at once. Once
+anything else has to be upgraded in step, only additions are safe.
+
+#### Tried and dropped
+
+`accounts.forget`, renamed to `accounts.remove`. The project's former name
+`codex-cc-proxy` and `CODEX_CC_PROXY_*`, renamed to `proxenos` and `PROXENOS_*`
+with no aliases; a store or variable under the old name refuses loudly.
+
+### An added field is a capability
+
+Adding a response field is not a breaking change. An older caller ignores what it
+does not know and must not be made strict. A newer caller that requires a field
+checks for it rather than inferring it from a version string. Where absence would
+be ambiguous, the field is emitted empty, so absence means only "this daemon
+predates it". `status.daemon_at` follows this rule: absent means a local daemon.
+
+#### Why
+
+A strict older caller makes every upgrade simultaneous. Comparing versions forces a
+policy about which differences matter and gets it wrong for a patched build or a
+forgotten bump.
+
+### The ingress shape is not ours
+
+It tracks the Anthropic Messages API, and changes there are not breaking changes in
+this project's versioning.
+
+### Where it lives
+
+| File | What it holds |
+|---|---|
+| `crates/proxy/src/control/protocol.rs` | `METHODS` |
+| `crates/proxy/src/cli.rs` | The verb set |
+| `crates/proxy/src/config.rs` | The key set, `renamed_home_refusal` |
 
 ---
 
@@ -2270,38 +2390,38 @@ changes there are not breaking changes in this project's versioning.
 
 The upstream endpoint is not a published or supported API. It may change or be
 withdrawn without notice, and using a subscription this way is a decision each
-operator makes for themselves. There is no version of this project that avoids
-that, so it is stated rather than omitted.
+operator makes for themselves.
 
 This project is not affiliated with, endorsed by, or sponsored by Anthropic or
 OpenAI. All trademarks belong to their owners.
 
-No telemetry is collected or transmitted. Credentials never appear in process
-arguments or logs. Configuration and credential files are created with
-restrictive permissions.
+### No telemetry
 
-**Loopback without a token, the stated address with one — two doors, one
-daemon.** `127.0.0.1` is always bound and always authenticates nothing, which
-is safe because every caller reaching it is already a local process running as
-the user. A reachable `listen.address` opens a second listener beside it whose
-every request must carry the token, and a non-loopback address with no token is
-refused at startup (§1, §4). Nothing else changes with the token: it decides
-who may ask, not what is served.
+Nothing is collected or transmitted. Credentials never appear in process arguments
+or logs. Configuration and credential files are created with restrictive
+permissions.
 
-**The token is a property of the door, not of the peer.** Nothing reads a
-request's source address to decide whether it needs one. That is deliberate on
-two counts: a peer-keyed guard cannot be exercised from a single machine, so it
-would be the untested half of the posture; and behind a reverse proxy or an
-overlay-network daemon every request arrives from loopback, where a peer-keyed
-exemption would exempt everyone.
+### Two doors, one daemon
 
-**What the token is and is not.** It gates this daemon. It is not a credential
-for any upstream, it authorizes no spending of its own, and a holder of it can
-do exactly what a local caller could — serve turns on the accounts this daemon
-holds, and move its settings. Anyone who can reach the port and holds it is,
-for every purpose here, the operator. Rotate it by editing `listen.token_file`
-and restarting.
+`127.0.0.1` is always bound and authenticates nothing; every caller reaching it is
+already a local process running as the user. A reachable `listen.address` opens a
+second listener whose every request must carry the token, and a non-loopback
+address with no token is refused at startup (§1, §4). The token decides who may
+ask, not what is served.
 
-**This project terminates no TLS.** A daemon reachable beyond loopback should
-sit behind a private overlay network or a reverse proxy that does. Over plain
-`http://` the token crosses the wire in a header, and so does every turn.
+### The token belongs to the door, not the peer
+
+Nothing reads a request's source address. §1 gives the reasons.
+
+### What the token is and is not
+
+It gates this daemon. It is not a credential for any upstream and authorizes no
+spending of its own. A holder can do exactly what a local caller can — serve turns
+on the accounts this daemon holds, and move its settings — and is, for every
+purpose here, the operator. Rotate it by editing `listen.token_file` and restarting.
+
+### No TLS
+
+A daemon reachable beyond loopback should sit behind a private overlay network or a
+reverse proxy that terminates TLS. Over plain `http://` the token crosses the wire
+in a header, and so does every turn.

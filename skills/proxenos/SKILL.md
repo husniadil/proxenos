@@ -6,7 +6,8 @@ description: Run Claude Code on an OpenAI model through the proxenos daemon, mai
 # proxenos
 
 `proxenos` is a local daemon that presents an Anthropic Messages API and serves it
-from an OpenAI Responses backend over a ChatGPT subscription. Claude Code runs
+from the account serving the turn: a Codex subscription or OpenAI key through a
+translation layer, or an Anthropic account relayed untranslated. Claude Code runs
 unchanged against it: same tools, same skills, same `htask` and `herdr` access. What
 changes is the model answering. The main use is a **second eye**: a reviewer on a
 different model family than the one that wrote the code.
@@ -29,14 +30,17 @@ proxenos exec --account work-codex claude --model gpt-5.6-sol --effort high
   upgraded to its `[1m]` long-context variant where that account offers one.
 - Everything after the program name is handed to it unchanged. `--model` accepts any
   id the backend knows (`proxenos models` lists them) or a tier name (`fable`,
-  `opus`, `sonnet`, `haiku`) which the daemon maps via `[tiers]` in its config.
+  `opus`, `sonnet`, `haiku`), which resolves through the tier ids `exec` hands the
+  client from the daemon's `[tiers]` mapping (`proxenos tiers` shows it).
 - `--effort` is honoured per request, capped by the `effort` ceiling in
   `~/.config/proxenos/config.toml`. If the ceiling is `low`, asking for `high` gets
   `low`; check `proxenos effort` first. `proxenos effort set high` raises it on the
-  running daemon until it stops (`--persist` writes the file), and
-  `proxenos tiers set opus gpt-5.6-sol` repoints one tier the same way, and
-  `--as ACCOUNT` pins a tier's turns to another stored account's quota (consent
-  is asked once: `--allow-cross-account`, written to config.toml).
+  running daemon until it stops (`--persist` writes the file; `none` removes the
+  ceiling). `proxenos tiers set opus gpt-5.6-sol` repoints one tier the same way,
+  and `--as ACCOUNT` pins a tier's turns to another stored account's quota. A pin
+  needs consent once: `--allow-cross-account` on that `tiers set`, or
+  `proxenos tiers cross-account on`, both written to config.toml. These change the
+  daemon for every session, so ask the operator first.
 
 Non-interactive works the same way: `proxenos exec --account work-codex claude -p
 "..." --model gpt-5.6-sol`.
@@ -84,10 +88,13 @@ and nothing that biases it toward the author's conclusion:
 
 ```sh
 proxenos status            # base url, serving account, tier -> model, daemon, client policy
-proxenos models            # ids the backend knows, with context window and tier
-proxenos accounts list     # stored accounts and which one serves by default
+proxenos models            # ids the backend knows, with context window and tier;
+                           # --account NAME for another account's menu
+proxenos tiers             # tier -> model mapping in force; --account NAME for one account's
+proxenos accounts          # stored accounts and which one serves turns (same as `accounts list`)
 proxenos usage             # quota as last reported; --refresh asks the backend (costs a request)
 proxenos doctor            # capability probes; --live runs them against the real backend
+proxenos incidents         # open incidents on each provider's status page
 proxenos env               # the exports, for a shell you want to configure by hand
 proxenos inspect <pid>     # whether that process was started through proxenos, and as which
                            # account; --json for {pid,through,account,daemon}. Needs no daemon
@@ -118,9 +125,10 @@ proxenos exec claude --model gpt-5.6-sol --effort high
 
 What is refused in client mode, because it acts on the daemon's own machine:
 `run`, `start`, `accounts login`, `accounts add-key`, `supervisor`. Each says so
-and names the host to run it on. `stop` works and stops the daemon **for
-everyone on that machine** — ask the operator first. `proxenos settings` is
-refused too: the document would carry the token; use `proxenos exec`.
+and says to run it on the daemon's host. `stop` works and stops the daemon
+**for everyone on that machine**, so ask the operator first. `proxenos settings`
+is refused whenever a token is set, because the document would carry it; use
+`proxenos exec`.
 
 On the daemon's own machine nothing changes: that daemon always keeps a
 loopback door open that asks for no token, so a plain local `proxenos exec` and
@@ -137,6 +145,8 @@ does not print it.
   `effort` ceiling in the config, so asking for less than the ceiling gets less.
 - The system prompt Claude Code sends names Anthropic's model; `[instructions]
   identity = true` in the config prepends one line naming the actual model.
-- The daemon must be running (`proxenos status` answers). It is supervised; if it
-  is down, `proxenos start` brings it back. `proxenos stop` stops it for every pane
-  of this user, so ask the operator before stopping it.
+- The daemon must be running (`proxenos status` answers). If it is down,
+  `proxenos start` brings it up; `proxenos supervisor status` says whether a
+  supervisor keeps it alive. `proxenos stop` stops it for every pane of this user
+  (under a supervisor it is restarted from the build on disk), so ask the operator
+  before stopping it.

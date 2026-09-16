@@ -315,7 +315,7 @@ fn the_binary_lists_and_switches_accounts() {
 }
 
 /// An account states its provider, and everything that reports the account
-/// says so — the roadmap's first rule for a second provider. The default is
+/// says so — the first rule for a second provider (`proxy-behavior.md` §9.1). The default is
 /// the provider this project started with, so every credential file written
 /// before the field existed reads unchanged, and the listing names it on every
 /// row: with two providers stored, a row that leaves it out is a row the

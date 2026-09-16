@@ -1,985 +1,292 @@
 # Roadmap
 
-Ordered phases to v0.1.0. Each is a green committed checkpoint: `just check`
-passes at the end of every one, and no phase starts before the previous is done.
-
-The order is not arbitrary. Translation and the fixture corpus come before the
-transports that depend on them, because incremental upload is the one subsystem
-whose bugs corrupt conversations instead of failing loudly, and it has to land
-against tests that can catch that.
+What is shipped, what is intended next, and what only a live backend could
+settle. Release history is in [`CHANGELOG.md`](../CHANGELOG.md); this file does
+not repeat it.
 
 ## Where this stands
 
-Phases 1 through 11 are complete: `just check` is green, every capability probe
-passes against the replay corpus, a long session leaves identical conversation
-state over both transports, and the estimator comparison is measured and
-decided.
+The current release is **v0.29.0**. Shipped, at the level of capability:
 
-§11's acceptance criterion is now met on all three platforms: CI has run, and
-`check` plus the Linux, macOS, and Windows builds are green. The first run failed
-on its first command — the pinned toolchain carries no `rustfmt` or `clippy`,
-which had been latent locally too — and the three build jobs passed on that same
-first attempt.
-
-Windows mattered most: the WebSocket transport was swapped after that platform
-was last considered, and nothing had proved it since.
-
-What is intended beyond that release is in **After v0.1.0**, stated as
-intentions rather than commitments.
-
-§L has since been worked through against a live backend, and every row that
-could be settled is answered. That was not free of consequence: it falsified four things the
-offline work had believed, and each correction is in the commit that proved it.
-The section is kept in full rather than deleted, because what a claim rests on
-is part of the claim.
+- **Two providers behind one Messages surface.** Codex through the translate
+  path (Messages ⇄ Responses), Anthropic through the relay path, which forwards
+  Messages untranslated. Which one a turn takes follows the provider of the
+  account serving it (`proxy-behavior.md` §9).
+- **Both transports on the translate path.** WebSocket with incremental delta
+  upload and `permessage-deflate`, HTTP with SSE and a zstd body as an ordinary
+  operating mode rather than an error path.
+- **Harness fidelity.** Image and document attachments, native web search
+  reconstructed into real result blocks, `WebFetch`, tool search, tool calling,
+  and a context meter fed by a calibrated estimate that the upstream count
+  replaces.
+- **Accounts.** Several stored accounts, borrowed subscription grants declared
+  under `[profiles]`, stored keys, per-account tier mappings and effort,
+  opt-in cross-account tiers, and a per-session account through
+  `exec --account`.
+- **An operator surface that states only what it observed.** `status`,
+  `accounts`, `models`, `usage` with per-account quota and persisted spend,
+  provider incidents, `reload` without a restart, and a control socket whose
+  vocabulary `status` publishes.
+- **One daemon, two doors.** Loopback without a token, and an optional stated
+  address that requires one, so other machines can be served by this daemon.
+- **Operations.** `start`/`stop`, a supervisor on launchd and systemd user
+  services, `doctor` against the replay corpus or live, `record` for ingress,
+  upstream, and surface captures, and release binaries with a verified install
+  script.
 
 ## Everything here is verifiable offline
 
-**No phase's completion criterion requires a live backend, credentials, or
-quota.** The suite runs entirely against a local replay server. This is a
-constraint on the design, not a workaround: a project whose correctness can only
-be demonstrated by spending money is a project whose correctness stops being
-demonstrable at an arbitrary moment.
-
-What genuinely cannot be settled offline is collected in §L, stated as open
-rather than assumed. Nothing in §L blocks v0.1.0, and nothing in phases 1–11
-depends on it.
-
----
-
-## 1. Workspace and gate
-
-The skeleton and the standard everything else is held to.
-
-Two crates, pinned toolchain, lint configuration, task runner, CI running the
-same gate as local. Each crate opts into the workspace lints explicitly.
-
-**Done when** `just check` passes on an empty implementation, and CI runs it on
-push and pull request.
-
----
-
-## 2. Request translation
-
-`proxy-behavior.md` §2, as pure functions in `proxenos-core`.
-
-Instructions folding, content blocks, attachments nested in tool results, tool
-flattening, `tool_choice`, deferred tool loading, web-search declaration, request
-field hardening, upstream headers.
-
-**Done when** every §2 rule has a test written before its implementation, and the
-attachment path is covered for images and documents in both positions — directly
-in a user message and nested inside a `tool_result`.
-
----
-
-## 3. Response translation
-
-`proxy-behavior.md` §5, as a state machine in `proxenos-core`.
-
-SSE framing including multi-line `data:` reassembly, event mapping, deferred
-`tool_use` headers, stop-reason derivation, reasoning blocks, search-result
-reconstruction, error and capacity frames.
-
-**Done when** the emitted frame sequence is snapshot-tested for text, reasoning,
-tool-call, search, incomplete, and error streams; a tool call whose name arrives
-after its block would have opened still produces a valid header; and an event
-split across several `data:` lines parses as one payload.
-
----
-
-## 4. Fixture corpus
-
-The evidence base the rest is tested against. Three of its four sources cost
-nothing; the fourth is a short fixed list of exchanges, because the shape of a
-real answer cannot be derived from anything cheaper.
-
-Four sources, in descending order of authority:
-
-1. **The upstream's own protocol definitions.** Its typed event set is the
-   authoritative statement of what the backend can emit, and its test harness
-   shows those events assembled into realistic streams. A fixture derived from
-   the types is not a guess — it is the contract, restated.
-2. **Ingress captures.** `record ingress` captures what Claude Code actually
-   sends. This needs a working client and no credentials, because the exchange is
-   recorded before translation. Everything on the request side — tool
-   declarations, `defer_loading` stubs, `tool_reference` results, attachment
-   blocks, `output_config`, the search sub-request — is observable this way for
-   free.
-3. **Surface captures.** `record surface` captures the second provider's own
-   Messages endpoint — the surface this proxy claims to expose — as a short
-   fixed list of exchanges. It is the only source that can say what a real
-   answer's field set is, and it is the only one that spends quota, which is
-   why the list is fixed and short rather than driven by a session. These live
-   under `fixtures/surface/` and are not replayed through translation: they are
-   the shape the emitted surface is measured against.
-4. **Hand-authored edge cases**, marked as such, for shapes neither source
-   covers.
-
-**Done when** the corpus replays as tests without hand-editing, covers at least
-one exchange per capability in `proxy-behavior.md` §1, every fixture records
-which of the four sources it came from, and a capture parses as a fixture with
-no hand-editing at all.
-
-`record ingress` needs the ingress server, so it arrives in phase 5 and its
-round trip is asserted there. Pointing a real client at the daemon is the one
-step nobody but the operator can take, and it needs no credentials.
-
-A fixture's provenance is part of the fixture. A derived one and a captured one
-carry different weight, and a reader must not have to guess which is which.
-
-A surface capture is silent about a shape it does not contain, and a skip reads
-exactly like a pass. So the shapes no captured exchange reaches are named in the
-conformance test rather than left to be inferred: extended thinking and the
-server tools each need a turn of their own, and neither has a symptom that
-justifies the quota today.
-
----
-
-## 5. Ingress and HTTP transport
-
-The first end-to-end path, against a replay server.
-
-`/v1/messages` streaming both ways, `/v1/messages/count_tokens`, `/v1/models`,
-the error taxonomy, cancellation propagation, empty-stream recording, port
-conflict handling.
-
-**Done when** a streaming request returns a valid Anthropic SSE sequence
-including a tool-call round trip, cancelling the client stream aborts the
-upstream request, and every row of the `api.md` §1.1 error table is produced by a
-test.
-
----
-
-## 6. Credentials, catalog, tier mapping
-
-OAuth with PKCE, the `CredentialStore` trait with its file implementation,
-scope-free single-flight refresh, dead-grant marking, catalog fetch with TTL
-cache and fallback, four-tier validation, the `[1m]` rejection.
-
-**Since withdrawn.** The flow, the refresher and everything built on them were
-removed once a grant could be read from the profile of the program that owns it
-(`proxy-behavior.md` §8.4). The trait, the catalog work and the tier rules
-stand; what this phase built around obtaining a credential does not. The record
-stays because the phase happened, and because §8.4 is a decision about
-ownership that only makes sense against what it replaced.
-
-**Done when** the authorization URL is built to spec, a refresh request provably
-omits `scope`, concurrent refreshes collapse to one upstream call, an
-invalid-grant response marks the connection dead without retrying, an incomplete
-tier mapping refuses startup, an unreachable catalog skips validation instead of
-failing it, and a model with no known window is treated as unknown rather than
-assumed.
-
-Every one of these is a test against a mock authorization server. The live login
-is §L.
-
----
-
-## 7. Control socket and CLI
-
-`status`, `accounts`, `models`, `env`, `accounts.remove`, `record` — through
-the socket, not through private paths.
-
-**Done when** every verb works against a running daemon over the socket, `env`
-emits all four tier variables plus the context floor, and the CLI holds no state
-of its own.
-
----
-
-## 8. Token accounting
-
-Upstream figures mapped to Anthropic semantics, the estimator trait, calibration,
-and both estimator implementations.
-
-**Done when** cached tokens are subtracted exactly once, a `cached_tokens` value
-exceeding `input_tokens` clamps to zero, `message_start` carries a non-zero
-estimate that `message_delta` replaces rather than adds to, calibration measurably
-improves the estimate across a replayed multi-turn session, and both estimators
-are measured against the corpus with the result recorded in
-`proxy-behavior.md` §6.3.
-
-The estimator comparison is a real measurement with a real outcome. Do not ship
-both and leave the choice open.
-
----
-
-## 9. Conformance and `doctor`
-
-The probe suite, and whatever the probes reveal is broken.
-
-`Read` with an image, `Read` with a PDF, `WebSearch`, `WebFetch`, tool calling,
-parallel tool calls, tool search, reasoning continuity, `count_tokens`, cache
-accounting.
-
-**Done when** every probe uses content the model could not infer, every probe
-runs green against the replay corpus, `doctor` prints a capability matrix, each
-probe can be run alone, and a probe reports honestly when it cannot run.
-
-Running the probes against a replay server proves the proxy does its half
-correctly. It does not prove the backend does its half. That is §L, and `doctor`
-must not claim otherwise — a matrix built from replayed fixtures says so on its
-face.
-
----
-
-## 10. WebSocket, incremental upload, compression
-
-The last and riskiest subsystem, landing on a corpus that can catch its failures.
-
-Connection reuse, prewarm, fallback latching, strict-extension delta computation,
-reasoning-item retention, zstd.
-
-**Done when** the §10.4 invariants in `proxy-behavior.md` all hold as tests, a
-policy close mid-turn falls back to HTTP without losing the turn, retained
-reasoning items are re-injected in position, and a long replayed session produces
-byte-identical conversation state over both transports.
-
-Identical state across transports is the acceptance criterion that matters. If
-WebSocket and HTTP disagree on a single item, the delta logic is wrong.
-
----
-
-## 11. Release
-
-Binaries for macOS, Linux, and Windows; `cargo install`; a Homebrew tap; a
-container image; an install script. `README`, `CONTRIBUTING`, `SECURITY`,
-`CODE_OF_CONDUCT`, `CHANGELOG`.
-
-**Done when** a fresh checkout builds on all three platforms in CI, the README's
-setup instructions are followed end to end against the replay server, and the
-documented limitations match what the code actually does.
-
-**Shipped:** five binaries per tag with a checksum file covering all of them,
-`cargo install --git`, and an install script that verifies the download against
-that checksum file with no way to skip the check. **Not shipped:** the Homebrew
-tap and the container image, which are named here rather than quietly dropped —
-the README says the same, because a missing package is better stated than
-discovered.
-
-Following the README's own instructions is what found the last defect in this
-phase: an installed binary's `doctor` skipped all eight probes, because the
-corpus was read from a `fixtures/` directory that only a checkout has. The
-corpus now travels inside the binary. The lesson generalizes past this bug — every
-acceptance check here had been run from a checkout, which is the one environment
-no user of a release is in.
-
----
-
-## After v0.1.0
-
-Intended, not committed. Each entry says what it is for and what would make it
-done, in the same terms as the phases above — an entry nobody can tell is
-finished is an entry that never finishes. Order within a version is not fixed;
-between versions it is.
-
-### v0.2.0 — shipped
-
-**Editing configuration without hand-writing TOML.** `tiers.set` was reserved
-for this and answered that it was unimplemented. The hard part was never writing
-the file: configuration is read once at startup, so a written change and a
-running daemon disagree until the next `run`.
-
-**Done.** `tiers.set` and `effort.set` move what routes turns, not only what
-`status` reports, and each answers whether it was persisted. Validation runs
-before the write and the write before the apply, so a failed write cannot leave
-a daemon running a policy nobody chose.
-
-Two things arrived with it that this section had not anticipated, both because a
-front-end that is not a terminal needs them. **`login` over the control socket**
-returned the authorization URL and completed in the background, sharing one
-callback port rather than handing out a URL whose callback would be refused —
-withdrawn with the rest of the flow (§6 above). And
-**`usage.refresh`** asks the backend for a quota figure, covering the one case
-the volunteered snapshot cannot — a front-end with a figure to show on a daemon
-that has served no turn yet.
-
-### v0.3.0 — shipped
-
-**A launcher.** Starting the client currently means evaluating the output of
-`env` in a shell first, which is one manual step that a reader can get wrong and
-a script has to reimplement. A verb that sets the environment and execs a
-command removes it, forwarding every argument it does not own so the client's
-own flags keep working unchanged.
-
-The verb should name what it does rather than what it launches — the naming rule
-holds here, and a launcher that only ever starts one program is a launcher that
-cannot start the next one. `env` stays: a launcher is a convenience over it, not
-a replacement for it.
-
-**Done when** a client started this way is indistinguishable from one started
-after `eval "$(proxenos env)"`, unknown arguments reach the child
-untouched, the child's exit status is the launcher's, and a client given its own
-`--settings` fails visibly rather than losing one of the two.
-
-**Done**, as `exec`. It is more than a convenience over `env`, which is a change
-from what this entry assumed: client policy has no environment variable
-(`proxy-behavior.md` §7.3), so the shell path cannot carry it and this one can.
-Each of the three paths now has exactly one limit. Writing the settings document
-into a file is complete but touches a file the proxy does not own. `env` leaves
-no trace but carries routing only. `exec` is complete and leaves no trace, and
-is per invocation.
-
-The last clause of the done-when exists because of a measurement taken while
-building it: two `--settings` on one argument list and the client keeps the last
-and drops the first, at exit 0 with an empty stderr. Either placement loses a
-permission rule silently, so the launcher refuses instead.
-
-**More than one upstream account.** One credential file means one account, and
-an account that has run out of quota stops all work rather than some of it.
-Credentials are already behind a trait and already carry the account id they
-belong to, so what is missing is naming, selection, and a store that holds
-several.
-
-Each account holds its own refresh-token family, so a second account is not in
-danger from the first refreshing. That is a property of separate grants, and
-this entry originally rested it on a measurement instead — that rotation
-supersedes without revoking. §L has since downgraded that measurement to a
-probable grace window, and the argument does not need it: nothing about one
-account's rotation reaches another account's family. Two holders of *one*
-account are still in danger, which is the thing to keep out of the design.
-
-**Done when** logging in twice leaves two usable accounts rather than one, the
-account in use is stated by `status` and selectable without editing a file, and
-a refresh on one account provably leaves the other's grant intact.
-
-**Done.** A store of several grants with one selected, `login --as` and
-`accounts --use` over `accounts` and `accounts.select`, and `status` naming the
-account serving turns beside the rest. Two things turned out to belong to the
-grant rather than to the daemon and had to travel with a switch: a refusal,
-which is about one refresh token, and the quota snapshot, which belongs to the
-account that earned it.
-
-The isolation proof is offline, as everything here is: two accounts in one
-store against the replay server, refreshing one and asserting the other's
-stored grant is unchanged and still spends its own refresh token. What that
-does not settle is whether the *backend* treats two grants from one client as
-independent, which is a §L question rather than a proof this suite can hold.
-
-**Credentials that are not a subscription.** The proxy authenticates one way
-today: an OAuth grant against a consumer subscription. An API key is a different
-credential against a different endpoint with different billing, and supporting
-it makes the proxy useful to someone who has no subscription at all.
-
-This is the first real test of the adapter seam, which has been present and
-unused since v0.1. If the seam is wrong, this is where it shows.
-
-**Done when** a key-authenticated request completes end to end, the two
-credential kinds are selectable per tier or per account rather than globally,
-and no code path can send one kind of credential to the endpoint that expects
-the other.
-
-**Done**, per account. The store holds accounts already, so the kind rides on
-one: `login --key` (later renamed to `accounts add-key`) stores a secret read
-from stdin under a name, and `accounts --use` moves between kinds exactly as it
-moves between accounts. Per
-tier would have needed a second selection mechanism for no capability this one
-does not have.
-
-The seam turned out to be in the wrong place rather than wrong. `Transport` was
-a trait; what four paths each assembled by hand was the *authorization*. One
-resolver now answers that, and the header set is where the two kinds actually
-differ — a grant identifies a subscription client and the account it spends, a
-key identifies nothing but itself. Two things fell out of the endpoint pairing
-rather than being decided: a key account has no socket, because that protocol
-is the subscription backend's, and no quota, because that figure is a
-subscription entitlement.
-
-**End to end means against the replay server**, which is what this suite can
-hold. A live key endpoint has answered three times and settled less than that:
-it took the key at the turn endpoint, refused a compressed body there, and
-refused the same key at the model list. Whether a turn completes against it is
-not recorded anywhere here — see §L.
-
-### v0.4.0 — shipped
-
-**A tier mapping that belongs to an account.** One mapping was only ever right
-for the models every stored account has, and that intersection shrinks with each
-account added: two subscriptions on different plans are offered different
-models, and a key account beside a subscription need not overlap at all.
-
-**Done.** `[accounts.<name>.tiers]` and an `effort` beside it, resolved against
-the shared tables for whatever an account does not state. Three things had to
-travel with it, each of them a way for the mapping to be quietly wrong: a switch
-re-resolves it and is refused by one the target account's catalog cannot serve, a
-rename moves the section, and a persisted change is written where the value is
-read from rather than into a table something else shadows.
-
-`disconnect` became `accounts.forget` in the same release, which is why this is
-a minor bump rather than a patch. It is the last rename this exception permits
-if a second caller arrives first — see `api.md` §6.
-
-### v0.5.0 — shipped
-
-**The name stops being half-true.** The next release makes this daemon serve a
-second provider, and the old name — `codex-cc-proxy` — named the first one. The
-name is welded into the repo, the crates, the binary, and the environment
-prefix, and the cost of changing all four while nobody else depends on them is
-one commit and one re-login. After that, the cost is permanent. The name chosen
-is **proxenos** — the ancient Greek office the word "proxy" descends from: a
-citizen who represented a foreign guest's interests in his own city. It names
-what the daemon does and no provider on either side of it.
-
-**Done when** nothing user-facing carries the old name, and a configuration or
-credential store written under the old home is either migrated or refused with
-a message that says where it moved.
-
-### v0.6.0 — shipped
-
-**A second provider behind the same surface.** The adapter seam has been unused
-since v0.1. Its first real load is the provider whose API this proxy already
-speaks on the front: Messages in, Messages out, so translation on this path is
-nearly nothing and the weight moves to auth and transport. The Codex transports
-— WebSocket, incremental upload — are Codex-specific; this path is plain
-HTTP+SSE, which amends the claim that transports are interchangeable below
-`session`: the *choice* of transport belongs to the adapter.
-
-The rules this path is built on, each decided before the code:
-
-- **The body is relayed verbatim.** Stated as a rule rather than observed as a
-  property, because a rewrite path exists today: a request whose `model` is a
-  tier name is mapped in the body. On this provider's path, mapping is never
-  done in the body — the client already sends the final id, delivered through
-  the environment at launch — and the injected identity lead is off. Held by a
-  test that captures the ingress body and the egress body and asserts them
-  identical. Headers are the exception, and the exact header delta is a §L
-  question to record, not to assume.
-- **An account states its provider; routing is by model id.** Each stored
-  account carries which endpoint its credential is for (the store already
-  refuses a mismatch), and a request routes by looking its model id up in the
-  mapping. One model id may be claimed by at most one account — the body
-  carries an id, not a tier name, so a duplicate would make routing ambiguous.
-- **Switching providers is a per-launch decision, not a mid-session one.** The
-  client bakes model ids from its environment at startup and sends them for the
-  session's life, so a switch changes what `env` and `exec` hand the *next*
-  session. Running sessions keep resolving by the ids they hold and are never
-  broken by a switch. Nothing rewrites a running session's model to make a
-  switch look immediate; that would be the body rewrite the first rule forbids.
-- **Cross-account tiers exist and are opt-in.** A tier entry may name another
-  account — `haiku = { account = "...", model = "..." }`, with the bare-string
-  form keeping its current meaning — so a session can, for example, spend one
-  subscription's quota on main turns and another's on the client's haiku-tier
-  calls. This routes one client's traffic across accounts, which is a decision
-  the operator must own: it is enabled by a persisted configuration key,
-  written through the control socket so both the CLI and a front-end can set it
-  deliberately, with the shipped example carrying the warning. Absent the key,
-  a cross-account entry refuses the daemon at startup and refuses `tiers.set`
-  at write time, naming the key. Never a silent fallback to the serving
-  account: that spends the wrong account's quota invisibly, which is the exact
-  failure the gate exists to prevent.
-- **Quota becomes per-account.** One snapshot per account rather than one per
-  daemon, because two accounts can serve one session concurrently. The `usage`
-  response stays additive over its current shape. A window a provider does not
-  report is absent, never rendered as zero — the slot stays in the shape so a
-  provider that reports both fills both. Freshness is stated per account: a
-  figure that rode the last turn and a figure fetched on request are both
-  legitimate and differently stale, and `usage.refresh` already exists for the
-  second kind.
-
-Multi-account for the second provider falls out of the store as it stands —
-accounts are already plural and endpoint-typed. Automatic rotation between
-subscriptions when one hits its limit is deliberately **not** built: the
-machinery (switch on request) and the policy (switch on quota) are separable,
-and the policy half is not this proxy's decision to make by default.
-
-**Done when** a session served end to end by the second provider passes the
-capability probes that apply to it, the verbatim-body assertion holds on
-recorded traffic, a cross-account mapping without the consent key refuses
-loudly at both points, and `usage` reports two accounts with their own windows
-and freshness without breaking a caller that reads today's shape.
-
-The first two rules have landed. A key stored with `--provider anthropic`
-routes by model id and is relayed verbatim in both directions, with the header
-delta of §9.2; a model id two accounts claim refuses the turn naming both. The
-transport claim was amended where this proved it: §4 now says the choice of
-transport belongs to the provider rather than to the session, because this path
-is HTTP with SSE and nothing else. `proxy-behavior.md` §9 is the rule set, and
-what was §9 (Testing) is §10.
-
-The cross-account consent key landed ahead of this slice and is not part of it:
-`cross_account_tiers` refuses at both points the rule names — the daemon at
-startup and `tiers.set` at write time — and `cross_account_tiers.set` grants it
-over the socket.
-
-Cross-account tiers are *served* as the account they name: the pinned account's
-credential authenticates the turn, a refresh is written back to the entry it
-was read from, and a pooled socket opened as one account is never reused for
-another (`proxy-behavior.md` §7.1). The per-launch switch surface followed: a
-mapping served entirely by the relay is handed final ids with no window
-override and no long-context flag, a mixed mapping follows the §7.2 rule, and
-neither a pinned nor a relayed tier is measured against the serving account's
-catalog — at startup, `tiers.set`, or `accounts.select`.
-
-Per-account quota has landed: a figure is filed under the account that served
-the turn it rode in on, `usage` reports every account's own figure beside the
-serving one with its freshness stated, and an account with no figure reports
-that rather than a zero — which is every account of this provider until §L's
-quota-endpoint row is answered. `proxy-behavior.md` §8.3.
-
-Ingress capture reaches this path: a relayed turn is captured like a translating
-one, with its request held as the exact bytes that were relayed, and the id it
-was made against joins the served list the quota answer states.
-`proxy-behavior.md` §9.4.
-
-The credential question is settled: `setup-token` mints the subscription
-bearer, `login --key --provider anthropic` stores it, and the relay has spent
-one live — repeated 200 generations, streaming included (§L). What has not
-landed: capability probes against this path, live-gated, since a probe fixture
-that was not recorded from the real endpoint proves nothing (§L).
-
-### v0.7.0 — shipped
-
-**The operator surface catches up with the second provider.** v0.6.0 made a
-second provider serve turns; what it did not do was make the surfaces an
-operator reads tell the truth about one. `status` printed four tier rows for a
-mapping that decided nothing, `accounts` and `usage` described a provider by
-its role rather than its name, `doctor` had never driven the relay branch at
-all, and the credential that path needs could only be stored through a pipe.
-None of that is a translation defect, which is why none of it showed up as a
-failing test: every one of them reads as working output.
-
-Three things this release treats as one problem. **An operator has to be able
-to see what the next turn will do** — hence an inert tier row marked inert, a
-`routing` line naming where ids relay to, and every operator-facing string
-carrying a real provider id rather than "the second provider". **A figure has
-to come from somewhere real or be absent** — hence per-account quota read off
-the `anthropic-ratelimit-unified-*` headers of turns the relay already makes,
-with an account that has relayed nothing saying so instead of reporting zero.
-**A diagnostic has to state its own coverage** — hence a relay probe, an
-`env-contract` probe over the two launch variables that fail silently, a
-rationale printed on failure, and a line naming the paths a green run left
-alone.
-
-Two isolation holes surfaced by live use closed alongside them: the control
-socket follows `PROXENOS_HOME`, so an isolated daemon can no longer reach the
-operator's real one and switch what it serves; and a key re-store that would
-change an account's provider is refused by name instead of silently replacing
-the credential. `login` also stopped taking over what serves turns — storing a
-credential and choosing what spends quota are two decisions, and one login
-making both moved every turn onto a new account with nothing said.
-
-**Done when** every operator-facing surface names the provider it is talking
-about, a relayed account's quota and tier mapping are reported as what they
-actually are rather than as zeros and live rows, `doctor` covers the relay path
-and says what a run did not touch, and an isolated home or a mistaken re-store
-cannot reach past itself.
-
-**Done.** The control socket's method names are frozen from this release on —
-§6 named nineteen at the time; `login` and `login.cancel` went with the flow
-(§6 above), so `docs/api.md` §6 now names seventeen — which is what made
-`tiers.get` → `tiers` the last free rename. What is deliberately not here:
-capability probes driven live against the relay, which need the serving account
-switched for the length of a run and stay in §L.
-
-### v0.8.0 — shipped
-
-**What this proxy emits, measured against a real answer — and a daemon that
-comes back.** Two gaps that had the same shape: something the project believed
-without ever having checked it. The Messages surface is the whole product, and
-until this release nothing here had seen one — every conformance claim was
-derived from documentation and from captures of the client side. And the code
-had reasoned about running under a supervisor since the first release, sizing
-the window `stop` waits through for launchd's ten-second respawn hold, while
-nothing installed one; the first sign of a daemon that had simply gone was a
-launch that failed.
-
-`record surface` calls the real endpoint through the same relay code a §9 turn
-takes and writes each exchange as a fixture, and a conformance suite replays the
-corpus through the shipping translator, comparing shapes rather than content:
-which events exist, which fields each carries, which keys an error envelope has.
-The rule is a subset in one direction — a field a real answer carries and this
-proxy omits is one a client already tolerates; a field this proxy emits that no
-real answer carries is something a client was never built to receive. Shapes no
-capture reaches are named rather than skipped, because a skip reads exactly like
-a pass, and the two block kinds this proxy *reconstructs* — reasoning into
-`thinking`, native search into `server_tool_use` and `web_search_tool_result` —
-were exactly the four it could not reach. They have captures of their own now,
-and both came out subsets.
-
-`supervisor install` writes a per-user LaunchAgent and hands it to launchd.
-macOS was the only platform implemented at the time, and every other refused by
-name, because a unit written but never accepted reports success and supervises
-nothing; Linux has since been implemented as a systemd **user** service on the
-same plan, and the refusal now covers only platforms with neither (`api.md`
-§2.6). The
-socket path was the hazard worth settling first: it is derived from
-`PROXENOS_HOME` and `TMPDIR`, a launchd job does not see the login shell's
-environment, and where the two disagree the daemon serves turns while every CLI
-verb reports connection refused. One function derives it for both ends, the unit
-carries what that derivation used, and `supervisor status` reports a drift
-rather than leaving it to be discovered.
-
-**Done when** every shape the translator emits has a captured answer to be held
-against or is named as unreached, and a daemon that dies comes back without
-anyone noticing it was gone.
-
-**Done.** What is deliberately not here: a systemd unit, which is named in the
-refusal rather than written; and live capability probes against the relay, which
-stay in §L.
-
-### v0.9.0 — shipped
-
-**A matrix that claims only what the run established.** Two defects with one
-shape: `doctor` reporting coverage it had not measured. The relay path had no
-live arm, skipped on a rationale the code beside it disproved — the skip said a
-live run needed the account serving turns switched to the second provider, while
-the probe was already building its own store and its own authorizer and never
-depended on the selection at all. And the line under the matrix named the
-translation path, and the account it spent, whether or not a probe on that path
-had run; narrowing a run with `--probe` made it say so out loud.
-
-The live arm relays a turn to the second provider's real endpoint, authorized as
-an account read from the store by name. Exactly one account on that provider is
-used, several need `--relay-account`, and none skips the row saying what the
-store holds. An authorization by name neither reads nor writes the selection, so
-`accounts` reports the same serving account before and after. Live it
-establishes the answer half only, and the row names the half it cannot:
-forwarding is the whole behaviour of this path, so the outbound bytes leave on a
-socket the process cannot watch, and the request-half checks stay with the
-replay arm rather than passing over a value nothing looked at.
-
-The coverage line is assembled from what the outcomes say rather than poured
-into fixed halves. Every path appears once, under the heading true of it; a path
-whose every probe failed was reached and established nothing, which is not the
-same fact as a path nothing ran on; and a heading with nothing under it is not
-printed.
-
-**Done when** a relayed turn is measured against the real second provider, and
-no line under the matrix names a path the run did not touch.
-
-**Done.** What the live arm deliberately does not establish is the outbound
-half, and it says so on the row rather than leaving a reader to assume it.
-
-### v0.10.0 — shipped
-
-**The meter stops claiming more than this daemon knows.** Driving the daemon
-rather than reading its tests turned up six lines that made a claim the store
-had no standing for, and every one of them was wrong in the direction nobody
-checks: it read as safety.
-
-The absences were claims about the world. A turn relayed by a CLI process reads
-the same quota headers the ingress path does and exits holding them, so an
-account had spent something the daemon never saw while `usage` said none had
-been. Every reason that claimed spend is now scoped to what this daemon has
-recorded, and §6.1 carries the rule rather than the sentence.
-
-The figures dropped what came with them. A turn's headers state a status per
-window, a threshold the provider itself set, and which window speaks for the
-account; all of it was discarded at parse, so an account at 93% with the
-provider's own warning on it printed exactly like one without. And a figure
-outlives the window it describes: after a reset with no turn since, spend was
-shown against a window back at zero. Staleness is a property of one window and
-never of a snapshot, since a five-hour window turns over while a seven-day one
-has not, and the figure is marked rather than rewritten to zero — a number the
-provider never gave.
-
-The confirmations were the same failure in a different place. A key row said it
-held no quota, which is true and reads as nothing to watch, on the one account
-whose spend accrues with every turn; it now says nothing bounds its spend and
-carries the tokens this daemon served as it, a floor that says it is one. One
-`accounts --use` moved every turn onto another provider and another
-subscription in six words that were identical to a switch that changed nothing
-but whose quota is spent. And a refused switch never mentioned
-`[accounts.<name>.tiers]`, the thing that already solved it.
-
-**Done when** no line under `usage`, and no confirmation from `accounts`, states
-something this daemon has not observed.
-
-**Done.** What stays open is named rather than buried: an anthropic API key and
-a subscription setup token are stored as the same credential kind, so one
-sentence has to serve two meterings and can only be right about one.
-
-### v0.11.0 — shipped
-
-**A spare account can be asked what it has left.** The meter listed every stored
-account and could only ever fill in one of them, because both routes a figure
-took filed it under whichever account was serving turns. So the headroom that
-decides whether to switch to a spare was reachable only by switching to it
-first, and an account that cannot be selected at all — a plan whose catalog is
-missing a mapped model — had no route to a figure at any point.
-
-`usage.refresh` now asks once per stored account, each on its own credential,
-and files each answer under its own name. Nothing about which account serves
-turns is read or written by that sweep. A row whose credential cannot hold a
-subscription figure is not asked and keeps the sentence it had; a row that is
-asked and refused says so on its own line and leaves the others alone. The one
-account the sweep will not refresh is one the operator did not select: rotating
-a token family for an unused grant retires a token another holder may still be
-using, and a figure is not worth that.
-
-The CLI got the door to it. `usage --refresh` asks; a bare `usage` asks for
-nothing and stays free, and the `--json` shape is the same either way, because a
-status line parses it.
-
-**A key is two credentials wearing one word.** Closing what v0.10.0 named as
-open: a Claude subscription setup token and an anthropic API key were both
-stored as `key` and read the same line, though one draws down a subscription and
-the other has no ceiling and bills per token. The store records which of the two
-a key is — a classification of shape, never any part of the secret — and each
-has a line of its own. A key stored before the field existed, or whose stem
-matches neither, gets a third line claiming neither: a prefix is evidence and
-not proof, and nothing re-reads a stored secret to classify it after the fact.
-
-**Done when** an account held as a spare can state its own headroom without
-being made to serve a turn first.
-
-**Done.** What stays open is named: a figure lives only in the daemon's memory,
-so a restart empties every row until something asks again.
-
-### v0.12.0 — shipped
-
-**Two figures that were wrong about themselves, in opposite directions.** One
-reported a floor it had not measured; the other reported a lifetime it could
-not know.
-
-The per-account token tally reset to zero on every restart, and a supervised
-daemon is replaced on every install, so that was the ordinary case rather than
-a rare one. Nothing upstream can restate it — it is what *this daemon* served,
-counted from completed responses — so a restart did not lose a figure that
-could be asked for again, it replaced a floor with a smaller one that read
-exactly the same. It now lives in `spend.json` under the configuration
-directory, holding an account name and two token counts and no part of any
-credential, and it is read back at startup.
-
-The quota snapshot deliberately does not persist beside it. Upstream still
-holds that one and an ask recovers it exactly, where a percentage read back
-from disk would describe a window that may have reset since — so the empty row
-after a restart is the honest one, and no staleness rendering had to be
-invented for a number nobody would have been able to trust.
-
-Getting that file right took two passes, and the second one is the reason this
-entry exists. The first wrote it with `std::fs::write`, which truncates the
-target and then fills it: a daemon killed between those two leaves a short file
-that parses into nothing, which is read back as a floor of zero — the exact
-defect being fixed, reintroduced in a narrower window. It is now written to a
-sibling carrying the process id, flushed, and renamed over the target, so a
-reader sees the old file or the new one. Two daemons pointed at one directory
-merge by taking whichever count is higher per account, and a write re-reads the
-file before replacing it; that does not close the window and the comment says
-so rather than claiming a guarantee it does not hold.
-
-**A stem that names one credential is worn by two.** `claude setup-token` mints
-a token good for about a year; the harness's own OAuth *access* token begins
-with the same `sk-ant-oat` and lasts hours. Both file as a subscription token,
-both are relayed as bearers, both report the subscription row — and for the
-second all of that is true only until it expires, after which nothing stored
-says why. Classification is unchanged, because a bare bearer has no structure
-to read without decoding it and decoding a credential to classify it is a new
-way for a secret to reach a log. What changed is that the ambiguity is written
-where a reader of `classify()` and a reader of the spec will find it, and
-`login --key` names both credentials on stderr where stdin is a terminal — the
-one moment a person is present to be told. It names the stem and no part of the
-key; a piped login is byte for byte what it was.
-
-**Done when** no figure this daemon reports is smaller than what it measured,
-and no credential is described by a lifetime nothing here can know.
-
-**Done.**
-
-### v0.13.0 — shipped
-
-**The account verbs were built for the code and read like it.** `login` was two
-unrelated commands chosen by `--key` or `--profile`; `accounts` used `--use`,
-`--forget` and `--rename` as actions; one account was `--as` in one verb and
-`--use` in another. They are now one sub-verb each — `accounts list`, `login`,
-`add-key`, `use`, `rename`, `remove` — every account named positionally, one
-word for it throughout. The daemon and the CLI are one binary and nothing else
-speaks the socket yet, so the rename landed on both at once: `accounts.forget`
-became `accounts.remove`, and `login`/`login.cancel` and the whole
-authorization flow behind them are gone (§6's pre-1.0 exception).
-
-`run` gained a counterpart. `start` backgrounds the daemon and returns once it
-answers, the pair of `stop`; `run` stays foreground; `--detach` is gone. On a
-machine already serving, `start` says so and exits rather than failing to bind.
-
-**An edit to `config.toml` reaches a daemon that is already serving.**
-`config.reload` (and `proxenos reload`) re-reads `[profiles]`, the tier mapping
-and the effort ceiling and applies them through the same validated path a
-switch takes, names what still needs a restart, and refuses a file that no
-longer parses while keeping what was running. `accounts login` and
-`accounts remove` call it themselves, so a declared profile no longer waits for
-the next start.
-
-**The listings became tables.** `accounts`, `status`, `models` and `usage`
-print aligned columns with headers, the state that used to trail each row as a
-sentence moved into a column, and every confirmation says what happened on one
-line and its consequence on the next. `--json` means one thing everywhere: the
-socket's own payload. The version string carries a build id, so `stop` can tell
-two builds of one number apart, and `status` names the serving account and
-whether launchd supervises it. The quota snapshot now persists, keyed by each
-window's reset time, so a figure that is still true survives a restart and a
-stale one is dropped rather than shown.
-
-**Two bugs found by driving it, not by a test.** Every tool-search result was
-refused with a 400: the client names a discovered tool `tool_name` and the
-proxy read `name`, and the fixture the probe replays had been written with
-`name` rather than captured, so the probe passed the capability the proxy was
-rejecting. And a relayed tier handed the second provider a first-provider model
-id — `--model haiku` arrived as `gpt-5.6-luna` — because the launch environment
-stated every tier's id; a relayed tier now states one only where the operator
-named it for that account.
-
-**A borrowed Codex grant is refreshed the way a Claude one is.** A profile no
-other session drives is never refreshed by turns through the proxy, which spend
-the access token without rotating it. Claude profiles were poked with a cheap
-`claude -p` turn; Codex profiles were left to expire on the tenth day. The
-daemon now runs a cheap `codex exec` turn for them too, under the same lock and
-deadline. That the turn rotates a genuinely lapsed grant is derived from the
-mechanism and the upstream client's proactive-refresh rule, not observed here —
-a Codex access token is a signed JWT that cannot be backdated locally to force
-the case (§L).
-
-**Done when** a person can drive every account operation without reading the
-source to know which flag means which, and an edit to the configuration reaches
-a running daemon without a restart.
-
-**Done.**
-
-### v0.14.0 — shipped
-
-**The quota meter left the terminal.** A herdr plugin under `herdr-plugin/`
-puts quota bars on every claude pane in the sidebar — a pane routed through
-the daemon shows the serving account, a direct pane shows the keychain
-anthropic account, and a pane whose environment names a foreign proxy or a
-custom profile shows nothing, because no figure beats a wrong one. The full
-per-account table opens as a popup, reads its keys raw so a bare Esc closes
-it, and a detached per-pane watcher keeps the bars moving between herdr's own
-events. The one thing that contacts the providers, `usage --refresh`, runs
-from a single stamp-guarded place, at most every five minutes across every
-reporter and watcher.
-
-**The figures grew to match what the provider actually states.** A
-model-scoped limit is its own labeled window rather than a silently dropped
-array entry. A max plan carries its multiplier, asked of the profile endpoint
-at most hourly. The extra-usage credit — the money an account spends once its
-plan windows are full — renders as its own row and travels in `usage --json`,
-read from the provider's `spend` block only where it calls the facility
-enabled, with the provider's own percentage rather than a ratio of the
-amounts, and dropped entirely where an amount, its exponent, or the two
-currencies cannot be read. And a subscription the provider has stopped
-calling active is said on the account's row in the provider's own word,
-because a canceled account keeps reporting quota that looks untouched while
-every turn is refused.
-
-**One session can serve as a named account.** `exec --account <name>` is the
-per-session switch beside `accounts use`'s standing one: consumed by `exec`,
-never forwarded to the client's argv, carried as the otherwise-ignored
-`ANTHROPIC_AUTH_TOKEN` value, outranking a tier's pinned account on both
-paths, and refused — at launch and again at the turn, each time naming the
-name — when no stored account carries it.
-
-**Done.**
-
-### v0.15.0 — shipped
-
-**A login where there is no browser to open.** `accounts login --device-auth`
-puts `codex login`'s own flag on the command that is run, on the command that
-is printed where no terminal can answer the prompts, and on the printed line
-that declares the profile afterwards, so the client prints a URL and a code to
-carry to a browser elsewhere. A container has the terminal and not the browser,
-which the two existing cases did not cover: the login started there hung with
-nothing said. The flag belongs to one client, so `--provider anthropic` refuses
-it rather than handing `claude auth login` an argument it would reject as a
-misspelling.
-
-**A piped key acts at once.** The herdr plugin's popup slept its whole redraw
-interval when a key arrived on a non-tty stdin without a trailing newline, so a
-`q` already delivered took thirty seconds to reach the loop. A partial line is
-handed over as soon as it is read; a true EOF still sleeps, which is what keeps
-a closed stdin a redraw loop rather than a spin.
-
-**Done.**
+No completion criterion requires a live backend, credentials, or quota. The
+suite runs entirely against a local replay server, because correctness that can
+only be shown by spending money stops being demonstrable the moment quota runs
+out. What genuinely cannot be settled offline is collected in §L and stated as
+open until a live run settles it.
+
+## Intended
 
 ### Next
 
-Named rather than numbered. Twice now a section here has worn a version that
-shipped as something else entirely, because what is ready first is not what the
-list guessed — and a roadmap that misnames a released version is read as a
-record and is wrong as one.
+Named, never numbered: twice a numbered intention shipped as something else,
+and a roadmap that misnames a released version is read as a record and is wrong
+as one. Intended, not committed.
 
-**A graphical front-end.** The control socket was built for exactly this: the
-daemon holds authoritative state, the CLI has no privileged path of its own, and
-a second front-end needs no new daemon work. Whether that promise is true is
-unproven until something other than the CLI speaks the protocol.
-
-Which platforms, and whether it is native per platform or one cross-platform
-shell, is open. So is whether the method names survive contact with a second
-caller — they become a compatibility surface the moment one exists, and that is
-worth settling before it does rather than after. Two shapes it should carry
-from the start: the cross-account consent above renders as an explicit dialog
-before the key is written, and a quota meter shows per-account figures with
-their reset times and per-account freshness, omitting what a provider does not
-report.
-
-**Done when** every daemon capability is reachable without the CLI, and the
-socket needed no method that only the graphical client would ever call.
+**Package-manager routes.** There is no Homebrew tap and no container image;
+`install.sh`, the release archives and `cargo install` are the install routes. **Done when** either installs a release binary that `doctor`
+answers from.
 
 ---
 
 ## L. The live gate
 
-Deferred, not skipped. These required a working subscription and could not be
-settled by any amount of offline work. Each was written as a question with a
-method; all of them have since been asked, and the answers are recorded here
-alongside what they cost to learn.
+Questions that needed a working backend and could not be settled offline. Each
+is one of: **settled live**, **derived, not confirmed**, or **open**. Before a
+question is settled, the claim it concerns in `proxy-behavior.md` is derived
+from the upstream's protocol definitions and says so.
 
-| Question | Method |
-|---|---|
-| ~~Does the login flow complete against the real authorization server?~~ | **Answered.** It completes: the authorization request is accepted, the code exchange succeeds, and the account id is read from the id token. |
-| ~~May this client request connector scopes?~~ | **Not asked, and not going to be.** The proxy requests only the scopes it uses, so this was never a question about the backend — it was a question about whether to widen the grant, and the answer is no. A refusal once suggested the server refused them; that was a truncated URL. |
-| ~~Does a refresh survive expiry without invalidating the family?~~ | **Answered: yes.** With the stored expiry forced into the past, the next turn refreshed and completed. The refresh token rotated, and the superseded one still redeemed successfully afterwards — rotation supersedes, it does not revoke. The response also carries `expires_in`, agreeing with the token's own claim to within a second; §8 said no such field existed and has been corrected. |
-| ~~Does the backend accept the request shape — headers, `instructions`, tools? | **Answered.** Accepted as sent; a turn completes and the frame sequence is correct. |
-| ~~What does the backend expect for a compressed request?~~ | **Answered.** HTTP: a zstd body with `Content-Encoding: zstd`, verified live. WebSocket: `permessage-deflate`, offered by the client and selected by the server on the upgrade — confirmed live, with full context takeover and no window limit. A binary frame means nothing on its own. |
-| Does a refresh return a fresh `id_token`? | **Answered: yes.** Forced by putting a stored `expires_at` in the past and making one turn, so the daemon that owns the store performed the refresh and persisted what came back — no second holder, no copied credential file. All three rotated: access token, refresh token, and id token, the last carrying a new `iat` and `exp` rather than the previous one's. So the grant's plan claim is renewed on every refresh and a stale entitlement cannot persist indefinitely. The mitigation stays anyway: the backend's own `plan_type`, reported on every turn, is still preferred, and the grant's copy is still labelled "as of last login". |
-| Does the key endpoint accept a compressed request body? | **Answered: no.** A turn sent with a zstd body and a valid key came back `400 invalid_json`, "encountered a unicode decode error when parsing this JSON value" — the compressed bytes parsed as JSON. Auth is checked after the body is parsed, so a bogus key cannot reproduce it: probed both ways, an invalid key answers 401 regardless. Key requests are no longer compressed. |
-| ~~Can a key list models at the catalog endpoint?~~ | **Answered: yes**, and the earlier `401 Unauthorized` does not reproduce. The request the catalog fetch makes — `GET /v1/models?client_version=...`, this proxy's user agent, the key as a bearer token — answers `200` with the real list, and a running daemon holds that list for a key account rather than the fallback. Neither candidate survived: the key is not scoped without model-read, and dropping `client_version` changes nothing. What produced the 401 is not established, so nothing here rests on a cause. |
-| ~~Does the key endpoint accept the request shape this proxy sends?~~ | **Answered: yes.** All eight capability probes pass live against `/v1/responses` with a key: both attachment paths, web search, web fetch, tool search, tool calling, the context meter, and token counting. That is the same matrix the subscription backend answers, on unguessable content in each case. |
-| Does the key endpoint behave as this proxy assumes? | **Answered: yes.** `doctor --live` as a key account: nine probes passed against the real endpoint — images, documents, search, fetch, tool search, tool calling, and the context meter over the translation path on the HTTP transport — and the two the proxy answers itself were marked as never reaching a backend. Streaming behaved as the recordings do. The catalog is the real one and needs no fallback, though it states no context window for any model, which is why every row reads `window unknown`. The relay probe skipped, on a rationale since corrected: the probe builds its own store and authorizer, so it never depended on which account the daemon serves, and it now has a live arm that relays as a named account on the second provider. |
-| Do two grants held by one client stay independent? | **Answered: yes.** Two accounts on one `client_id`, refreshed one after the other and then used again: the first account's refresh rotated its own family and left the second's untouched; the second's refresh then rotated only its own; and a turn made as the first afterwards still authenticated. So separate grants mean what the design assumed. The unsafe arrangement is unchanged and is the other one — two holders of a single account, where the last refresh retires everyone else's token. |
-| Does a `codex exec` turn refresh a genuinely lapsed borrowed Codex grant? | **Open — derived, not observed.** The daemon now runs a cheap `codex exec` against a borrowed Codex profile whose access token has lapsed, the same way it runs `claude -p` for an Anthropic one, and the upstream client refreshes proactively inside that run (`should_refresh_proactively`: access token within five minutes of expiry, or `last_refresh` older than eight days). What is confirmed here: the turn runs, exits 0, and needs no model id. What is not: that it *rotates* a lapsed grant — a Codex access token is a signed JWT and cannot be backdated locally to force the case, and the real token on this machine is ten days from expiry. Settle it when a borrowed Codex grant actually lapses: make one `usage --refresh`, then read whether the profile's tokens rotated. |
-| Does a superseded refresh token stay redeemable? | **Previously answered yes; now doubtful.** That measurement saw a superseded token still redeem, and this account's stored token is now refused with `refresh_token_reused`. The earlier result most likely described a grace window rather than a durable property. Do not rely on it, and do not run a daemon against a *copy* of a credential file — the refresh-token family is shared, and whichever copy refreshes last leaves the other holding a dead token. |
-| ~~Do the `session-id` and `thread-id` headers matter?~~ | **Answered: yes, and it cost a wrong conclusion twice on the way.** A `session_id` header scopes the prompt cache. The body's `prompt_cache_key` — which §2.1 called the thing that drives caching — produced no cached tokens on its own in any trial. The first probe run appeared to prove the header caused caching outright; it did not, because every condition shared one prompt and cache entries leaked between them. Rerun with a prompt per condition and the order reversed, the effect held. Then the shipping proxy showed **no** improvement end to end, because over WebSocket the incremental path already chains turns with `previous_response_id` and that caches by itself. With the socket disabled the difference is stark: uncached input per turn 4,465–4,497 without the header against 625–657 with it, 3,840 cached from the second turn on. So it is a fallback-path optimisation, and HTTP is a normal operating mode rather than an error path (§4.2). `thread-id` was not isolated and is not sent. |
-| ~~Does the socket actually compress, and by how much?~~ | **Answered, measured live.** The server selects `permessage-deflate` when offered, with context takeover and no window limit. One identical turn, compression on versus off, counted on the wire: 104,566 in / 40,335 out against 300,879 in / 110,608 out — 65% off in both directions, 267 KB on a single first turn. Inbound is the larger half and grows with the conversation. **Zero tokens either way.** |
-| ~~Does WebSocket connect, or close with a policy code?~~ | **Answered.** It connects. No policy close was seen, and the catalog marks these models `prefer_websockets`. |
-| ~~Is `CLAUDE_CODE_DISABLE_1M_CONTEXT` inert for plain model ids?~~ | **Answered: no.** Without it the client appends `[1m]` to the unrecognized id and assumes a million tokens. The flag is load-bearing, not a precaution. |
-| ~~Does the context meter stay steady across a turn?~~ | **Answered.** `message_start` carries the estimate and `message_delta` replaces it with the true count. |
-| ~~What does the model catalog actually contain?~~ | **Answered.** It needs a `client_version` query parameter, and filters by it: a version below a model's `minimal_client_version` returns an empty list rather than an error. Entries are keyed by `slug`, state `visibility` as a word, and carry `supported_reasoning_levels`. |
-| ~~Does it reject system and developer roles inside `input`, as assumed?~~ | **Answered: yes** — `400 System messages are not allowed`. §2.1 rests on this, and it is now measured rather than assumed. |
-| ~~Does it accept an `input_file` part, the one shape with no upstream precedent?~~ | **Answered: yes.** Claude Code rasterises PDFs into `image` blocks, so no turn from that client reaches `input_file` — the path was closed by posting a `document` block to the ingress surface directly. The backend accepted the part and read the file: a generated PDF containing one random code returned exactly that code. The image path is separately confirmed. |
-| ~~Does it accept a `tool_choice` other than `auto`?~~ | **Answered: yes.** `any` → `required` produced a `tool_use` for the named tool. |
-| ~~Does `client.disable_connectors` still suppress the connector notice on the current client version?~~ | **Answered: yes.** Launched interactively through `exec` with the setting on, the first frame carries no notice; launched with no opt-outs at all, the frame shows it verbatim: "claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes prec…". Both arms observed against a relay-serving daemon on the current client. The notice's own wording settles the adjacent worry: connectors are disabled by auth precedence on any launch whose base URL is a proxy, so the setting governs only whether that is announced. |
-| ~~Does `ENABLE_CLAUDEAI_MCP_SERVERS=false` actually keep the claude.ai-hosted servers out of a session served here?~~ | **Answered: they stay out either way, and the variable is not what keeps them out.** Three launches against a relay-serving daemon — headless with the exports on, headless with them absent (the operator's own user settings even set the variable to true), and interactive with none — attached zero MCP servers and no claude.ai entry, the headless round trips proven by unguessable markers returned verbatim. The client's own notice names the mechanism: another auth source takes precedence, so claude.ai servers never join a session whose base URL is a proxy. The export stays as documented, costless belt over that gate; the notice itself is governed by the settings key in the row above. |
-| ~~Does `WebFetch` route through the haiku tier?~~ | **Answered: yes, both of them.** With haiku on a distinguishable model, `WebSearch` reported `query_source: web_search_tool` and `WebFetch` reported `query_source: web_fetch_apply`, both against the haiku model, while the main turns used sonnet's. An unmapped haiku breaks both in a way that looks unrelated to tier mapping. |
-| ~~Does the backend emit `url_citation` annotations, or is `WebSearch` limited to opened pages?~~ | **Answered: it emits them.** A captured live search carried two `response.output_text.annotation.added` events, each a `url_citation` with a title, a URL, and the span of the reply it supports. Both reached the client as `web_search_result` entries, so the reconstruction is built on citations rather than on opened pages. |
-| ~~Does incremental upload produce the same conversation live as on replay?~~ | **Answered, and it did not — twice.** The delta was empty on every continuing turn, so the backend answered from the previous response and the turn repeated itself. With that fixed, the session stopped matching as soon as the model returned a reasoning item, and every turn from the third on uploaded the whole conversation. Both fixed; a live four-turn conversation now uploads one item per turn. |
-| ~~Do the real capability probes pass?~~ | **Answered: all eight, twice.** `doctor --live` was built to ask, and asking found two things replay could not. The corpus's attachments were stand-ins — a base64 string that was not a PNG — so the image and document probes passed on replay while proving nothing; they now carry a real PNG and a real PDF. And a marker spoken across several deltas was never contiguous in the raw frames, so every attachment probe failed against a backend that had read the attachment and said so. |
-| ~~Does any client read `anthropic-ratelimit-unified-*` from a proxy?~~ | **Answered: no, and it cannot.** A stub endpoint setting those headers left `rate_limits` absent from the status-line payload. The reason is in the client's own schema rather than inferred: the payload is gated on a flag documented as false "when plan rate limits do not apply (API key, Bedrock, Vertex, or missing profile scope)", and pointing the client at a proxy means setting `ANTHROPIC_AUTH_TOKEN`, which is that path by definition. No header can change it, so §2.1's status-line proxy is the only route. The headers are still emitted — they are the accurate form of a figure the response carries, and the client does read them for its retry banner on a quota 429. |
-| ~~Is `ultra` gated by plan as well as by model?~~ | **Answered: yes, both.** It exists only on `gpt-5.6-sol` and needs at least a Plus subscription. The account here is `free` — now read from the id token and reported by `status` — which is why its requests are refused with `Invalid value: 'ultra'`, the schema-level refusal rather than the model-specific one `minimal` gets. This is what makes the catalog a menu of what a client may offer rather than a statement of what the wire accepts: it advertises `ultra` on `gpt-5.6-terra`, which refuses it. The refusal is surfaced verbatim rather than guessed around, and the plan is reported so the two can be told apart locally. Not reproducible here without a paid plan. |
-| Does compaction actually fire at the window the proxy supplies? | **Largely answered, derived not observed.** The client's history check compares the token count against a function of `autoCompactWindow`, and its own schema describes the trigger as the effective window minus a summary buffer, lowered further by a separate percentage override. So the figure the proxy supplies is the one compaction is measured against. Reading this also turned up a constraint the proxy had been ignoring: the value is accepted only between 100,000 and 1,000,000 — "Expected 'auto' or 100k–1M tokens" — and the settings form *discards* an out-of-range value silently. The proxy now omits it outside that range and warns. What remains unobserved is a session long enough to watch compaction happen. |
-| ~~Is the true input count linear in the estimator's raw figure?~~ | **Answered: yes.** Six live turns, residuals under 3% from the second turn on. The uncalibrated first turn was +95%. Recorded in §6.3. |
-| ~~Does the second provider's subscription endpoint answer a quota question?~~ | **Answered, and the route moved.** The endpoint exists and replies, but not to this credential: asked with the stored subscription token it returns `403 permission_error`, "OAuth token does not meet scope requirement user:profile" — identical with and without `anthropic-beta: oauth-2025-04-20`, so the beta header is not what is missing. A setup token simply carries no profile scope, and no header fixes that. The figure is available anyway, from the place that costs nothing: one live relayed turn returns it in `anthropic-ratelimit-unified-*` response headers — a five-hour and a seven-day window, each with a status, a utilization fraction and a reset epoch, plus an overage window, a `representative-claim` naming which window speaks for the account, and a `surpassed-threshold`. Same free-riding shape as the first provider's stream event, different transport. So the per-account meter's route for this provider is the response headers of a turn already being made, never a poll. Recorded as `fixtures/upstream/relay-quota-headers.json` and `fixtures/upstream/relay-usage-scope-refusal.json`; the turn that produced them was verified by an unguessable marker returned verbatim. Wiring the meter to read them is its own work. |
-| ~~What header delta does the Messages passthrough need?~~ | **Answered, live: none beyond what §9.2 already does.** The Messages endpoint accepted an `sk-ant-oat01-` bearer relayed as `Authorization: Bearer` — repeated 200 generations, streaming included — and `oauth-2025-04-20` is **not** required there: probed with and without, identical success, so the likely-refused hypothesis below was wrong (that beta belongs to the subscription *usage* endpoint). What the endpoint does require is the client's own identity shape — its beta list, `x-app`, its system prompt — which the client always sends and the relay forwards verbatim; a bare minimal request without it is refused upstream as a 429-shaped gate. One real delta surfaced later from a native capture: the client posts `/v1/messages?beta=true`, and the query string is now relayed as sent (§9.2). The paragraph below records what the captures showed on the way. The relay replaces `authorization` with the account credential, drops any `x-api-key` the caller brought, and passes every other client header through as sent (`proxy-behavior.md` §9.2). **Still open, unchanged:** what the real endpoint accepts — in particular whether the subscription-grant path needs the OAuth beta token that appears in no capture, which is why the relay carries keys and not grants at this slice. Method: one live turn against the real endpoint with a stored key, then one with a grant if a grant can be obtained at all (the row below). The client's side is recorded. Ingress capture now keeps headers, and a live client (`claude-cli/2.1.238`, `-p` mode) sent: `authorization: Bearer <token>` — the token variable becomes a bearer header, and no `x-api-key` — plus `anthropic-version: 2023-06-01`, `anthropic-beta: claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24`, `anthropic-dangerous-direct-browser-access: true`, `x-app: cli`, `x-claude-code-session-id`, the `x-stainless-*` client telemetry, and ordinary transport headers. The interactive client was captured too and differs only in the `user-agent` suffix (`(external, cli)` vs `(external, sdk-cli)`) — and in one state-dependent entry: without `CLAUDE_CODE_DISABLE_1M_CONTEXT`, `context-1m-2025-08-07` joins the beta list, so the flag governs a wire header as well as the window assumption (§7.2). **Acted on:** the launch surface now exports that flag only where at least one tier still translates — a mapping served entirely by the relay omits it, so the account's own entitlement decides, and it also states no window variables at all, since the client knows those ids natively. A split mapping keeps the flag and still states no window; §7.2 carries the reasoning for both. Notably absent in every capture: `anthropic-beta: oauth-2025-04-20`, which is verified live against the subscription *usage* endpoint and was hypothesized to be needed for Messages too. The client never sends it, and the live probes settled why: Messages does not want it. The hypothesis was tested rather than implemented, and no relay change was ever made for it. |
-| ~~Does the relay's routing survive a client that sends a tier name?~~ | **Answered, by measurement and then by redesign.** Measured first: a real client launched through `exec` against a relay account sends final ids (and follows a `--model` override), never a tier word. Then §9.1 changed the fallthrough itself: an id no mapping names — a tier word included — now follows the account that would authenticate it, so with a relay account serving it is relayed and the provider's own `not_found_error` names the id, and with a translating account serving it translates as before. The silent credential-kind mismatch this row worried about no longer exists on any path. |
-| ~~How is a grant for the second provider obtained?~~ | **Answered: `setup-token`, no new mechanism.** `claude setup-token` mints a subscription-backed OAuth token (`sk-ant-oat01-…`) valid about a year, consumed as a plain `Authorization: Bearer`. That is exactly what the existing key path stores: `proxenos accounts add-key NAME --provider anthropic` takes any string (no format guard, `store.rs`), and the relay presents a key as a bearer (§9.2) — the right shape for an OAuth token. So the subscription path needs no capture, no refresh, no client id, no keyring, no background job: run `setup-token` once, pipe the token into `accounts add-key`, and the relay spends it. The one-year lifetime removes the management that made every alternative unattractive, which is what changed the earlier "no setup-token" call — it was rejected as ongoing hassle, and the output has none. **Since confirmed live:** the Messages endpoint accepts the `sk-ant-oat01-` bearer as relayed, no extra beta header — the header-delta row above. A *pool* of subscriptions here would still need credential-swapping and is a separate question. Fallback if a token is ever needed without `setup-token`: the proxy holds no copy and never refreshes; a stored account is a reference to the harness's own credential storage (macOS keychain item `Claude Code-credentials` via `security`, or `~/.claude/.credentials.json`), read live per turn and kept fresh by an operator-side scheduled `claude`, the harness staying the sole refresher. |
-| ~~What does the real Messages surface actually answer with?~~ | **Answered.** Five live exchanges through `record surface`, kept as `fixtures/surface/`: a plain generation, a streaming text turn, a streaming tool call, a refusal, and a sizing call. Every conformance claim before this was derived from documentation and from captures of the *client* side — nothing here had ever seen a real answer, and neither existing capture mode could produce one (`record upstream` is wired into the translating path, and a relayed turn streams back untouched with nothing recording it). What the captures settle: the streaming vocabulary is `message_start`, `content_block_start`, `ping`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`; a refusal carries `{type, error{type, message}, request_id}`; sizing answers `{input_tokens}`, which is exactly what §5 emits. The real surface carries fields this proxy does not — `stop_details` on a message, `caller` on a tool-use block, and `service_tier`, `inference_geo` and a nested `cache_creation` in usage — and none is a defect: a client tolerates an absent field, because the real endpoint's own answers vary. The check is therefore a subset in one direction, and it is what fails on drift. **Not reached by any capture, and named rather than inferred:** the thinking and server-tool block kinds. Each needs a turn of its own and neither has a symptom that justifies the quota today. |
+Settling these falsified rules that no offline test could catch — the empty
+delta, the reasoning mismatch, the compressed WebSocket frame, the response's
+expiry field, the non-streaming request answered with a stream. Each was fixed
+by amending the spec in the same commit as the code.
 
-Before a question was answered, the corresponding claim in `proxy-behavior.md`
-was **derived from the upstream's own protocol definitions, not confirmed
-against a running backend.** That is a meaningful difference, and the point of
-this section is that the difference was never left implicit.
+New questions belong here as they are found.
 
-A probe also falsified something no test could catch offline: the guided login's
-guard was written for `sk-ant-oat1-`, and a real minted token begins
-`sk-ant-oat01-`. The flow would have refused the one credential it exists to
-store. The guard now matches the stem `sk-ant-oat`, which is what actually
-separates a setup token from an API key; the version digit belongs to the
-issuer.
+### Borrowed grants and keys
 
-Answering these falsified rules, which is the expected outcome of a live gate:
-the empty delta, the reasoning mismatch, the compressed WebSocket frame, and the
-response's expiry field were all found this way. Each was fixed by amending the
-spec in the same commit as the code — not by treating the offline phases as
-having been wrong to do.
+#### Does a `codex exec` turn refresh a genuinely lapsed borrowed Codex grant?
 
-New questions belong here as they are found. A section that is complete because
-nothing was added to it is not a section anyone is still using.
+**Open — derived, not confirmed.** The daemon runs a cheap `codex exec` against
+a borrowed Codex profile whose access token has lapsed, as it runs `claude -p`
+for an Anthropic one, and the upstream client refreshes proactively inside that
+run (access token within five minutes of expiry, or `last_refresh` older than
+eight days). Confirmed: the turn runs, exits 0, and needs no model id. Not
+confirmed: that it rotates a lapsed grant — a Codex access token is a signed JWT
+and cannot be backdated locally to force the case. Settle it when a borrowed
+grant actually lapses: one `usage --refresh`, then read whether the profile's
+tokens rotated.
+
+#### Does a superseded refresh token stay redeemable?
+
+**Open — previously answered yes, now doubtful.** An early measurement saw a
+superseded token still redeem after rotation. A stored token was later refused
+with `refresh_token_reused`, so that result most likely described a grace
+window rather than a durable property. Do not rely on it, and never run a
+second holder against a copy of a credential or a profile directory: whichever
+copy refreshes last retires every other copy's token.
+
+#### Does a refresh return a fresh id token?
+
+**Settled live: yes.** A stored expiry was put in the past and one turn made,
+so the daemon owning the store refreshed and persisted the result. Access,
+refresh, and id token all rotated, and the new id token carries a new `iat` and
+`exp`, so a grant's plan claim cannot go stale. The response also carries
+`expires_in`. **Falsified:** the spec's claim that no such field existed.
+
+#### Do two grants on one client id stay independent?
+
+**Settled live: yes.** Two accounts on one client id, refreshed one after the
+other: each refresh rotated only its own family, and the first account still
+authenticated after the second refreshed. The unsafe arrangement remains two
+holders of one grant.
+
+#### Does the key endpoint behave as this proxy assumes?
+
+**Settled live: yes, with one exception.** `doctor --live` as a key account
+passed all nine probes against the real endpoint, streaming behaved as the
+recordings do, and the catalog is the real one — though it states no context
+window, so `models` prints `window unknown`. A catalog `401` seen once did not
+reproduce, and its cause is not established. **Falsified:** that a key request
+may be compressed. A zstd body is refused with `400 invalid_json`, so key
+requests are sent uncompressed.
+
+### Translate path
+
+#### Does the backend accept the request shape?
+
+**Settled live: yes.** Headers, `instructions`, and tools as sent; a turn
+completes with a correct frame sequence. System and developer roles inside
+`input` are refused — `400 System messages are not allowed` — which §2.1 rests
+on. A `tool_choice` of `any`, sent as `required`, produced a call to the named
+tool. An `input_file` part, which the client never sends because it rasterises
+PDFs, was posted directly and read: a PDF holding a random code returned that
+code.
+
+#### What does compression look like on each transport?
+
+**Settled live.** HTTP takes a zstd body with `Content-Encoding: zstd`. The
+socket negotiates `permessage-deflate` on upgrade, with full context takeover
+and no window limit. One identical turn counted on the wire: 104,566 in /
+40,335 out compressed against 300,879 in / 110,608 out uncompressed — 65% off
+both ways, and zero tokens either way. **Falsified:** that a binary frame
+signals compression, and the earlier decision that compression was not worth
+it, which had measured the request only.
+
+#### Does WebSocket connect, or close with a policy code?
+
+**Settled live: it connects.** No policy close has been seen, and the catalog
+marks these models `prefer_websockets`. One account's experience is not
+evidence about every account's, so the HTTP fallback stays tested as an
+ordinary path.
+
+#### Does incremental upload produce the same conversation live as on replay?
+
+**Settled live: yes, after two fixes.** **Falsified twice:** the delta was
+empty on every continuing turn, so the backend repeated the previous answer;
+and once the model returned a reasoning item, every turn from the third on
+uploaded the whole conversation. A live four-turn conversation now uploads one
+item per turn.
+
+#### Does the `session_id` header matter?
+
+**Settled live: yes, on the HTTP path.** The header scopes the prompt cache;
+`prompt_cache_key` alone produced no cached tokens in any trial. Over the
+socket it adds nothing, because `previous_response_id` already chains and
+caches turns. With the socket disabled, uncached input per turn was
+4,465–4,497 without the header against 625–657 with it. **Falsified:** that
+`prompt_cache_key` drives caching, and a first probe that shared one prompt
+across conditions and let cache entries leak between them. `thread-id` was not
+isolated and is not sent.
+
+#### What does the model catalog contain?
+
+**Settled live.** It needs a `client_version` query parameter and filters by
+it: below a model's `minimal_client_version` the list is empty rather than an
+error. Entries are keyed by `slug`, state `visibility` as a word, and carry
+`supported_reasoning_levels`.
+
+#### Is `ultra` gated by plan as well as by model?
+
+**Settled live: yes, both.** It exists only on `gpt-5.6-sol` and needs at least
+a Plus subscription; a free plan is refused with `Invalid value: 'ultra'`. The
+catalog advertises `ultra` on `gpt-5.6-terra`, which refuses it — the catalog
+is a menu, not a contract. The refusal is surfaced verbatim and the plan is
+reported by `status`.
+
+#### Does the backend emit `url_citation` annotations?
+
+**Settled live: yes.** A captured search carried `url_citation` annotations
+with title, URL, and span, and both reached the client as `web_search_result`
+entries.
+
+#### Do the capability probes pass against a live backend?
+
+**Settled live: yes.** **Falsified:** the corpus's image and document payloads
+were not real files, so both probes passed on replay while proving nothing; and
+a marker spread across several deltas was never contiguous in the raw frames.
+The probes now carry a real PNG and a real PDF and match on assembled text.
+
+### The client
+
+#### Is `CLAUDE_CODE_DISABLE_1M_CONTEXT` inert for plain model ids?
+
+**Settled live: no.** Without it the client appends `[1m]` to an unrecognized
+id and assumes a million tokens, and adds `context-1m-2025-08-07` to its beta
+header. **Falsified:** that the flag was a precaution.
+
+#### Does the context meter stay steady across a turn?
+
+**Settled live: yes.** `message_start` carries the estimate and
+`message_delta` replaces it with the true count.
+
+#### Is the true input count linear in the estimator's raw figure?
+
+**Settled live: yes.** Six turns, residuals under 3% from the second turn on;
+the uncalibrated first turn was +95%. Recorded in `proxy-behavior.md` §6.3.
+
+#### Does compaction fire at the window the proxy supplies?
+
+**Derived, not confirmed.** The client's own schema measures the trigger
+against the supplied `autoCompactWindow` less a summary buffer, and accepts the
+value only between 100,000 and 1,000,000, discarding anything outside that
+range silently — so the proxy omits it there and warns. A session long enough
+to watch compaction happen has not been observed.
+
+#### Do `WebSearch` and `WebFetch` route through the haiku tier?
+
+**Settled live: yes, both.** With haiku on a distinguishable model, both
+reported their calls against it while main turns used sonnet's. An unmapped
+haiku breaks both in a way that looks unrelated to tier mapping.
+
+#### Do connectors and claude.ai-hosted MCP servers stay out of a proxied session?
+
+**Settled live: yes, and neither setting is what keeps them out.** Auth
+precedence disables connectors on any launch whose base URL is a proxy; the
+client's own notice says so. `client.disable_connectors` governs only whether
+that notice is shown. Launches with `ENABLE_CLAUDEAI_MCP_SERVERS` set, absent,
+and overridden to true all attached no claude.ai server, the headless ones
+proven by unguessable markers.
+
+#### Does any client read `anthropic-ratelimit-unified-*` from a proxy?
+
+**Settled live: no.** The status-line payload's rate limits are gated on a flag
+documented as false for an API-key auth path, which `ANTHROPIC_AUTH_TOKEN`
+selects by definition. The headers are still emitted, and the client does read
+them for its retry banner on a quota 429.
+
+### Relay path
+
+#### What does the relay need beyond forwarding the body?
+
+**Settled live: nothing beyond `proxy-behavior.md` §9.2.** A setup-token bearer
+relayed as `Authorization: Bearer` is accepted, streaming included, without
+`oauth-2025-04-20`; that beta belongs to the usage endpoint. The endpoint does
+require the client's own identity shape — its beta list, `x-app`, its system
+prompt — which the client always sends and the relay forwards. The client posts
+`/v1/messages?beta=true`, and the query string is relayed as sent.
+**Falsified:** the hypothesis that Messages needs the OAuth beta header, which
+was tested rather than implemented.
+
+#### How is a subscription credential for the relay obtained?
+
+**Settled live.** `claude setup-token` mints a bearer valid for about a year,
+stored with `accounts add-key --provider anthropic`; a borrowed profile under
+`[profiles]` serves as well. **Falsified:** a guard written for
+`sk-ant-oat1-`, when a real token begins `sk-ant-oat01-`; the stem `sk-ant-oat`
+is what separates a setup token from an API key.
+
+#### Does the relay's routing survive a client that sends a tier name?
+
+**Settled live, then made moot.** A client launched through `exec` sends final
+ids and never a tier word. An id no mapping names now follows the account that
+would authenticate it, so a relayed unknown id is refused by the provider's own
+`not_found_error`.
+
+#### Does the second provider answer a quota question?
+
+**Settled live, per credential.** For a setup token, the usage endpoint answers
+`403 permission_error` for want of the `user:profile` scope, with or without
+the beta header; the figure comes from the `anthropic-ratelimit-unified-*`
+headers of turns already relayed. A borrowed grant carries the scope and is
+asked there by `usage --refresh`. For an API key, no quota endpoint is known,
+and those accounts report unavailable. Recorded as
+`fixtures/upstream/relay-quota-headers.json` and
+`fixtures/upstream/relay-usage-scope-refusal.json`.
+
+#### What does the real Messages surface answer with?
+
+**Settled live.** Seven exchanges in `fixtures/surface/` — plain generation,
+streaming text, a streaming tool call, a refusal, a sizing call, thinking, and
+server-tool search. The emitted surface is held to them as a strict subset:
+real answers carry fields this proxy omits (`stop_details`, `caller`,
+`service_tier`, `inference_geo`, nested `cache_creation`, a thinking block's
+`signature`, `signature_delta`, `citations_delta`), and a client tolerates an
+absent field. No emitted shape is left unreached.

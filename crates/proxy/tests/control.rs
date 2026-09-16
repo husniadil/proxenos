@@ -1913,7 +1913,7 @@ async fn the_effort_ceiling_can_be_removed() {
 
 /// `tiers.set` takes the same two forms the file does: a model id, or
 /// `{ account, model }` pinning the tier to another account. The pinned form is
-/// the write-time half of the consent gate — the roadmap's rule refuses it at
+/// the write-time half of the consent gate — `proxy-behavior.md` §7.1 refuses it at
 /// the daemon's start AND here, so a front-end cannot write what a restart will
 /// then refuse to load.
 #[tokio::test]
@@ -2009,7 +2009,7 @@ async fn a_cross_account_tier_set_with_consent_pins_the_tier() {
 }
 
 /// Consent is granted over the socket and takes effect without a restart —
-/// the roadmap's rule: a persisted configuration key, written through the
+/// `api.md` §4: a persisted configuration key, written through the
 /// control socket so both the CLI and a front-end can set it deliberately.
 /// Always persisted, because a consent that evaporated at the next restart
 /// would leave the file refusing a mapping the operator explicitly permitted.

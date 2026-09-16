@@ -11,7 +11,7 @@ helps; a working exploit is not required.
 ## Posture
 
 **Two doors, one daemon.** `127.0.0.1` is always bound and always authenticates
-nothing, which is safe precisely because every caller reaching that listener is
+nothing, which is safe because every caller reaching that listener is
 already a local process running as the user. A reachable `listen.address`
 (`[listen]`, `docs/api.md` §4) opens a **second** listener beside it, where
 every request — turns and the control vocabulary alike — must carry the token.
@@ -48,23 +48,28 @@ refused otherwise.
 behind a private overlay network or a reverse proxy that does; over plain HTTP
 the token and every turn cross the wire in the clear.
 
-**Credentials.** Stored in a file created `0600`, from the outset rather than
-tightened afterwards — writing first and adjusting permissions later leaves a
-window in which the file is world-readable, and that window is enough. They
-never appear in the configuration file, in process arguments, or in logs at any
-level. `Debug` is implemented by hand on every type that holds one, and a test
-asserts no token appears in its output.
+**Credentials.** A subscription grant is borrowed: it stays in the profile
+directory of the program that signed in, and the daemon reads it there on each
+turn. The only credentials this project stores are API keys, in a file created
+`0600` from the outset rather than tightened afterwards, since writing first
+and adjusting permissions later leaves a window in which the file is readable
+by others. No credential appears in the configuration file, in process
+arguments, or in logs at any level. `Debug` is implemented by hand on every type
+that holds one, and a test asserts no token appears in its output.
 
 The control socket is owner-only for the same reason: it can clear credentials,
 so the filesystem is its access control.
 
-**Refresh tokens.** This proxy runs its own authorization flow and owns its own
-refresh-token family. It does not read or write credentials belonging to any
-other tool. Families rotate, so sharing one means whichever client refreshes
-last invalidates the other.
+**Refresh tokens.** The daemon never exchanges a borrowed refresh token. A
+refresh-token family rotates, so two holders of one grant means whichever
+refreshes last retires the other's token. When a borrowed grant has
+lapsed, the daemon runs the owning program (`claude` or `codex`, or the
+`claude_program` / `codex_program` configured) for one cheap turn, and that
+program rotates its own grant. Never point a second daemon at a copy of a
+profile directory.
 
 **Captures.** An empty upstream stream is recorded with the request that caused
-it (§5.4), and `record` writes exchanges deliberately. A capture is not a
+it (`docs/proxy-behavior.md` §5.4), and `record` writes exchanges deliberately. A capture is not a
 credential, but it is conversation content: the system prompt, the messages, and
 whatever the tools read, file contents included. Captures are written beside the
 configuration rather than in a shared temporary directory, created `0600` in a

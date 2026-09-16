@@ -39,7 +39,7 @@ run *ARGS:
 record *ARGS:
     cargo run -p proxenos -- record {{ARGS}}
 
-# Probe live backend capabilities — spends real inference quota
+# Probe backend capabilities from the fixture corpus; --live spends real inference quota
 doctor *ARGS:
     cargo run -p proxenos -- doctor {{ARGS}}
 
@@ -51,7 +51,6 @@ setup:
     rustup component add rustfmt clippy
     cargo install cargo-nextest --locked
     cargo install cargo-insta --locked
-    git config core.hooksPath .githooks
 
 # Build optimized binaries
 build:
