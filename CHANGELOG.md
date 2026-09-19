@@ -4,6 +4,50 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.29.1]
+
+- **Translation stays faithful to what upstream sent and the client replays.**
+  Argument deltas name the item by its own id, not the call id, so every
+  fragment was dropped and a long Write streamed nothing until it finished. Two
+  upstream messages were joined into one text block and one input item, so the
+  replay never matched the baseline and the conversation restarted. Attachments
+  in a message carried as `user` were guarded on the inbound role and dropped
+  silently.
+- **A transport failure is answered as a status, and no state leaks between
+  turns.** An error before the response began reached the client as a 200
+  holding one error frame, and a fresh socket failing its first read neither
+  fell back nor became a status. A credential refused before dialling latched
+  the session to HTTP for life. A dropped client left a silent socket
+  generating until its next event. A refused turn no longer becomes the request
+  the next delta is judged against, a new session cannot be joined before it is
+  seeded, discovered deferred tools count in the estimate, and the window check
+  reads the same catalog as the rest of the turn.
+- **Control writes and reloads agree with what serves turns.** `tiers.set`
+  cleared a tier's missing mark once it was repaired, no longer refuses
+  unrelated tiers over a marked one, refuses a `[1m]` id, and checks another
+  account's write against that account. A reload no longer puts pins in force
+  without their consent and drops sessions on a credential the file no longer
+  names. A rename carries quota, tally and refusals with it. Turns tagged with
+  another account and `env --account` read the same document.
+- **One account's credential stays with its own provider and its own name.** An
+  unpinned turn resolved the selection twice, so a switch in between paired one
+  provider's headers with the other account's token; it resolves once. Callers
+  waiting on a refresh lock read what the first run wrote instead of running
+  the owning program again, and "usable" honors the margin a turn refuses
+  within. A key can no longer be renamed onto a profile's name. The selection
+  is written atomically. A piped key is trimmed, as the spec now says.
+- **`doctor --live` and the supervisor say what an operator can act on.** It no
+  longer sends an Anthropic credential to the Codex catalog host, and probes
+  the serving account's tier table. An install from a shell without TMPDIR no
+  longer bakes `/tmp` into the unit. `stop` names the right supervisor under
+  systemd and no longer tells a client-mode operator to `run` a daemon on
+  another machine. The herdr plugin shows quota for the account a pane was
+  launched with.
+- **The docs are restructured for reading and corrected against the source.**
+  A 403 mapped to the wrong error type, the socket method count, a SECURITY
+  claim about the daemon's authorization flow and the client-mode refusal list
+  are fixed.
+
 ## [0.29.0]
 
 - **`ultracode` is read as xhigh, the level it runs at.** It was taken as
