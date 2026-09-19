@@ -221,6 +221,8 @@ struct WsServer {
     url: String,
     received: Arc<Mutex<Vec<String>>>,
     connections: Arc<std::sync::atomic::AtomicUsize>,
+    /// Sockets whose client went away, counted when the server's read ends.
+    hangups: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// What the server does when a client connects.
@@ -239,6 +241,13 @@ enum WsBehavior {
     /// client abandons while the model is still generating. Every other frame
     /// gets the full replay.
     AbandonSecondTurn,
+    /// Read the first frame, then answer with a frame no client can parse —
+    /// a socket severed after the upgrade, which is neither a close nor a
+    /// clean end.
+    Garble,
+    /// Answer every generate frame with only `response.created`, then stay
+    /// silent — a long stretch of hidden reasoning with nothing on the wire.
+    Silent,
 }
 
 impl WsServer {
@@ -250,6 +259,8 @@ impl WsServer {
         let connections = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = Arc::clone(&connections);
         let generates = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hangups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hung_up = Arc::clone(&hangups);
 
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
@@ -257,6 +268,7 @@ impl WsServer {
                 let sink = Arc::clone(&sink);
                 let counter = Arc::clone(&counter);
                 let generates = Arc::clone(&generates);
+                let hung_up = Arc::clone(&hung_up);
                 tokio::spawn(async move {
                     let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await else {
                         return;
@@ -270,6 +282,16 @@ impl WsServer {
                                 reason: "policy".into(),
                             }))
                             .await;
+                        return;
+                    }
+
+                    if matches!(behavior, WsBehavior::Garble) {
+                        let _ = socket.next().await;
+                        use tokio::io::AsyncWriteExt;
+                        // A reserved opcode: a protocol error on the reader.
+                        let _ = socket.get_mut().write_all(&[0x8B, 0x00]).await;
+                        let _ = socket.get_mut().flush().await;
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         return;
                     }
 
@@ -304,7 +326,9 @@ impl WsServer {
                         }
 
                         let turn = generates.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        if matches!(behavior, WsBehavior::AbandonSecondTurn) && turn == 1 {
+                        let silent = matches!(behavior, WsBehavior::Silent)
+                            || (matches!(behavior, WsBehavior::AbandonSecondTurn) && turn == 1);
+                        if silent {
                             if let Some(first) = events.first() {
                                 let _ = socket
                                     .send(tokio_tungstenite::tungstenite::Message::Text(
@@ -328,6 +352,7 @@ impl WsServer {
                             break;
                         }
                     }
+                    hung_up.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 });
             }
         });
@@ -336,6 +361,7 @@ impl WsServer {
             url: format!("ws://{addr}"),
             received,
             connections,
+            hangups,
         }
     }
 
@@ -486,6 +512,147 @@ async fn a_policy_close_falls_back_without_losing_the_turn() {
     assert_eq!(payloads.len(), 3, "the turn was lost");
     assert_eq!(sent, Sent::Full);
     assert!(conduit.is_latched_to_http());
+}
+
+/// §4.1 — a fresh socket whose first read fails is a failed attempt: the
+/// turn goes over HTTP rather than reaching the client as a stream whose only
+/// event is an error.
+#[tokio::test]
+async fn a_fresh_socket_failing_its_first_read_falls_back() {
+    let ws = WsServer::start(Vec::new(), WsBehavior::Garble).await;
+
+    let http_events = stream_events();
+    let http = axum::Router::new().route(
+        "/responses",
+        axum::routing::post(move || {
+            let body = http_events
+                .iter()
+                .map(|event| format!("data: {event}\n\n"))
+                .collect::<String>();
+            async move {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    body,
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, http).await;
+    });
+
+    let conduit = Conduit::new(
+        Arc::new(HttpTransport::new(format!("http://{addr}/responses"))),
+        Some(Arc::new(WebSocketTransport::new(ws.url.clone()))),
+        "test-session".to_owned(),
+    );
+
+    let (events, sent) = conduit
+        .send(
+            &request(items(json!([message("hi")]))),
+            &Baseline::new(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("the turn should complete over HTTP");
+
+    let payloads: Vec<String> = events
+        .filter_map(|event| async move { event.ok() })
+        .collect()
+        .await;
+
+    assert_eq!(payloads.len(), 3, "the turn was lost");
+    assert_eq!(sent, Sent::Full);
+}
+
+/// Refuses every request, the way an unreadable profile or a credential of
+/// the wrong provider is refused before anything is dialled.
+struct Refusing;
+
+#[async_trait::async_trait]
+impl proxenos::auth::authorize::Authorizer for Refusing {
+    async fn authorize(
+        &self,
+        _account: Option<&str>,
+    ) -> Result<proxenos::auth::authorize::Authorization, proxenos::error::ProxyError> {
+        Err(proxenos::error::ProxyError::authentication(
+            "the profile could not be read",
+        ))
+    }
+}
+
+/// §4.2 — a credential refused on this side says nothing about whether the
+/// WebSocket works, so it is the turn's answer and the session is not latched.
+#[tokio::test]
+async fn a_refused_credential_does_not_latch_the_session() {
+    let ws = WsServer::start(stream_events(), WsBehavior::Replay).await;
+    let conduit = Conduit::new(
+        Arc::new(HttpTransport::new(
+            "http://127.0.0.1:9/responses".to_owned(),
+        )),
+        Some(Arc::new(
+            WebSocketTransport::new(ws.url.clone()).with_credentials(Arc::new(Refusing)),
+        )),
+        "test-session".to_owned(),
+    );
+
+    let refusal = conduit
+        .send(
+            &request(items(json!([message("hi")]))),
+            &Baseline::new(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .err()
+        .expect("the refusal is the turn's answer");
+
+    assert_eq!(
+        refusal.kind,
+        proxenos_core::anthropic::ErrorKind::AuthenticationError
+    );
+    assert!(!conduit.is_latched_to_http());
+}
+
+/// §5.3 — a client that goes away drops the upstream socket, even while the
+/// backend is sending nothing. Noticing only at the next event keeps the model
+/// generating for a turn nobody will read.
+#[tokio::test]
+async fn a_dropped_turn_closes_a_silent_socket() {
+    let ws = WsServer::start(stream_events(), WsBehavior::Silent).await;
+    let conduit = Conduit::new(
+        Arc::new(HttpTransport::new(
+            "http://127.0.0.1:9/responses".to_owned(),
+        )),
+        Some(Arc::new(WebSocketTransport::new(ws.url.clone()))),
+        "test-session".to_owned(),
+    );
+
+    let (mut events, _sent) = conduit
+        .send(
+            &request(items(json!([message("hi")]))),
+            &Baseline::new(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("the socket opens");
+    let _ = events.next().await;
+    drop(events);
+
+    for _ in 0..100 {
+        if ws.hangups.load(std::sync::atomic::Ordering::SeqCst) == 1 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the upstream socket outlived the client that asked for it");
 }
 
 /// Once latched, a session does not try the WebSocket again. Retrying every

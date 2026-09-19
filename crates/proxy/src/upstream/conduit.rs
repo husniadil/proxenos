@@ -157,6 +157,14 @@ impl Conduit {
                 Err(failure) => failure,
             };
 
+            // Every failure of the socket itself is `overloaded`. Anything else
+            // was decided here before a byte was sent — a credential refused,
+            // an account on the other provider — and says nothing about whether
+            // the WebSocket works, so it answers the turn and latches nothing.
+            if attempt.error.kind != proxenos_core::anthropic::ErrorKind::OverloadedError {
+                return Err(attempt.error);
+            }
+
             // A policy close or a refused handshake is not a failed turn. The
             // turn proceeds over HTTP, and this session does not try the
             // WebSocket again.
@@ -209,7 +217,7 @@ impl Conduit {
         // an empty stream would render as a turn where the model said nothing
         // — a silent failure standing exactly where the fallback belongs.
         let first = match connection.next_event().await {
-            Some(Err(error)) if reused => return Err(failed(error)),
+            Some(Err(error)) => return Err(failed(error)),
             Some(first) => first,
             None => {
                 return Err(failed(ProxyError::overloaded(

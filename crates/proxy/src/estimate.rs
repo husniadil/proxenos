@@ -44,6 +44,15 @@ pub struct Shape {
 }
 
 pub fn shape_of(request: &MessagesRequest) -> Shape {
+    shape_sending(request, &std::collections::BTreeSet::new())
+}
+
+/// The shape of what is actually sent, where `discovered` names the deferred
+/// tools this conversation has found and the request therefore carries (§2.5).
+pub fn shape_sending(
+    request: &MessagesRequest,
+    discovered: &std::collections::BTreeSet<String>,
+) -> Shape {
     let mut characters = 0usize;
     let mut items = 0u64;
 
@@ -59,7 +68,7 @@ pub fn shape_of(request: &MessagesRequest) -> Shape {
 
     for tool in &request.tools {
         // A withheld tool costs nothing, which is the point of withholding it.
-        if tool.defer_loading {
+        if tool.defer_loading && !discovered.contains(&tool.name) {
             continue;
         }
         items = items.saturating_add(1);
@@ -208,10 +217,20 @@ impl CalibratedEstimator {
     }
 }
 
-impl Estimator for CalibratedEstimator {
-    fn estimate(&self, request: &MessagesRequest) -> u64 {
+impl CalibratedEstimator {
+    /// The estimate for what is sent, counting the deferred tools this
+    /// conversation has discovered.
+    pub fn estimate_sending(
+        &self,
+        request: &MessagesRequest,
+        discovered: &std::collections::BTreeSet<String>,
+    ) -> u64 {
+        self.estimate_shape(shape_sending(request, discovered))
+    }
+
+    fn estimate_shape(&self, shape: Shape) -> u64 {
         #[allow(clippy::cast_precision_loss)]
-        let raw = Self::raw(shape_of(request)) as f64;
+        let raw = Self::raw(shape) as f64;
 
         let Ok(fit) = self.fit.lock() else {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -228,6 +247,12 @@ impl Estimator for CalibratedEstimator {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let corrected = corrected.max(1.0).round() as u64;
         corrected
+    }
+}
+
+impl Estimator for CalibratedEstimator {
+    fn estimate(&self, request: &MessagesRequest) -> u64 {
+        self.estimate_shape(shape_of(request))
     }
 
     /// Fold in one true count.

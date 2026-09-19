@@ -212,6 +212,10 @@ impl SessionStore {
         );
 
         let session = Arc::new(Session::new(session_key));
+        // Claimed under the lock: an empty baseline matches any input, so a
+        // concurrent first request would otherwise join this conversation
+        // before its turn got as far as seeding it (§3.2).
+        session.seed_if_unconfirmed(input);
         sessions.insert(0, Arc::clone(&session));
         sessions.truncate(CAPACITY);
         session

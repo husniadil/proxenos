@@ -271,3 +271,31 @@ fn the_tokenizer_does_not_calibrate() {
 
     assert_eq!(before, after);
 }
+
+/// §6.2 — only a *withheld* deferred tool costs nothing. Once discovered it is
+/// sent (§2.5), and leaving it out undercounts by its whole schema until the
+/// calibration catches up.
+#[test]
+fn a_discovered_deferred_tool_is_counted() {
+    let request: MessagesRequest = serde_json::from_value(serde_json::json!({
+        "model": "claude-sonnet-5",
+        "max_tokens": 64,
+        "messages": [{ "role": "user", "content": "hi" }],
+        "tools": [{
+            "name": "mcp__big__query",
+            "description": "a tool with a large schema",
+            "defer_loading": true,
+            "input_schema": { "type": "object", "description": "x".repeat(4000) },
+        }],
+    }))
+    .unwrap();
+
+    let withheld = proxenos::estimate::shape_sending(&request, &Default::default());
+    let discovered = proxenos::estimate::shape_sending(
+        &request,
+        &std::collections::BTreeSet::from(["mcp__big__query".to_owned()]),
+    );
+
+    assert_eq!(withheld, shape_of(&request));
+    assert!(discovered.characters > withheld.characters + 4000);
+}

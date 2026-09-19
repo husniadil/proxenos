@@ -161,7 +161,7 @@ pub fn pump(
     first: Result<String, ProxyError>,
     slot: std::sync::Arc<tokio::sync::Mutex<Option<PooledConnection>>>,
 ) -> EventStream {
-    let (sender, receiver) = futures::channel::mpsc::unbounded();
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
 
     let first_ends_turn = first
         .as_ref()
@@ -173,7 +173,7 @@ pub fn pump(
     {
         connection.seen_response_id = Some(id);
     }
-    let _ = sender.unbounded_send(first);
+    let _ = sender.send(first);
 
     tokio::spawn(async move {
         let mut healthy = false;
@@ -186,7 +186,17 @@ pub fn pump(
             return;
         }
 
-        while let Some(event) = connection.next_event().await {
+        loop {
+            // Waiting on the client as well as the socket: a backend reasoning
+            // in silence sends nothing to fail a send against, and the model
+            // would go on generating for a turn nobody reads (§5.3).
+            let event = tokio::select! {
+                event = connection.next_event() => event,
+                () = sender.closed() => return,
+            };
+            let Some(event) = event else {
+                break;
+            };
             let finished = match &event {
                 Ok(payload) => ends_turn(payload),
                 Err(_) => false,
@@ -198,7 +208,7 @@ pub fn pump(
                 connection.seen_response_id = Some(id);
             }
 
-            if sender.unbounded_send(event).is_err() {
+            if sender.send(event).is_err() {
                 // The client went away. Dropping the connection propagates the
                 // cancellation upstream rather than generating into nothing
                 // (§5.3).
@@ -219,7 +229,10 @@ pub fn pump(
         }
     });
 
-    receiver.boxed()
+    futures::stream::unfold(receiver, |mut receiver| async move {
+        receiver.recv().await.map(|event| (event, receiver))
+    })
+    .boxed()
 }
 
 /// Hand a connection back, unless the session already holds one.

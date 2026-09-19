@@ -331,7 +331,9 @@ async fn count_tokens(
 
     let probe = translate_request(&request, &TranslateOptions::default());
     let estimate = match state.sessions.lookup(&probe.input) {
-        Some(session) => session.estimator.estimate(&request),
+        Some(session) => session
+            .estimator
+            .estimate_sending(&request, &session.discovered()),
         None => crate::estimate::estimate_input_tokens(&request),
     };
 
@@ -771,7 +773,9 @@ async fn messages(
 
     // §6.2 — the estimate carried in `message_start`, corrected by everything
     // this conversation has already learned.
-    let estimate = session.estimator.estimate(&request);
+    let estimate = session
+        .estimator
+        .estimate_sending(&request, &session.discovered());
 
     // §7.2 — refuse a request the model cannot hold, before it is sent.
     //
@@ -782,9 +786,7 @@ async fn messages(
     // Only where the window is known. A model the catalog said nothing about is
     // unknown, not unlimited, and guessing one would refuse requests that would
     // have worked.
-    if let Some(window) = state
-        .catalog
-        .current()
+    if let Some(window) = catalog
         .get(&translated.model)
         .and_then(crate::catalog::Model::effective_window)
         && estimate > window
@@ -841,8 +843,6 @@ async fn messages(
         },
     };
 
-    session.remember_request(&translated);
-
     // An upstream refusal arriving before the response begins is not a
     // mid-stream failure. Nothing has been written to the client yet, so it can
     // still be a status — and it must be: a 200 whose body is one error frame
@@ -856,7 +856,16 @@ async fn messages(
     // than the first event on the wire.
     let mut rate_limit_headers: Vec<(&'static str, String)> = Vec::new();
     let (preamble, events) = peek_preamble(events).await;
-    for payload in preamble.iter().flatten() {
+    for event in &preamble {
+        // A transport failure here is as early as a refusal event, and as
+        // unreadable when framed behind a 200.
+        let payload = match event {
+            Ok(payload) => payload,
+            Err(error) => {
+                note_error(&state, account.as_deref(), error);
+                return error.clone().into_response();
+            }
+        };
         if let Some(error) = upstream_refusal(payload) {
             note_error(&state, account.as_deref(), &error);
             return error.into_response();
@@ -904,7 +913,7 @@ async fn messages(
             estimate,
         },
         Arc::clone(&session),
-        translated.input,
+        translated,
         state.capture.upstream(),
         Spend {
             usage: Arc::clone(&state.usage),
@@ -933,7 +942,7 @@ fn frame_stream(
     empty_stream_watch: Option<(crate::recorder::Recorder, Value)>,
     calibration: Calibration,
     session: Arc<crate::session::Session>,
-    sent_input: Vec<proxenos_core::responses::InputItem>,
+    sent: proxenos_core::responses::ResponsesRequest,
     record_upstream: bool,
     spend: Spend,
 ) -> impl futures::Stream<Item = Vec<proxenos_core::anthropic::Frame>> {
@@ -946,7 +955,7 @@ fn frame_stream(
         record_upstream,
         calibration,
         session,
-        sent_input,
+        sent,
         spend,
     };
 
@@ -1093,9 +1102,11 @@ struct StreamState {
     record_upstream: bool,
     calibration: Calibration,
     session: Arc<crate::session::Session>,
-    /// What this turn put on the wire, which together with what the server adds
-    /// becomes the baseline the next turn must extend (§4.3).
-    sent_input: Vec<proxenos_core::responses::InputItem>,
+    /// What this turn put on the wire. Its input together with what the server
+    /// adds becomes the baseline the next turn must extend, and the request
+    /// becomes the one the next delta is judged against — both only once a
+    /// response exists to have come from it (§4.3).
+    sent: proxenos_core::responses::ResponsesRequest,
     spend: Spend,
 }
 
@@ -1184,7 +1195,8 @@ impl StreamState {
             }
         }
 
-        self.session.advance(&self.sent_input, &returned);
+        self.session.remember_request(&self.sent);
+        self.session.advance(&self.sent.input, &returned);
     }
 
     /// §5.4 — a stream that completes having produced no content frames is

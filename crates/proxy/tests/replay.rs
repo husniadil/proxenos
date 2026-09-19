@@ -39,6 +39,8 @@ pub enum Behavior {
     /// Emit one event, then stall. The server records whether it ever got to
     /// send the rest, which is how cancellation is observed.
     Stall { sent_everything: Arc<Mutex<bool>> },
+    /// Answer 200 as an event stream, then break the body before any event.
+    Severed,
     /// Answer with a status and body instead of a stream.
     Failure {
         status: u16,
@@ -180,6 +182,21 @@ async fn handle(
                 )
             }));
 
+            let mut response = Response::new(Body::from_stream(stream));
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("text/event-stream"),
+            );
+            response
+        }
+        Behavior::Severed => {
+            // A comment first, so the status and headers are on the wire
+            // before the body breaks; it carries no event.
+            let stream =
+                stream::once(async { Ok(": open\n\n".to_owned()) }).chain(stream::once(async {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    Err(std::io::Error::other("connection reset"))
+                }));
             let mut response = Response::new(Body::from_stream(stream));
             response.headers_mut().insert(
                 header::CONTENT_TYPE,

@@ -29,6 +29,9 @@ struct Harness {
     usage: Arc<proxenos::usage::UsageStore>,
     /// The same store the control socket reads a refused credential from.
     refusals: Arc<proxenos::auth::refusals::Refusals>,
+    /// The conversations the ingress keeps, so a test can read what a turn
+    /// left on its session.
+    sessions: Arc<proxenos::session::SessionStore>,
 }
 
 impl Harness {
@@ -103,6 +106,7 @@ impl Harness {
             sessions: Arc::new(proxenos::session::SessionStore::new()),
             relay: None,
         };
+        let sessions = Arc::clone(&state.sessions);
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -117,6 +121,7 @@ impl Harness {
             switches,
             usage,
             refusals,
+            sessions,
         }
     }
 
@@ -2408,6 +2413,79 @@ async fn an_upstream_refusal_on_the_first_event_is_a_status() {
     );
 }
 
+/// §1.1 — a transport failure before the response starts is a status too.
+///
+/// The preamble can hold an error that is not an event: a body broken before
+/// its first byte. Skipping it answered 200 with one error frame and no
+/// `message_start`, the shape the client cannot read.
+#[tokio::test]
+async fn a_transport_failure_before_the_response_is_a_status() {
+    let harness = Harness::start(Behavior::Severed).await;
+
+    let response = harness
+        .post(
+            "/v1/messages",
+            json!({
+                "model": "claude-sonnet-5",
+                "max_tokens": 64,
+                "stream": true,
+                "messages": [{ "role": "user", "content": "hello" }],
+            }),
+        )
+        .await;
+
+    assert_ne!(
+        response.status(),
+        200,
+        "a failure before any content is a status"
+    );
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["type"], json!("error"));
+}
+
+/// §4.3 — a refused turn is not the previous request.
+///
+/// The non-input fields a delta is judged on are the ones that produced the
+/// previous response. A turn refused before it began produced none, so
+/// remembering it would judge the next delta against a request the backend
+/// never answered.
+#[tokio::test]
+async fn a_refused_turn_is_not_remembered_as_the_previous_request() {
+    let harness = Harness::start(Behavior::Events(vec![json!({
+        "type": "error",
+        "status": 429,
+        "error": { "message": "slow down", "type": "rate_limit_error" },
+    })]))
+    .await;
+
+    let response = harness
+        .post(
+            "/v1/messages",
+            json!({
+                "model": "claude-sonnet-5",
+                "max_tokens": 64,
+                "messages": [{ "role": "user", "content": "hello" }],
+            }),
+        )
+        .await;
+    assert_eq!(response.status(), 429);
+
+    let input: Vec<proxenos_core::responses::InputItem> = serde_json::from_value(json!([{
+        "type": "message",
+        "role": "user",
+        "content": [{ "type": "input_text", "text": "hello" }],
+    }]))
+    .unwrap();
+    let session = harness
+        .sessions
+        .lookup(&input)
+        .expect("the turn claimed a session");
+    assert!(
+        session.previous().0.is_none(),
+        "the refused request was remembered"
+    );
+}
+
 /// A refusal *after* content has been sent stays an SSE error frame, because
 /// the status is already gone.
 #[tokio::test]
@@ -2942,4 +3020,29 @@ async fn another_kind_of_failure_is_not_recorded_as_a_refusal() {
         .await;
 
     assert!(harness.refusals.get("serving").is_none());
+}
+
+/// §3.2 — a new session claims its conversation the moment it is created.
+///
+/// An empty baseline matches any input, so a second conversation arriving
+/// before the first one's turn got as far as seeding joined it: another
+/// conversation's discovered tools, calibration, and cache key.
+#[test]
+fn a_new_session_is_claimed_before_anyone_else_can_join_it() {
+    let sessions = proxenos::session::SessionStore::new();
+    let first: Vec<proxenos_core::responses::InputItem> = serde_json::from_value(json!([{
+        "type": "message", "role": "user",
+        "content": [{ "type": "input_text", "text": "one conversation" }],
+    }]))
+    .unwrap();
+    let second: Vec<proxenos_core::responses::InputItem> = serde_json::from_value(json!([{
+        "type": "message", "role": "user",
+        "content": [{ "type": "input_text", "text": "a different one" }],
+    }]))
+    .unwrap();
+
+    let a = sessions.resolve(&first);
+    let b = sessions.resolve(&second);
+
+    assert!(!Arc::ptr_eq(&a, &b), "two conversations share one session");
 }
