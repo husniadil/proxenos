@@ -43,6 +43,28 @@ pub fn config_path() -> std::path::PathBuf {
     config_dir().join("config.toml")
 }
 
+/// The configuration as it is on disk now, or the one this daemon started with
+/// where there is no file to read or it does not parse.
+///
+/// One reader for every question asked about an account that is not serving,
+/// so what `env --account` prints and what a turn tagged with that account is
+/// translated on cannot come from two different documents.
+pub fn on_disk_or(
+    path: Option<&std::path::Path>,
+    started: &std::sync::Arc<Config>,
+) -> std::sync::Arc<Config> {
+    let Some(document) = path.and_then(|path| std::fs::read_to_string(path).ok()) else {
+        return std::sync::Arc::clone(started);
+    };
+    match toml::from_str::<Config>(&document) {
+        Ok(config) => std::sync::Arc::new(config),
+        Err(error) => {
+            tracing::warn!(%error, "configuration on disk does not parse; using the one this daemon started with");
+            std::sync::Arc::clone(started)
+        }
+    }
+}
+
 /// Where the per-account token tally lives (§6.1).
 ///
 /// Daemon state rather than configuration, and deliberately not the credential

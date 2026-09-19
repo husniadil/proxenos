@@ -118,6 +118,9 @@ impl Snapshot {
 /// with.
 struct Accounts {
     config: Arc<crate::config::Config>,
+    /// The file `config` came from, read per call where named: a persisted
+    /// `tiers set --account` or a reload moves it, and `config` never moves.
+    path: Option<std::path::PathBuf>,
     /// Read per call rather than captured, so a switch reaches the next turn:
     /// which account is selected is what decides whether the mapping in force
     /// is already the answer.
@@ -157,7 +160,21 @@ impl Policy {
         config: Arc<crate::config::Config>,
         store: Arc<dyn crate::auth::store::AccountStore>,
     ) -> Self {
-        self.accounts = Some(Accounts { config, store });
+        self.accounts = Some(Accounts {
+            config,
+            path: None,
+            store,
+        });
+        self
+    }
+
+    /// Resolve another account's mapping from this file as it is now, the way
+    /// `env --account` reads it, rather than from the startup configuration.
+    #[must_use]
+    pub fn reading_configuration_at(mut self, path: std::path::PathBuf) -> Self {
+        if let Some(accounts) = self.accounts.as_mut() {
+            accounts.path = Some(path);
+        }
         self
     }
 
@@ -194,8 +211,7 @@ impl Policy {
         {
             return Ok(Arc::clone(current));
         }
-        let tiers = accounts
-            .config
+        let tiers = crate::config::on_disk_or(accounts.path.as_deref(), &accounts.config)
             .tiers_for(Some(name))
             .resolve(current.cross_account())?;
         Ok(Arc::new(Snapshot::new(

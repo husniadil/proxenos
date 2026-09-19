@@ -1150,7 +1150,17 @@ fn set_tiers(state: &ControlState, params: Option<&Value>) -> Result<Value, Prox
     }
 
     let snapshot = state.policy.get();
-    let mut tiers = snapshot.tiers().to_vec();
+    let (target, applies_now) = write_target(state, params)?;
+    // The mapping this change lands in: the one in force for the serving
+    // account, and that account's own as the file states it for any other.
+    // Checked against the wrong one, a write is refused over another account's
+    // conflict, or passes one that the next switch then refuses.
+    let mut tiers = match (&target, applies_now) {
+        (Some(account), false) => configuration(state)
+            .tiers_for(Some(account))
+            .resolve(snapshot.cross_account())?,
+        _ => snapshot.tiers().to_vec(),
+    };
 
     // Each value in the same two forms the configuration file takes: a model
     // id, or `{ model, account?, effort? }` — the account the tier is pinned
@@ -1202,6 +1212,14 @@ fn set_tiers(state: &ControlState, params: Option<&Value>) -> Result<Value, Prox
                 ProxyError::invalid_request(format!("tier `{name}`: {}", error.message))
             })?;
         }
+        // §7.2 — the rule the file is held to, so nothing written here is
+        // refused by the next start.
+        if model.contains("[1m]") {
+            return Err(ProxyError::invalid_request(format!(
+                "tier `{name}` maps to `{model}`, which carries a [1m] marker: the client \
+                 would assume a million-token window and never compact in time"
+            )));
+        }
 
         // The write-time half of the consent gate. The startup half refuses
         // the file; this refuses the socket, so a front-end cannot write what
@@ -1233,11 +1251,11 @@ fn set_tiers(state: &ControlState, params: Option<&Value>) -> Result<Value, Prox
         // Set by the operator, so the catalog may never overrule it — the same
         // meaning `defaulted` carries when the mapping comes from the file.
         entry.defaulted = false;
+        // A model named now is judged now; the mark it had is about the old one.
+        entry.missing = None;
         changes.push((name, model, pin, effort));
     }
     crate::config::check_effort_conflicts(&tiers)?;
-
-    let (target, applies_now) = write_target(state, params)?;
 
     // Only against a catalog that can speak for the account being changed. The
     // list in force is the serving account's menu (§7.0), and a mapping written
@@ -1252,12 +1270,19 @@ fn set_tiers(state: &ControlState, params: Option<&Value>) -> Result<Value, Prox
         // provider's. `validated_models` holds both exclusions, and holding
         // them in one place is what keeps this door and the daemon's start
         // from disagreeing about what is valid.
+        // The tiers being set, not the whole mapping: a tier already marked
+        // missing is refused at its turns, not here over somebody else's set.
+        let changed: Vec<crate::config::ResolvedTier> = tiers
+            .iter()
+            .filter(|tier| changes.iter().any(|(name, ..)| name.as_str() == tier.tier))
+            .cloned()
+            .collect();
         state
             .catalog
             .current()
             .validate(&crate::upstream::relay::validated_models(
                 &state.credentials.accounts()?,
-                &tiers,
+                &changed,
             ))?;
     }
 
@@ -1389,19 +1414,7 @@ fn write_target(
 /// running on it, and refusing a switch over a file the operator has half
 /// edited would be a worse answer than using what is in force.
 fn configuration(state: &ControlState) -> Arc<crate::config::Config> {
-    let Some(path) = state.config_path.as_ref() else {
-        return Arc::clone(&state.config);
-    };
-    let Ok(document) = std::fs::read_to_string(path) else {
-        return Arc::clone(&state.config);
-    };
-    match toml::from_str::<crate::config::Config>(&document) {
-        Ok(config) => Arc::new(config),
-        Err(error) => {
-            tracing::warn!(%error, "configuration on disk does not parse; using the one this daemon started with");
-            Arc::clone(&state.config)
-        }
-    }
+    crate::config::on_disk_or(state.config_path.as_deref(), &state.config)
 }
 
 /// The serving account, where its own section already states the thing about to
@@ -1741,6 +1754,8 @@ fn rename_account(state: &ControlState, params: Option<&Value>) -> Result<Value,
             return Err(error);
         }
     };
+    state.usage.rename(from, to);
+    state.refusals.rename(from, to);
 
     Ok(json!({
         "renamed": from,
@@ -2241,9 +2256,17 @@ fn reload_config(state: &ControlState) -> Result<Value, ProxyError> {
 
     let mut reloaded = Vec::new();
 
+    let serving_before = serving_identity(state);
     let (profiles, discovered) = crate::auth::accounts::profiles_of(&config);
     if state.credentials.set_profiles(profiles, discovered) {
         reloaded.push("profiles");
+    }
+    // A serving name now read from somewhere else is a switch in all but
+    // name, and hands over the same way `accounts.select` does: conversations
+    // bound to the old credential go, or they go on as it over their sockets.
+    if serving_identity(state) != serving_before {
+        state.usage.forget_unattributed();
+        state.sessions.clear();
     }
 
     // The mapping is resolved for whoever serves turns now — which the swap
@@ -2252,6 +2275,11 @@ fn reload_config(state: &ControlState) -> Result<Value, ProxyError> {
     // against, and the shared tables are the whole answer.
     let serving = serving_name(state);
     put_mapping_in_force(state, &config, serving.as_deref(), Absent::Mark)?;
+    // The consent the mapping was just resolved under, or `status` denies the
+    // pins now routing turns and the next pinned set is refused.
+    state
+        .policy
+        .set_cross_account(config.cross_account_policy());
     reloaded.push("tiers");
     reloaded.push("effort");
 
@@ -2268,6 +2296,28 @@ fn reload_config(state: &ControlState) -> Result<Value, ProxyError> {
         // discover it from a key it happened to edit.
         "needs_restart": NEEDS_RESTART,
     }))
+}
+
+/// What tells the serving account apart from another one called the same.
+#[derive(PartialEq)]
+struct ServingIdentity {
+    name: String,
+    provider: &'static str,
+    kind: &'static str,
+    account_id: Option<String>,
+    source: Option<String>,
+}
+
+fn serving_identity(state: &ControlState) -> Option<ServingIdentity> {
+    let accounts = state.credentials.accounts().ok()?;
+    let serving = accounts.into_iter().find(|account| account.selected)?;
+    Some(ServingIdentity {
+        name: serving.name,
+        provider: serving.provider,
+        kind: serving.kind,
+        account_id: serving.account_id,
+        source: serving.source,
+    })
 }
 
 /// Whether this account is a profile the operator wrote into `[profiles]`.
@@ -2379,7 +2429,9 @@ async fn refresh_usage(state: &ControlState) -> Result<Value, ProxyError> {
 pub const REFRESH_BUDGET: std::time::Duration = crate::auth::borrowed::poke::DEADLINE;
 
 /// What a row says about an account the budget ran out before.
-const NOT_ASKED: &str = "It was not asked to refresh: one sweep spends at most one client run,                          and an earlier account used it. Run the client once in that profile, or                          ask again.";
+const NOT_ASKED: &str = "It was not asked to refresh: one sweep spends at most one client run, \
+                         and an earlier account used it. Run the client once in that profile, or \
+                         ask again.";
 
 /// The sweep, with its budget stated rather than assumed.
 ///

@@ -121,6 +121,15 @@ impl Refusals {
         self.by_account.lock().ok()?.get(account).cloned()
     }
 
+    /// Carry a refusal to the account's new name; it is still that account's.
+    pub fn rename(&self, from: &str, to: &str) {
+        if let Ok(mut by_account) = self.by_account.lock()
+            && let Some(refusal) = by_account.remove(from)
+        {
+            by_account.insert(to.to_owned(), refusal);
+        }
+    }
+
     /// Drop what is held about an account that no longer exists.
     pub fn forget(&self, account: &str) {
         if let Ok(mut by_account) = self.by_account.lock() {

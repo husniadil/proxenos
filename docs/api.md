@@ -982,9 +982,10 @@ Serves this session as the named account without moving the selection. Consumed
 before the program name and never forwarded; it travels as
 `ANTHROPIC_AUTH_TOKEN=proxenos-account:<name>` (§1). The daemon reads the tag per
 turn, and it outranks a tier's pinned account. The environment is rendered for
-that account (§2.2), and stderr prints the account and the tier ids the launch
-carries, saying where a tier carries none. A name the store does not hold is
-refused at launch and again at the turn.
+that account (§2.2), and its turns are translated on the same reading: that
+account's mapping as `config.toml` states it at the turn. stderr prints the
+account and the tier ids the launch carries, saying where a tier carries none. A
+name the store does not hold is refused at launch and again at the turn.
 
 #### Why
 
@@ -1051,8 +1052,10 @@ stopped 0.2.0+ab12cd3; launchd started it again as 0.3.0+cd34ef5
   It waits three seconds for the daemon to go and twelve for anything to bring it
   back, returning as soon as it sees the answer.
 - Where the departing daemon's `supervised` was `true`, the sentence names
-  `launchd`; otherwise it says `something`. With nothing back it says nothing
-  started it again.
+  `launchd` on macOS and `systemd` on Linux, and `its supervisor` in client mode,
+  where the daemon runs elsewhere; otherwise it says `something`. With nothing
+  back it says nothing started it again, and in client mode that nothing here
+  can.
 - Builds are named unless the strings are identical, which with a build id (§3)
   means the same build.
 - A daemon predating the `shutdown` method cannot be stopped this way, and the
@@ -1758,9 +1761,10 @@ would write a file the daemon refuses to start from.
 No parameters. Re-reads `config.toml` and returns `reloaded`, `serving` (null
 where the file took the serving profile away), `remaining`, and `needs_restart`.
 
-- Applies `[profiles]`, the tier mapping and the effort ceiling. The mapping goes
-  through the checked path a switch takes, except a model the catalog lacks
-  **marks** its tier instead of refusing.
+- Applies `[profiles]`, the tier mapping with its `cross_account_tiers` consent,
+  and the effort ceiling. The mapping goes through the checked path a switch
+  takes, except a model the catalog lacks **marks** its tier instead of
+  refusing.
 - `needs_restart` is always `instructions`, `client`, `transport`, `upstream`,
   `port`.
 - Nothing is fetched. A conversation in flight keeps what it started with.

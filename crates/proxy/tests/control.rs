@@ -1845,6 +1845,70 @@ async fn setting_a_tier_to_a_model_the_catalog_lacks_is_refused() {
     );
 }
 
+/// A tier marked at startup is the operator's to repair with `tiers.set`.
+///
+/// Setting it to a model the catalog has clears the mark, so its turns are
+/// served again; and while it is still marked, setting another tier is judged
+/// on that tier alone rather than refused over the marked one's model.
+#[tokio::test]
+async fn setting_a_marked_tier_clears_the_mark_and_others_can_still_move() {
+    let harness = Harness::start().await;
+    let mut marked = tiers();
+    marked[3].model = "gpt-9-gone".to_owned();
+    marked[3].missing = Some("tier `fable` cannot serve: gpt-9-gone is not offered".to_owned());
+    harness.policy.set_tiers(marked);
+
+    harness
+        .call_with(
+            "tiers.set",
+            json!({ "tiers": { "sonnet": "gpt-5.4-mini" } }),
+        )
+        .await
+        .expect("another tier moves while fable is marked");
+
+    harness
+        .call_with(
+            "tiers.set",
+            json!({ "tiers": { "fable": "gpt-5.6-terra" } }),
+        )
+        .await
+        .expect("the marked tier is set to a model the catalog has");
+
+    let fable = harness
+        .policy
+        .get()
+        .tiers()
+        .iter()
+        .find(|tier| tier.tier == "fable")
+        .cloned()
+        .unwrap();
+    assert_eq!(fable.model, "gpt-5.6-terra");
+    assert_eq!(
+        fable.missing, None,
+        "the repaired tier still refuses its turns"
+    );
+}
+
+/// §7.2 — the socket refuses a `[1m]` id the same way the file does.
+///
+/// The catalog check does not always run (a relayed or pinned tier, another
+/// account's mapping), and a write it let through would be persisted where
+/// the next start refuses to load it.
+#[tokio::test]
+async fn setting_a_tier_to_a_one_million_marker_is_refused_by_name() {
+    let harness = Harness::start().await;
+
+    let error = harness
+        .call_with(
+            "tiers.set",
+            json!({ "tiers": { "opus": "gpt-5.6-terra[1m]" } }),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.contains("[1m] marker"), "{error}");
+}
+
 /// An unknown tier name is refused rather than quietly added.
 #[tokio::test]
 async fn setting_an_unknown_tier_name_is_refused() {
@@ -4115,6 +4179,68 @@ async fn a_rename_onto_an_occupied_section_is_refused() {
         vec!["alpha".to_owned()],
         "a refused rename must leave the store where it was"
     );
+}
+
+/// What the daemon holds about an account follows it to its new name. The
+/// quota and the tally are keyed by name, so a rename that moved only the
+/// store left `usage` blank for the account and its spend at zero.
+#[tokio::test]
+async fn a_rename_carries_what_the_daemon_measured_for_the_account() {
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add(&grant("acct_one", "a-one"), Some("alpha"))
+        .unwrap();
+    harness.usage.record_spend(Some("alpha"), 1200, 34);
+
+    harness
+        .call_with(
+            "accounts.rename",
+            json!({ "account": "alpha", "name": "bravo" }),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(harness.usage.spent_for("bravo").total(), 1234);
+    assert_eq!(harness.usage.spent_for("alpha").total(), 0);
+}
+
+/// A mapping written for another account is checked against that account's
+/// mapping. The serving one's efforts say nothing about it: judged against
+/// them, a valid write for `spare` was refused over a conflict only the
+/// serving account had.
+#[tokio::test]
+async fn a_write_for_another_account_is_checked_against_its_own_mapping() {
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add(&grant("acct_one", "a-one"), Some("work"))
+        .unwrap();
+    harness
+        .store
+        .add(&grant("acct_two", "a-two"), Some("spare"))
+        .unwrap();
+    harness.store.select("work").unwrap();
+    let mut serving = tiers();
+    serving[0].effort = Some("high".to_owned());
+    harness.policy.set_tiers(serving);
+    std::fs::write(
+        &harness.config_file,
+        "[accounts.spare.tiers]\nopus = \"gpt-5.4-mini\"\n",
+    )
+    .unwrap();
+
+    harness
+        .call_with(
+            "tiers.set",
+            json!({
+                "tiers": { "sonnet": { "model": "gpt-5.6-terra", "effort": "low" } },
+                "account": "spare",
+                "persist": true,
+            }),
+        )
+        .await
+        .expect("spare maps opus elsewhere, so nothing in its mapping conflicts");
 }
 
 /// Removing an account's ceiling reports the shared one, which is what applies.
@@ -6523,6 +6649,102 @@ async fn reloading_away_the_serving_profile_says_nothing_serves() {
          client, transport, upstream, port\nno account is serving turns — the one that was \
          is no longer declared; choose one with `proxenos accounts use NAME`"
     );
+}
+
+/// The file's consent to cross-account pins moves with the mapping it permits.
+/// Putting the pins in force while the live policy still said "refused" left
+/// `status` denying what was routing turns, and refused the next pinned set.
+#[tokio::test]
+async fn reloading_carries_the_files_cross_account_consent() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = reloadable(dir.path(), proxenos::config::Config::default());
+
+    std::fs::write(
+        dir.path().join("config.toml"),
+        format!("cross_account_tiers = true\n{}", config_declaring(&[])),
+    )
+    .unwrap();
+
+    proxenos::control::handler::dispatch(&state, "config.reload", None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        state.policy.get().cross_account(),
+        proxenos::config::CrossAccountTiers::Permitted
+    );
+}
+
+/// A reload that points the serving name at another credential hands over
+/// like a switch: the conversations bound to the old one are dropped, or they
+/// go on over sockets authenticated as a grant the file no longer names.
+#[tokio::test]
+async fn reloading_the_serving_profile_elsewhere_drops_its_conversations() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut started_with = proxenos::config::Config::default();
+    started_with.profiles.insert(
+        "work".to_owned(),
+        proxenos::config::ProfileConfig {
+            provider: Provider::Codex,
+            path: Some(std::path::PathBuf::from("/profiles/work")),
+        },
+    );
+    let state = reloadable(dir.path(), started_with);
+    state.credentials.select("work").unwrap();
+    let input: Vec<proxenos_core::responses::InputItem> = serde_json::from_value(json!([{
+        "type": "message",
+        "role": "user",
+        "content": [{ "type": "input_text", "text": "hello" }],
+    }]))
+    .unwrap();
+    state.sessions.resolve(&input);
+    assert_eq!(state.sessions.len(), 1);
+
+    std::fs::write(
+        dir.path().join("config.toml"),
+        config_declaring(&[("work", "/profiles/somebody-else")]),
+    )
+    .unwrap();
+    proxenos::control::handler::dispatch(&state, "config.reload", None)
+        .await
+        .unwrap();
+
+    assert_eq!(state.sessions.len(), 0);
+}
+
+/// A reload that leaves the serving account where it was keeps its
+/// conversations: dropping them costs every one a full upload for nothing.
+#[tokio::test]
+async fn reloading_around_the_serving_profile_keeps_its_conversations() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut started_with = proxenos::config::Config::default();
+    started_with.profiles.insert(
+        "work".to_owned(),
+        proxenos::config::ProfileConfig {
+            provider: Provider::Codex,
+            path: Some(std::path::PathBuf::from("/profiles/work")),
+        },
+    );
+    let state = reloadable(dir.path(), started_with);
+    state.credentials.select("work").unwrap();
+    let input: Vec<proxenos_core::responses::InputItem> = serde_json::from_value(json!([{
+        "type": "message",
+        "role": "user",
+        "content": [{ "type": "input_text", "text": "hello" }],
+    }]))
+    .unwrap();
+    state.sessions.resolve(&input);
+
+    std::fs::write(
+        dir.path().join("config.toml"),
+        config_declaring(&[("work", "/profiles/work"), ("spare", "/profiles/spare")]),
+    )
+    .unwrap();
+    proxenos::control::handler::dispatch(&state, "config.reload", None)
+        .await
+        .unwrap();
+
+    assert_eq!(state.sessions.len(), 1);
 }
 
 /// The mapping moves with the file, through the same validated path a switch

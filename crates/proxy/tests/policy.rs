@@ -126,3 +126,56 @@ fn the_routing_table_carries_the_pinned_account() {
         .collect();
     assert_eq!(routed, vec![("opus", None), ("haiku", Some("spare"))]);
 }
+
+/// api.md §2.3 — a turn tagged with another account is translated on the
+/// mapping `env --account` prints, which is the configuration on disk. The one
+/// the daemon started with goes stale at the first persisted `tiers set
+/// --account` or reload, and a pane launched after it would run on ids its own
+/// environment does not name.
+#[test]
+fn a_tagged_turn_reads_the_mapping_on_disk() {
+    use proxenos::auth::store::AccountStore;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(proxenos::auth::store::FileStore::new(
+        dir.path().join("credentials.json"),
+    ));
+    let grant = |account_id: &str| proxenos::auth::store::Credentials {
+        access_token: "token".to_owned(),
+        refresh_token: "refresh".to_owned(),
+        id_token: None,
+        account_id: Some(account_id.to_owned()),
+        expires_at: Some(u64::MAX / 2),
+    };
+    store.add(&grant("acct_serving"), None).unwrap();
+    store.add(&grant("acct_spare"), Some("spare")).unwrap();
+    store.select("acct_serving").unwrap();
+
+    let config_file = dir.path().join("config.toml");
+    let started: proxenos::config::Config =
+        toml::from_str("[accounts.spare.tiers]\nsonnet = \"gpt-5.6-terra\"\n").unwrap();
+    std::fs::write(
+        &config_file,
+        "[accounts.spare.tiers]\nsonnet = \"gpt-5.4-mini\"\n",
+    )
+    .unwrap();
+
+    let policy = Policy::new(Snapshot::new(
+        vec![tier("sonnet", "gpt-5.6-terra")],
+        None,
+        proxenos::config::CrossAccountTiers::Refused,
+    ))
+    .resolving_accounts_from(
+        Arc::new(started),
+        Arc::clone(&store) as Arc<dyn AccountStore>,
+    )
+    .reading_configuration_at(config_file);
+
+    let tagged = policy.snapshot_for(&policy.get(), Some("spare")).unwrap();
+    let sonnet = tagged
+        .tiers()
+        .iter()
+        .find(|tier| tier.tier == "sonnet")
+        .unwrap();
+    assert_eq!(sonnet.model, "gpt-5.4-mini");
+}

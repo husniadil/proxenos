@@ -1178,6 +1178,30 @@ impl UsageStore {
         self.write_quota(Some(account));
     }
 
+    /// Carry one account's figure, spend and profile to its new name.
+    ///
+    /// All three are keyed by name, and a rename is the same account: left
+    /// behind, `usage` reports nothing for it and the tally restarts at zero.
+    pub fn rename(&self, from: &str, to: &str) {
+        if let Ok(mut by_account) = self.by_account.lock()
+            && let Some(measured) = by_account.remove(from)
+        {
+            by_account.insert(to.to_owned(), measured);
+        }
+        if let Ok(mut spent) = self.spent.lock()
+            && let Some(entry) = spent.remove(from)
+        {
+            spent.insert(to.to_owned(), entry);
+        }
+        if let Ok(mut profiles) = self.profiles.lock()
+            && let Some(profile) = profiles.remove(from)
+        {
+            profiles.insert(to.to_owned(), profile);
+        }
+        self.write_tally(Some(from));
+        self.write_quota(Some(from));
+    }
+
     /// Forget the figure no account could be named for.
     ///
     /// What a select invalidates. Every named figure survives a select — it
