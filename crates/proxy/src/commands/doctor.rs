@@ -59,14 +59,17 @@ async fn live_transport() -> Result<Arc<dyn proxenos::upstream::Transport>> {
 /// the point — `web-fetch` asks on the haiku id specifically, so a live run
 /// answers whether the tier the client's secondary conversations land on is
 /// mapped to something that works.
-fn live_models() -> Result<Arc<Vec<ModelMapping>>> {
-    let config = Config::load()?;
-    let tiers = config.tiers.resolve(config.cross_account_policy())?;
+fn live_models(config: &Config, serving: Option<&str>) -> Result<Arc<Vec<ModelMapping>>> {
+    // The serving account's own mapping, pins included: what the daemon would
+    // translate these turns on, not the shared table beneath it.
+    let tiers = config
+        .tiers_for(serving)
+        .resolve(config.cross_account_policy())?;
     let by_tier = |name: &str| {
         tiers
             .iter()
             .find(|tier| tier.tier == name)
-            .map(|tier| tier.model.clone())
+            .map(|tier| (tier.model.clone(), tier.account.clone()))
     };
 
     let mut models: Vec<ModelMapping> = tiers
@@ -74,7 +77,7 @@ fn live_models() -> Result<Arc<Vec<ModelMapping>>> {
         .map(|tier| ModelMapping {
             requested: tier.tier.to_owned(),
             upstream: tier.model.clone(),
-            account: None,
+            account: tier.account.clone(),
             missing: None,
         })
         .collect();
@@ -85,11 +88,11 @@ fn live_models() -> Result<Arc<Vec<ModelMapping>>> {
         ("claude-sonnet-5", "sonnet"),
         ("claude-haiku-4-5-20251001", "haiku"),
     ] {
-        if let Some(upstream) = by_tier(tier) {
+        if let Some((upstream, account)) = by_tier(tier) {
             models.push(ModelMapping {
                 requested: requested.to_owned(),
                 upstream,
-                account: None,
+                account,
                 missing: None,
             });
         }
@@ -121,7 +124,14 @@ async fn missing_tiers() -> Option<String> {
                 Arc::new(proxenos::auth::grants::SystemClock),
             )),
         ));
-    let authorization = authorizer.authorize(None).await.ok()?;
+    // Both catalog hosts belong to the first provider; an Anthropic credential
+    // sent to either is a secret travelling somewhere it was never issued for.
+    let authorization = authorizer
+        .authorize(None)
+        .await
+        .ok()?
+        .for_provider(proxenos::auth::store::Provider::Codex)
+        .ok()?;
 
     // The endpoint the credential belongs to (§8.2). A key sent to the
     // subscription host is a secret travelling somewhere it was never issued
@@ -178,6 +188,8 @@ pub(crate) async fn doctor(args: cli::DoctorArgs) -> Result<()> {
         // spent, so it is resolved here rather than inside the probe.
         let store: Arc<dyn proxenos::auth::store::AccountStore> = Arc::new(account_store()?);
         let accounts = store.accounts().unwrap_or_default();
+        let config = Config::load()?;
+        let serving = serving_account(&store);
         let relay = proxenos::doctor::relay_account(&accounts, args.relay_account.as_deref()).map(
             |account| proxenos::doctor::LiveRelay {
                 endpoint: Config::load()
@@ -195,8 +207,8 @@ pub(crate) async fn doctor(args: cli::DoctorArgs) -> Result<()> {
                 &fixtures,
                 args.probe.as_deref(),
                 live_transport().await?,
-                live_models()?,
-                Config::load()?.effort_ceiling()?,
+                live_models(&config, serving.as_deref())?,
+                config.effort_ceiling_for(serving.as_deref())?,
                 relay,
             )
             .await?,

@@ -75,10 +75,19 @@ fn point_at(endpoint: &control::Endpoint, result: &mut serde_json::Value) -> boo
 /// Launching regardless would hand the operator a connection refused from a
 /// client that cannot explain it, so every call `exec` makes before starting
 /// anything fails with this one sentence.
-fn daemon_silent(error: proxenos::error::ProxyError) -> anyhow::Error {
+fn daemon_silent(
+    endpoint: &control::Endpoint,
+    error: proxenos::error::ProxyError,
+) -> anyhow::Error {
+    // `run` binds this machine, and client mode refuses it: the daemon it
+    // names is started where it runs.
+    let remedy = match endpoint.remote_url() {
+        Some(url) => format!("Start it on the machine {url} names."),
+        None => "Start it with `proxenos run`.".to_owned(),
+    };
     anyhow::anyhow!(
         "the daemon is not answering ({error}), so there is no configuration to start \
-         this with. Start it with `proxenos run`."
+         this with. {remedy}"
     )
 }
 
@@ -108,7 +117,7 @@ pub(crate) async fn exec(args: cli::ExecArgs) -> Result<()> {
     if let Some(account) = &args.account {
         let accounts = control::dial(&endpoint, "accounts", None)
             .await
-            .map_err(daemon_silent)?;
+            .map_err(|error| daemon_silent(&endpoint, error))?;
         let stored: Vec<&str> = accounts
             .get("accounts")
             .and_then(serde_json::Value::as_array)
@@ -138,7 +147,7 @@ pub(crate) async fn exec(args: cli::ExecArgs) -> Result<()> {
         .map(|account| serde_json::json!({ "account": account }));
     let mut result = control::dial(&endpoint, "env", params.clone())
         .await
-        .map_err(daemon_silent)?;
+        .map_err(|error| daemon_silent(&endpoint, error))?;
     // §2.3 — a client started from here talks to the daemon this CLI is
     // pointed at, whichever machine that is.
     point_at(&endpoint, &mut result);

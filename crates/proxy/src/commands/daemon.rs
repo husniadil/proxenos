@@ -56,6 +56,12 @@ pub(crate) async fn stop() -> Result<()> {
     // that can say what started it. What answers afterwards is a different
     // process, and on a supervised machine it is often not answering yet.
     let supervision = before.as_ref().and_then(|now| now.supervised);
+    // In client mode the daemon is on another machine, whose supervisor this
+    // one has no way to name, and whose restart no local verb can perform.
+    let remote = control::Endpoint::resolve()
+        .ok()
+        .is_some_and(|endpoint| endpoint.remote_url().is_some());
+    let supervisor = supervisor_named(remote);
 
     let result = match control::ask("shutdown", None).await {
         Ok(result) => result,
@@ -64,6 +70,12 @@ pub(crate) async fn stop() -> Result<()> {
         // cannot replace one older than the verb: that daemon has no method to
         // ask. Nothing here can fix it, so it says which situation this is.
         Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => {
+            if remote {
+                anyhow::bail!(
+                    "The running daemon is from an older build and has no `stop`. End that \
+                     process on the machine it runs on, and start it again there."
+                );
+            }
             anyhow::bail!(
                 "The running daemon is from an older build and has no `stop`. End that \
                  process however it was started, then `proxenos run`."
@@ -88,7 +100,10 @@ pub(crate) async fn stop() -> Result<()> {
     }
 
     if let Some(replacement) = seen {
-        println!("{}", report_replacement(&was, &replacement, supervision));
+        println!(
+            "{}",
+            report_replacement(&was, &replacement, supervision, supervisor)
+        );
         return Ok(());
     }
 
@@ -102,7 +117,14 @@ pub(crate) async fn stop() -> Result<()> {
     .await;
 
     match back {
-        Some(replacement) => println!("{}", report_replacement(&was, &replacement, supervision)),
+        Some(replacement) => println!(
+            "{}",
+            report_replacement(&was, &replacement, supervision, supervisor)
+        ),
+        None if remote => println!(
+            "stopped {was}; nothing started it again within {RESTART_WINDOW:?}, and nothing \
+             here can: start it on the machine it runs on"
+        ),
         None => println!("stopped {was}; nothing started it again within {RESTART_WINDOW:?}"),
     }
     Ok(())
@@ -120,9 +142,14 @@ pub(crate) async fn stop() -> Result<()> {
 ///
 /// The build is named unless the string is identical, which with a build id
 /// on it (§3) means the same build and not merely the same version.
-fn report_replacement(was: &str, now: &Answering, supervised: Option<bool>) -> String {
+fn report_replacement(
+    was: &str,
+    now: &Answering,
+    supervised: Option<bool>,
+    supervisor: &str,
+) -> String {
     let actor = if supervised == Some(true) {
-        "launchd"
+        supervisor
     } else {
         "something"
     };
@@ -130,6 +157,20 @@ fn report_replacement(was: &str, now: &Answering, supervised: Option<bool>) -> S
         format!("stopped {was}; {actor} started it again, on the same build")
     } else {
         format!("stopped {was}; {actor} started it again as {}", now.version)
+    }
+}
+
+/// The supervisor a supervised daemon answers to, by name where this machine
+/// is the one it runs on.
+fn supervisor_named(remote: bool) -> &'static str {
+    if remote {
+        "its supervisor"
+    } else if cfg!(target_os = "linux") {
+        "systemd"
+    } else if cfg!(target_os = "macos") {
+        "launchd"
+    } else {
+        "its supervisor"
     }
 }
 
@@ -495,7 +536,8 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
         .resolving_accounts_from(
             Arc::new(config.clone()),
             Arc::clone(&credentials) as Arc<dyn proxenos::auth::store::AccountStore>,
-        ),
+        )
+        .reading_configuration_at(proxenos::config::config_path()),
     );
 
     // One signal, shared: asking over the socket has to move this process, not
@@ -731,13 +773,24 @@ mod tests {
     fn a_supervised_stop_names_the_supervisor() {
         let now = answering_as("0.12.1", Some(4712), Some(true));
         assert_eq!(
-            report_replacement("0.12.0", &now, Some(true)),
+            report_replacement("0.12.0", &now, Some(true), "launchd"),
             "stopped 0.12.0; launchd started it again as 0.12.1"
         );
         assert_eq!(
-            report_replacement("0.12.1", &now, Some(true)),
+            report_replacement("0.12.1", &now, Some(true), "launchd"),
             "stopped 0.12.1; launchd started it again, on the same build"
         );
+    }
+
+    /// The supervisor is named for the platform the daemon runs on, which is
+    /// this one only outside client mode.
+    #[test]
+    fn the_supervisor_is_named_only_for_this_machine() {
+        assert_eq!(supervisor_named(true), "its supervisor");
+        #[cfg(target_os = "linux")]
+        assert_eq!(supervisor_named(false), "systemd");
+        #[cfg(target_os = "macos")]
+        assert_eq!(supervisor_named(false), "launchd");
     }
 
     /// Unsupervised, and unknown, keep the word that claims nothing. A
@@ -747,15 +800,15 @@ mod tests {
     fn an_unestablished_supervisor_is_not_named() {
         let now = answering_as("0.12.1", Some(4712), None);
         assert_eq!(
-            report_replacement("0.12.0", &now, None),
+            report_replacement("0.12.0", &now, None, "launchd"),
             "stopped 0.12.0; something started it again as 0.12.1"
         );
         assert_eq!(
-            report_replacement("0.12.0", &now, Some(false)),
+            report_replacement("0.12.0", &now, Some(false), "launchd"),
             "stopped 0.12.0; something started it again as 0.12.1"
         );
         assert_eq!(
-            report_replacement("0.12.1", &now, Some(false)),
+            report_replacement("0.12.1", &now, Some(false), "launchd"),
             "stopped 0.12.1; something started it again, on the same build"
         );
     }

@@ -5,7 +5,8 @@
 # context rather than an argument.
 #
 # Routing decides whose quota a pane shows. A pane whose claude process
-# carries this daemon's ANTHROPIC_BASE_URL spends the serving account; one
+# carries this daemon's ANTHROPIC_BASE_URL spends the account its launch was
+# tagged with (`exec --account`), or the serving account where it has none; one
 # with no base URL at all spends the operator's own Claude login, which is the
 # store's keychain-sourced anthropic account; anything else — a foreign proxy,
 # a custom CLAUDE_CONFIG_DIR — gets no tokens rather than a wrong figure.
@@ -51,7 +52,13 @@ daemon_url=$(proxenos env 2>/dev/null | sed -n 's/^export ANTHROPIC_BASE_URL=//p
 # Which stored account this pane spends.
 if [ -n "$base_url" ]; then
     [ "$base_url" = "$daemon_url" ] || clear_tokens
-    selector='.accounts[] | select(.serving)'
+    # A tagged launch spends its tag, whoever is serving.
+    tag=$(proxenos inspect "$pid" --json 2>/dev/null | jq -r '.account // empty')
+    if [ -n "$tag" ]; then
+        selector=".accounts[] | select(.account == \"$tag\")"
+    else
+        selector='.accounts[] | select(.serving)'
+    fi
 else
     # A direct pane on a custom profile spends a credential this daemon does
     # not meter. No figure beats a wrong one.

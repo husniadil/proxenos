@@ -2,8 +2,9 @@
 
 Quota bars for every claude pane in the [herdr](https://herdr.dev) sidebar,
 and the full per-account usage table in a popup. The bars show what the pane
-actually spends: a pane routed through the proxenos daemon shows the serving
-account's windows, and a pane talking to Anthropic directly shows the
+actually spends: a pane routed through the proxenos daemon shows the windows
+of the account its launch was tagged with (`exec --account`), or the serving
+account's where it has no tag, and a pane talking to Anthropic directly shows the
 operator's own Claude account, model-scoped windows included.
 
 ## Requires

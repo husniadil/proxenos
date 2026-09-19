@@ -19,7 +19,9 @@ fn supervisor_origin() -> Result<proxenos::supervisor::Origin> {
         program: std::env::current_exe().context("could not find this binary's own path")?,
         log: proxenos::config::config_dir().join("daemon.log"),
         proxenos_home: std::env::var_os("PROXENOS_HOME"),
-        tmpdir: std::env::var_os("TMPDIR"),
+        // What `control::default_path` dials, not the variable: with `TMPDIR`
+        // unset, macOS answers the per-user directory, not `/tmp`.
+        tmpdir: Some(std::env::temp_dir().into_os_string()),
     })
 }
 

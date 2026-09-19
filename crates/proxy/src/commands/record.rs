@@ -52,7 +52,8 @@ async fn surface(account: &str, out: Option<std::path::PathBuf>, only: Option<&s
         .with_context(|| format!("no account named `{account}` is stored"))?;
     if named.provider != proxenos::auth::store::Provider::Anthropic.as_str() {
         anyhow::bail!(
-            "`{account}` is stored for {}, and this captures the Messages surface of              anthropic; name an anthropic account (`proxenos accounts` lists them)",
+            "`{account}` is stored for {}, and this captures the Messages surface of \
+             anthropic; name an anthropic account (`proxenos accounts` lists them)",
             named.provider
         );
     }
