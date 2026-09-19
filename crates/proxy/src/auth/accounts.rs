@@ -215,13 +215,27 @@ impl AccountStore for Accounts {
                 "`{name}` has expired and {reason}"
             ))),
             poke::Decision::Ask => {
+                // Asked again under the lock: a caller that waited on another
+                // caller's run reads the grant that run wrote (§8.4).
+                let still_needed = || {
+                    self.borrowed
+                        .profile_and_grant(name)
+                        .is_ok_and(|(profile, grant)| {
+                            poke::decide(
+                                profile.provider,
+                                grant.credentials.expires_at,
+                                grant.refresh_token_expires_at,
+                                crate::auth::grants::SystemClock.now_unix(),
+                            ) == poke::Decision::Ask
+                        })
+                };
                 poke::under_lock(
                     self.client.as_ref(),
                     profile.provider,
                     &poke::lock_path(&self.locks, name),
                     profile.config_dir.as_deref(),
-                )?;
-                Ok(true)
+                    &still_needed,
+                )
             }
         }
     }
@@ -368,6 +382,13 @@ impl AccountStore for Accounts {
     fn rename(&self, from: &str, to: &str) -> Result<(), ProxyError> {
         if self.is_borrowed(from) {
             return self.borrowed.rename(from, to);
+        }
+        // A profile answers to its name first, so a key under it would be
+        // unreachable (§8.1).
+        if self.is_borrowed(to) {
+            return Err(ProxyError::invalid_request(format!(
+                "`{to}` is a borrowed profile declared under `[profiles]`; choose another name"
+            )));
         }
         let recorded = self.selection.recorded_account_id()?;
         self.keys.rename(from, to)?;

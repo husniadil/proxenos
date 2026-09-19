@@ -241,7 +241,10 @@ impl Authorizer for AccountAuthorizer {
         let provider = provider_named(Some(serving.provider));
 
         match self.store.credential_for(&serving.name)? {
-            Credential::Grant(_) => grant_authorization(&self.grants, provider),
+            // By name, not through the selection again: a switch landing
+            // between the two reads would pair this provider with the other
+            // account's token.
+            Credential::Grant(_) => grant_authorization(&self.grants_for(&serving.name), provider),
             Credential::Key(key) => Ok(key_authorization(&key, provider)),
         }
     }

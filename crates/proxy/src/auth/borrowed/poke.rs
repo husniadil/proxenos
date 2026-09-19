@@ -73,7 +73,9 @@ pub fn decide(
     refresh_token_expires_at: Option<u64>,
     now: u64,
 ) -> Decision {
-    if expires_at.is_some_and(|expiry| expiry > now) {
+    // The margin a turn refuses within, so "usable" here is usable there.
+    let margin = crate::auth::grants::EXPIRY_MARGIN_SECONDS;
+    if expires_at.is_some_and(|expiry| expiry > now.saturating_add(margin)) {
         return Decision::Usable;
     }
     // The same split for both providers: a lapsed access token is worth asking
@@ -218,13 +220,15 @@ impl Client for OwningClient {
 /// The lock is held for the whole run and released on the way out. A second
 /// caller blocks on it rather than starting its own client, and by the time it
 /// acquires the lock the first run has already written whatever it was going
-/// to write — so it reads the profile and finds it fresh.
+/// to write — so `still_needed`, asked again under the lock, finds the profile
+/// fresh and nothing runs. Returns whether the client was run.
 pub fn under_lock(
     client: &dyn Client,
     provider: Provider,
     lock_path: &Path,
     config_dir: Option<&Path>,
-) -> Result<(), ProxyError> {
+    still_needed: &dyn Fn() -> bool,
+) -> Result<bool, ProxyError> {
     if let Some(parent) = lock_path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| {
             ProxyError::authentication(format!("could not create {}: {error}", parent.display()))
@@ -242,11 +246,16 @@ pub fn under_lock(
         ProxyError::authentication(format!("could not lock {}: {error}", lock_path.display()))
     })?;
 
+    if !still_needed() {
+        let _ = file.unlock();
+        return Ok(false);
+    }
+
     let outcome = client.refresh(provider, config_dir);
     // Released either way: a lock held past a failure would make the next
     // caller wait for a run that is not happening.
     let _ = file.unlock();
-    outcome
+    outcome.map(|()| true)
 }
 
 /// Where one profile's lock lives, named by the profile it belongs to.

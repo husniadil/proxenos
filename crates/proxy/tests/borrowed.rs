@@ -1181,12 +1181,24 @@ const NOW: u64 = 1_800_000_000;
 #[test]
 fn a_usable_grant_is_not_poked() {
     assert_eq!(
-        poke::decide(Provider::Anthropic, Some(NOW + 60), None, NOW),
+        poke::decide(Provider::Anthropic, Some(NOW + 3600), None, NOW),
         poke::Decision::Usable
     );
     assert_eq!(
-        poke::decide(Provider::Codex, Some(NOW + 60), None, NOW),
+        poke::decide(Provider::Codex, Some(NOW + 3600), None, NOW),
         poke::Decision::Usable
+    );
+}
+
+/// "Usable" is the turn's own margin, not the bare expiry. A grant the turn
+/// already refuses as expired is worth asking about; answering "usable" there
+/// left `usage --refresh` running nothing while every turn was refused.
+#[test]
+fn a_grant_inside_the_turns_margin_is_worth_asking_about() {
+    let inside = NOW + proxenos::auth::grants::EXPIRY_MARGIN_SECONDS;
+    assert_eq!(
+        poke::decide(Provider::Anthropic, Some(inside), Some(NOW + 86_400), NOW),
+        poke::Decision::Ask
     );
 }
 
@@ -1271,6 +1283,7 @@ fn the_client_is_run_against_the_profile_under_a_lock() {
         Provider::Anthropic,
         &lock,
         Some(Path::new("/profiles/work")),
+        &|| true,
     )
     .expect("runs");
 
@@ -1293,6 +1306,7 @@ fn the_stock_profile_is_run_with_nothing_set() {
         Provider::Anthropic,
         &poke::lock_path(dir.path(), "personal"),
         None,
+        &|| true,
     )
     .expect("runs");
 
@@ -1329,12 +1343,61 @@ fn a_failed_run_releases_the_lock() {
     let dir = tempfile::tempdir().expect("tempdir");
     let lock = poke::lock_path(dir.path(), "work");
 
-    poke::under_lock(&Failing, Provider::Anthropic, &lock, None).expect_err("the run failed");
+    poke::under_lock(&Failing, Provider::Anthropic, &lock, None, &|| true)
+        .expect_err("the run failed");
 
     // The proof it was released: the next call takes it without blocking.
     let client = Arc::new(FakeClient::default());
-    poke::under_lock(client.as_ref(), Provider::Anthropic, &lock, None).expect("the lock was free");
+    poke::under_lock(client.as_ref(), Provider::Anthropic, &lock, None, &|| true)
+        .expect("the lock was free");
     assert_eq!(client.runs.lock().expect("not poisoned").len(), 1);
+}
+
+/// §8.4 — ten callers at once produce one client: the rest wait, then find the
+/// grant it wrote fresh and run nothing.
+#[test]
+fn callers_waiting_on_the_lock_do_not_run_the_client_again() {
+    struct Slow {
+        runs: std::sync::atomic::AtomicUsize,
+        fresh: Arc<std::sync::atomic::AtomicBool>,
+    }
+    impl poke::Client for Slow {
+        fn refresh(
+            &self,
+            _provider: Provider,
+            _config_dir: Option<&Path>,
+        ) -> Result<(), ProxyError> {
+            self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            self.fresh.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let lock = poke::lock_path(dir.path(), "work");
+    let fresh = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let client = Arc::new(Slow {
+        runs: std::sync::atomic::AtomicUsize::new(0),
+        fresh: Arc::clone(&fresh),
+    });
+
+    let callers: Vec<_> = (0..4)
+        .map(|_| {
+            let (client, lock, fresh) = (Arc::clone(&client), lock.clone(), Arc::clone(&fresh));
+            std::thread::spawn(move || {
+                poke::under_lock(client.as_ref(), Provider::Anthropic, &lock, None, &|| {
+                    !fresh.load(std::sync::atomic::Ordering::SeqCst)
+                })
+                .expect("no caller fails")
+            })
+        })
+        .collect();
+    for caller in callers {
+        caller.join().expect("no caller panics");
+    }
+
+    assert_eq!(client.runs.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 // --- what a borrowed grant puts on the wire -------------------------------
@@ -2408,6 +2471,10 @@ async fn a_spent_budget_asks_nothing_and_says_why() {
         assert_eq!(row["known"], serde_json::json!(false));
         let detail = row["detail"].as_str().expect("a sentence");
         assert!(detail.contains("not asked to refresh"), "{detail}");
+        assert!(
+            !detail.contains("  "),
+            "a sentence with a run of spaces: {detail}"
+        );
     }
 }
 

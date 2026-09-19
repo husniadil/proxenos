@@ -90,7 +90,14 @@ impl Selection {
                 ))
             })?;
         }
-        std::fs::write(&self.path, body).map_err(|error| {
+        // Written aside and renamed into place: a turn reading the selection
+        // while `accounts use` writes it would otherwise find an empty file and
+        // be refused as though the store were broken.
+        let pending = self.path.with_extension("json.pending");
+        std::fs::write(&pending, body).map_err(|error| {
+            ProxyError::authentication(format!("could not write {}: {error}", pending.display()))
+        })?;
+        std::fs::rename(&pending, &self.path).map_err(|error| {
             ProxyError::authentication(format!("could not write {}: {error}", self.path.display()))
         })
     }

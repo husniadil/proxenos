@@ -2210,8 +2210,9 @@ file edited by hand gets no handover.
 
 #### A key is read from stdin, under a name the operator gives
 
-When stdin is a terminal, a prompt goes to stderr first. A piped key is read
-byte-for-byte as sent.
+When stdin is a terminal, a prompt goes to stderr first. A piped key is read as
+sent, with surrounding whitespace trimmed: the newline `echo` adds is never part
+of a key.
 
 ##### Why
 

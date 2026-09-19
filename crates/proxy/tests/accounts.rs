@@ -447,6 +447,61 @@ fn the_binary_refuses_to_rename_a_borrowed_profile() {
     assert!(listed.contains("acct_legacy"), "{listed}");
 }
 
+/// §8.1 — a key cannot be renamed onto a borrowed profile's name.
+///
+/// The profile answers to that name first, so the key would become
+/// unreachable: not selectable, not removable, and its section moved onto the
+/// profile's.
+#[test]
+fn the_binary_refuses_to_rename_a_key_onto_a_profile() {
+    use std::io::Write;
+
+    let daemon = Daemon::start(&grant("acct_legacy"));
+    let home = daemon.dir.path().join("home");
+
+    let mut login = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
+        .args(["accounts", "add-key", "billing", "--provider", "codex"])
+        .env("PROXENOS_HOME", &home)
+        .env("TMPDIR", daemon.dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the binary should run");
+    login
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(b"sk-probe-4e17-not-in-argv\n")
+        .unwrap();
+    assert!(login.wait_with_output().unwrap().status.success());
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
+        .args(["accounts", "rename", "billing", "acct_legacy"])
+        .env("PROXENOS_HOME", &home)
+        .env("HOME", daemon.dir.path())
+        .env("TMPDIR", daemon.dir.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "a key cannot take a profile's name: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let listed = daemon.run(&["accounts"]);
+    assert!(
+        listed.contains("billing"),
+        "the key keeps its name: {listed}"
+    );
+}
+
 /// §8 — a key is stored without a browser flow, and never through argv.
 ///
 /// The secret arrives on stdin because non-negotiable #7 puts credentials out
