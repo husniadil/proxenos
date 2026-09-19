@@ -312,10 +312,15 @@ fn translate_message(message: &Message) -> Vec<InputItem> {
 
     for block in message.content.blocks() {
         match block {
-            ContentBlock::Text { text } => parts.push(match role {
-                ItemRole::User => ContentPart::InputText { text },
-                ItemRole::Assistant => ContentPart::OutputText { text },
-            }),
+            ContentBlock::Text { text } => match role {
+                ItemRole::User => parts.push(ContentPart::InputText { text }),
+                // §3.3 — one text block is one upstream message, which is how
+                // the baseline holds it; joined, the replay never matches.
+                ItemRole::Assistant => {
+                    flush(&mut items, role, &mut parts);
+                    parts.push(ContentPart::OutputText { text });
+                }
+            },
             ContentBlock::ToolUse { id, name, input } => {
                 flush(&mut items, role, &mut parts);
                 items.push(InputItem::FunctionCall {
@@ -338,12 +343,12 @@ fn translate_message(message: &Message) -> Vec<InputItem> {
             }
             // Attachments are dropped in assistant messages: assistant content
             // is `output_text` only.
-            ContentBlock::Image { source } if message.role == Role::User => {
+            ContentBlock::Image { source } if role == ItemRole::User => {
                 if let Some(part) = image_part(&source) {
                     parts.push(part);
                 }
             }
-            ContentBlock::Document { source } if message.role == Role::User => {
+            ContentBlock::Document { source } if role == ItemRole::User => {
                 if let Some(part) = document_part(&source) {
                     parts.push(part);
                 }

@@ -323,6 +323,82 @@ fn streamed_arguments_are_not_repeated_by_the_done_item() {
     assert_eq!(deltas, 1);
 }
 
+/// §5.1 — argument deltas name the item by its own `id`, which differs from
+/// the `call_id` the block is announced under. Matching on `call_id` alone
+/// drops every fragment and leaves only the done item's copy.
+#[test]
+fn argument_deltas_are_matched_by_the_item_id_not_the_call_id() {
+    let frames = run(&[
+        json!({ "type": "response.created", "response": { "id": "resp_1" } }),
+        json!({
+            "type": "response.output_item.added",
+            "item": { "type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "Read" },
+        }),
+        json!({
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_1",
+            "delta": "{\"path\":",
+        }),
+        json!({
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_1",
+            "delta": "\"/etc/hosts\"}",
+        }),
+        json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "Read",
+                "arguments": "{\"path\":\"/etc/hosts\"}",
+            },
+        }),
+        json!({ "type": "response.completed", "response": { "id": "resp_1" } }),
+    ]);
+
+    let deltas: Vec<&Value> = frames
+        .iter()
+        .filter(|frame| frame["type"] == "content_block_delta")
+        .map(|frame| &frame["delta"]["partial_json"])
+        .collect();
+    assert_eq!(deltas, vec!["{\"path\":", "\"/etc/hosts\"}"]);
+    assert_eq!(frames[1]["content_block"]["id"], json!("call_1"));
+}
+
+/// §3.3 — one upstream message is one text block. Joining two back-to-back
+/// messages into one block leaves the client replaying one item where the
+/// baseline holds two, and the conversation restarts on the next turn.
+#[test]
+fn each_upstream_message_is_its_own_text_block() {
+    let message_done = |text: &str| {
+        json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{ "type": "output_text", "text": text }],
+            },
+        })
+    };
+    let frames = run(&[
+        json!({ "type": "response.created", "response": { "id": "resp_1" } }),
+        json!({ "type": "response.output_text.delta", "delta": "A" }),
+        message_done("A"),
+        json!({ "type": "response.output_text.delta", "delta": "B" }),
+        message_done("B"),
+        json!({ "type": "response.completed", "response": { "id": "resp_1" } }),
+    ]);
+
+    let text_blocks = frames
+        .iter()
+        .filter(|frame| {
+            frame["type"] == "content_block_start" && frame["content_block"]["type"] == "text"
+        })
+        .count();
+    assert_eq!(text_blocks, 2);
+}
+
 /// §5.1 — an incomplete response stops for `max_tokens`.
 #[test]
 fn an_incomplete_response_stops_for_max_tokens() {

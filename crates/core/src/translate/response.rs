@@ -41,9 +41,11 @@ enum OpenBlock {
     Text,
     Thinking,
     /// A call whose header has been emitted. Holds the upstream item id so
-    /// argument deltas can be matched to it.
+    /// argument deltas can be matched to it, and the call id the block was
+    /// announced under so the completed item can.
     ToolUse {
         item_id: String,
+        call_id: String,
         /// Whether any argument fragment has been forwarded. The completed item
         /// repeats the full arguments, and emitting both leaves the client
         /// parsing the same JSON twice.
@@ -255,13 +257,16 @@ impl ResponseTranslator {
         let Some(partial_json) = text_field(event, "delta") else {
             return;
         };
-        let OpenBlock::ToolUse { item_id, .. } = &self.open else {
+        let OpenBlock::ToolUse {
+            item_id, call_id, ..
+        } = &self.open
+        else {
             return;
         };
 
         // Only forward fragments belonging to the block that is open.
         let target = text_field(event, "item_id").or_else(|| text_field(event, "call_id"));
-        if target.is_some_and(|target| &target != item_id) {
+        if target.is_some_and(|target| &target != item_id && &target != call_id) {
             return;
         }
 
@@ -287,6 +292,11 @@ impl ResponseTranslator {
             }
             Some("message") => {
                 self.collect_message_citations(item);
+                // §3.3 — the next message opens its own block, so the client
+                // replays one item per message, as the baseline holds them.
+                if matches!(self.open, OpenBlock::Text) {
+                    self.close_block(frames);
+                }
                 return;
             }
             Some("reasoning") => {
@@ -309,7 +319,7 @@ impl ResponseTranslator {
         let call_id = call_id_of(item);
         let already_open = matches!(
             &self.open,
-            OpenBlock::ToolUse { item_id, .. } if item_id == &call_id
+            OpenBlock::ToolUse { call_id: open, .. } if open == &call_id
         );
 
         if !already_open {
@@ -354,7 +364,8 @@ impl ResponseTranslator {
             },
         });
         self.open = OpenBlock::ToolUse {
-            item_id: call_id,
+            item_id: text_field(item, "id").unwrap_or_else(|| call_id.clone()),
+            call_id,
             streamed_arguments: false,
         };
     }

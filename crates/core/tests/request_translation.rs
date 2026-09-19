@@ -1258,3 +1258,63 @@ fn no_working_budget_leaves_no_trace() {
 
     assert_eq!(out["instructions"], json!("You are Claude Code."));
 }
+
+/// §3.3 — each assistant text block is its own message item, the way upstream
+/// returned it. Two blocks joined into one item never match the two items the
+/// baseline holds, and every turn after is a full send on a new session.
+#[test]
+fn each_assistant_text_block_is_its_own_message() {
+    let translated = translate(json!({
+        "model": "claude-sonnet-5",
+        "max_tokens": 64,
+        "messages": [
+            { "role": "user", "content": "go" },
+            {
+                "role": "assistant",
+                "content": [
+                    { "type": "text", "text": "A" },
+                    { "type": "text", "text": "B" },
+                ],
+            },
+            { "role": "user", "content": "next" },
+        ],
+    }));
+
+    let assistant: Vec<&Value> = translated["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["role"] == "assistant")
+        .collect();
+    assert_eq!(assistant.len(), 2, "{translated}");
+    assert_eq!(assistant[0]["content"][0]["text"], json!("A"));
+    assert_eq!(assistant[1]["content"][0]["text"], json!("B"));
+}
+
+/// §2.1 — a message with any other role is carried as a `user` item, and its
+/// attachments with it. Guarding on the inbound role dropped them silently.
+#[test]
+fn an_other_role_message_keeps_its_image() {
+    let translated = translate(json!({
+        "model": "claude-sonnet-5",
+        "max_tokens": 64,
+        "messages": [{
+            "role": "developer",
+            "content": [{
+                "type": "image",
+                "source": { "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo=" },
+            }],
+        }],
+    }));
+
+    assert_eq!(
+        translated["input"][0]["role"],
+        json!("user"),
+        "{translated}"
+    );
+    assert_eq!(
+        translated["input"][0]["content"][0]["type"],
+        json!("input_image"),
+        "{translated}"
+    );
+}
