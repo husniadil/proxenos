@@ -126,7 +126,9 @@ proxenos exec claude --model gpt-5.6-sol --effort high
 What is refused in client mode, because it acts on the daemon's own machine:
 `run`, `start`, `accounts login`, `accounts add-key`, `supervisor`. Each says so
 and says to run it on the daemon's host. `stop` works and stops the daemon
-**for everyone on that machine**, so ask the operator first. `proxenos settings`
+**for everyone on that machine**, so ask the operator first. `update --version
+X.Y.Z` works the same way: it installs that release on the daemon's machine and
+restarts the daemon, so ask first too. `proxenos settings`
 is refused whenever a token is set, because the document would carry it; use
 `proxenos exec`.
 

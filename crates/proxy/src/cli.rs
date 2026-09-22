@@ -57,6 +57,13 @@ pub enum Command {
     /// the daemon again belongs to whatever supervises it. What happened is
     /// reported from what was observed afterwards.
     Stop,
+    /// Ask the running daemon to replace its binary with a published release,
+    /// then stop so its supervisor starts the new one.
+    ///
+    /// Sent to whichever daemon this CLI dials, so a daemon on another machine
+    /// is updated the same way as this one. The daemon refuses unless it runs
+    /// from the directory `install.sh` installs into and under its supervisor.
+    Update(UpdateArgs),
     /// The tier mapping: read it, or point one tier at a model.
     ///
     /// The socket has carried `tiers` and `tiers.set` since v0.1, and until
@@ -97,6 +104,16 @@ pub enum Command {
     /// matched this project's own `proxenos-account:` spelling by hand, which
     /// is knowledge that belongs on this side of the line.
     Inspect(InspectArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UpdateArgs {
+    /// The release to install, without the leading `v`, e.g. 0.31.0.
+    #[arg(long, value_name = "VERSION")]
+    pub version: String,
+    /// Print the daemon's answer as one JSON document instead of the line.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, clap::Args)]

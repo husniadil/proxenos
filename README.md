@@ -152,7 +152,13 @@ proxenos supervisor install    # a launchd agent on macOS, a systemd user unit o
 proxenos supervisor status
 proxenos status                # connection, serving account, tier mapping
 proxenos stop                  # under a supervisor, replaces the daemon with the build on disk
+proxenos update --version 0.31.0   # under a supervisor, installs that release and restarts on it
 ```
+
+`update` works on a daemon installed by `install.sh` into `~/.local/bin` and
+kept by the supervisor. It checks the release against its `SHA256SUMS` and
+keeps the old binary as `proxenos.previous`. With `PROXENOS_DAEMON` set it
+updates that machine's daemon.
 
 ## Reach it from another machine
 
@@ -184,8 +190,8 @@ so put a private overlay network or a reverse proxy in front. See
   their output before suggesting a fix.
 - **Do not spend quota unasked.** `doctor --live`, `usage --refresh`, and
   `record upstream` / `record surface` contact the providers.
-- **Ask the person first** before `proxenos stop`, `accounts use`, `accounts
-  remove`, or anything with `--persist`. They affect every session on the
+- **Ask the person first** before `proxenos stop`, `proxenos update`,
+  `accounts use`, `accounts remove`, or anything with `--persist`. They affect every session on the
   machine.
 - **Never put a key or token in argv.** Keys go on stdin; tokens go in
   `PROXENOS_TOKEN_FILE`.

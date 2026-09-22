@@ -32,7 +32,8 @@ The current release is **v0.29.0**. Shipped, at the level of capability:
 - **Operations.** `start`/`stop`, a supervisor on launchd and systemd user
   services, `doctor` against the replay corpus or live, `record` for ingress,
   upstream, and surface captures, and release binaries with a verified install
-  script.
+  script. A supervised daemon installed by that script can `update` itself to a
+  release, from its own machine or another.
 
 ## Everything here is verifiable offline
 

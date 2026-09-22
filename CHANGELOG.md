@@ -4,6 +4,21 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **A daemon can update itself: `proxenos update --version X.Y.Z`, the
+  `update` control method.** It downloads that release, checks it against the
+  release's `SHA256SUMS`, confirms the new binary states the version, and
+  renames it over its own, keeping the old one as `proxenos.previous`. Then it
+  stops and its supervisor starts the new one. It works over `PROXENOS_DAEMON`,
+  so a daemon on another machine is updated without a shell there. It refuses a
+  daemon that is not supervised, one not running from `~/.local/bin` where
+  `install.sh` puts it, and a version that is not newer.
+- **A stop over HTTP stops the daemon.** `shutdown` over `POST /control`
+  answered `stopping` and released nothing, so the daemon kept serving until
+  the next request on its local socket, which then stopped it. It is now
+  released once the answer is sent, as over the socket.
+
 ## [0.30.0]
 
 - **The default tiers move to the newest generation: fable `gpt-6-astra`,

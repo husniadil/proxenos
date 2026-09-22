@@ -83,7 +83,7 @@ pub mod codes {
 /// Listed as a constant rather than left implicit so the CLI, the tests, and
 /// any future front-end all agree on the surface, and so removing one is a
 /// visible change.
-pub const METHODS: [&str; 19] = [
+pub const METHODS: [&str; 20] = [
     "status",
     "shutdown",
     "accounts",
@@ -103,4 +103,5 @@ pub const METHODS: [&str; 19] = [
     "record.start",
     "record.stop",
     "config.reload",
+    "update",
 ];

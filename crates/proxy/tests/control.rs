@@ -2445,6 +2445,41 @@ async fn a_stop_answers_first_and_releases_the_run_loop_after() {
         .expect("the run loop should be released once the answer has been written");
 }
 
+/// `update` refuses what it cannot do before touching anything, and a refused
+/// update arms no stop: a daemon that went down after saying no would be the
+/// worst of both.
+#[tokio::test]
+async fn an_update_this_daemon_cannot_do_is_refused_and_it_keeps_running() {
+    let harness = Harness::start().await;
+
+    let refused = harness.call_with("update", json!({})).await.unwrap_err();
+    assert!(refused.contains("needs"), "{refused}");
+
+    let refused = harness
+        .call_with("update", json!({ "version": "v999.0.0" }))
+        .await
+        .unwrap_err();
+    assert!(refused.contains("without the leading `v`"), "{refused}");
+
+    // Supervision is not established in this harness, which is the first
+    // refusal a well-formed request meets.
+    let refused = harness
+        .call_with("update", json!({ "version": "999.0.0" }))
+        .await
+        .unwrap_err();
+    assert!(
+        refused.contains("not running under its supervisor"),
+        "{refused}"
+    );
+
+    let waited = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        harness.shutdown.wait(),
+    )
+    .await;
+    assert!(waited.is_err(), "a refused update stops nothing");
+}
+
 /// Until it is asked for, nothing is armed. A run loop released by anything
 /// other than an explicit stop would be a daemon that exits on its own.
 #[tokio::test]

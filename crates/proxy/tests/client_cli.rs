@@ -52,6 +52,12 @@ fn result_for(method: &str, request: &serde_json::Value) -> serde_json::Value {
             "account": serde_json::Value::Null,
             "detail": "in effect until the daemon stops; the configuration file is unchanged",
         }),
+        "update" => serde_json::json!({
+            "from": "0.30.0+6511232",
+            "to": "0.31.0+abc1234",
+            "path": "/home/me/.local/bin/proxenos",
+            "restarting": true,
+        }),
         _ => serde_json::json!({}),
     }
 }
@@ -519,6 +525,29 @@ fn stop_is_allowed_in_client_mode() {
         "stop should have asked: {:?}",
         daemon.methods()
     );
+}
+
+/// `update` goes to the daemon this CLI dials, like `stop`, with the version
+/// as its parameter, and `--json` prints the daemon's answer.
+#[test]
+fn update_asks_the_remote_daemon_and_prints_its_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = StandIn::start();
+
+    let output = run(
+        dir.path(),
+        Some(&daemon.url),
+        &["update", "--version", "0.31.0", "--json"],
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "update failed: {stderr}");
+    assert_eq!(
+        daemon.request("update")["params"],
+        serde_json::json!({ "version": "0.31.0" })
+    );
+    let printed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(printed, result_for("update", &serde_json::Value::Null));
 }
 
 /// A URL with a user name or password in it is refused before anything is

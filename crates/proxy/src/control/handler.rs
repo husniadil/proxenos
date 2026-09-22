@@ -194,11 +194,103 @@ pub async fn dispatch(
         "effort.set" => set_effort(state, params),
         "cross_account_tiers.set" => set_cross_account(state, params),
         "usage.refresh" => refresh_usage(state).await,
+        // Answers, then goes, exactly as `shutdown` does: the new binary is
+        // in place by the time the answer is written, and the supervisor
+        // starts it when this process is gone.
+        "update" => update(state, params).await,
         "doctor" => Err(ProxyError::invalid_request(format!(
             "`{method}` is not implemented yet"
         ))),
         other => Err(ProxyError::not_found(format!("unknown method `{other}`"))),
     }
+}
+
+/// §3 `update` — replace this daemon's binary with a published release, then
+/// stop so the supervisor starts the new one.
+///
+/// Every refusal is decided before anything is downloaded, and a failure after
+/// that leaves the installed binary as it was. Only once the new file is in
+/// place is the stop requested, and the process goes after this answer is
+/// written, the way `shutdown` does.
+async fn update(state: &ControlState, params: Option<&Value>) -> Result<Value, ProxyError> {
+    use crate::update;
+
+    let requested = update::requested_version(params)?;
+    if state.shutdown.requested() {
+        return Err(ProxyError::invalid_request(
+            "this daemon is already stopping; ask the one that replaces it",
+        ));
+    }
+
+    let executable = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .map_err(|error| {
+            ProxyError::invalid_request(format!("could not find this daemon's own binary: {error}"))
+        })?;
+    let bin_dir = update::bin_dir(
+        std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .as_deref(),
+        std::env::var_os(update::BIN_DIR_VAR)
+            .map(std::path::PathBuf::from)
+            .as_deref(),
+    )
+    // Resolved like the executable, so a home reached through a symlink
+    // compares as the directory it is.
+    .map(|dir| std::fs::canonicalize(&dir).unwrap_or(dir));
+    let target = update::target();
+    if let Some(refused) = update::refusal(&update::Situation {
+        requested: &requested,
+        running: version(),
+        supervised: state.supervised,
+        executable: &executable,
+        bin_dir: bin_dir.as_deref(),
+        target,
+    }) {
+        return Err(ProxyError::invalid_request(refused));
+    }
+    let Some(target) = target else {
+        return Err(ProxyError::invalid_request(
+            "no release binary is published for this platform",
+        ));
+    };
+    let Some(_running) = update::Running::claim() else {
+        return Err(ProxyError::invalid_request(
+            "an update is already running on this daemon",
+        ));
+    };
+
+    let base = std::env::var(update::RELEASES_VAR)
+        .ok()
+        .filter(|base| !base.is_empty())
+        .unwrap_or_else(|| update::RELEASES.to_owned());
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|error| {
+            ProxyError::invalid_request(format!("could not build a client: {error}"))
+        })?;
+    let work = std::env::temp_dir().join(format!("proxenos-update-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&work).map_err(|error| {
+        ProxyError::invalid_request(format!("could not create {}: {error}", work.display()))
+    })?;
+
+    let installed = match update::fetch(&client, &base, &requested, target, &work).await {
+        Ok(downloaded) => update::install(&downloaded, &executable, &requested),
+        Err(error) => Err(error),
+    };
+    let _ = std::fs::remove_dir_all(&work);
+    let to = installed?;
+
+    tracing::info!(from = version(), %to, path = %executable.display(), "updated; stopping so the supervisor starts the new binary");
+    state.shutdown.request();
+    Ok(json!({
+        "from": version(),
+        "to": to,
+        "path": executable.display().to_string(),
+        "restarting": true,
+    }))
 }
 
 /// Whether any tier's turns translate (§9.1), which is what the client-policy

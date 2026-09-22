@@ -224,6 +224,8 @@ proxenos settings                  the same, as one client settings document
 proxenos exec [--account NAME] [--] PROGRAM [ARGS...]
 proxenos reload                    re-read config.toml into the running daemon
 proxenos stop                      ask the running daemon to stop
+proxenos update --version X.Y.Z [--json]
+                                   install that release and restart on it
 proxenos tiers [--json] [--account NAME]
   tiers set TIER MODEL [--account NAME] [--persist]
             [--as ACCOUNT [--allow-cross-account]] [--effort LEVEL]
@@ -1318,6 +1320,9 @@ The daemon acts on it itself, and an operator who can move its serving account
 over the same transport can stop it. What client mode cannot do is start it again,
 and `stop`'s sentence says so.
 
+`update` is allowed for the same reason (§2.9). The daemon downloads and installs
+the release on its own machine, and its supervisor starts it again.
+
 ### Everything else
 
 | Verb | In client mode |
@@ -1418,6 +1423,31 @@ for different next steps.
 | `crates/proxy/src/commands/process.rs` | Reading the environment per platform, refusals, rendering |
 | `crates/proxy/src/process.rs` | Deciding `through`, `account`, `daemon` |
 
+### 2.9 `update`
+
+Asks the daemon this CLI dials to install a published release in place of its
+own binary, then stop so its supervisor starts the new one.
+
+```
+$ proxenos update --version 0.31.0
+replaced 0.30.0+6511232 with 0.31.0+ab12cd3 at /Users/me/.local/bin/proxenos; the daemon is stopping so its supervisor starts the new one
+```
+
+- `--version` is the release without its leading `v`. `--json` prints the
+  `update` method's result (§3).
+- Sent over the control vocabulary, so in client mode it updates the remote
+  daemon (§2.7).
+- A refusal exits nonzero with the daemon's message, and nothing on its machine
+  has changed.
+- It does not wait for the new daemon. `proxenos status` names the build that
+  answers afterwards.
+
+### Where it lives
+
+| File | What it holds |
+|---|---|
+| `crates/proxy/src/commands/daemon.rs` | `update` and its sentence |
+
 ---
 
 
@@ -1470,7 +1500,9 @@ An unknown method reaches the caller as an unknown method on both transports.
 dispatch, same result, same code. A JSON-RPC failure is a 200 carrying `error`;
 the HTTP status is only about reaching the endpoint. Served on both doors, and on
 the remote door every request carries the token (§1). The handler reads nothing
-about the caller.
+about the caller. A method that stops the daemon (`shutdown`, `update`) is
+answered with `Connection: close`, and the run loop is released once the server
+has taken the whole body, the order the socket keeps.
 
 #### Why
 
@@ -1863,6 +1895,66 @@ is the CLI name for the document.
 No parameters. Returns `{"stopping": true, "version": ...}`, then the process goes
 once the answer is written.
 
+### `update`
+
+Takes `{"version": "X.Y.Z"}`, a release version without its leading `v`. Added
+after v0.30.0. Authorised like every other method: the socket and the loopback
+door ask nothing, and the remote door demands the token (§1). A mutating method
+has no weaker door.
+
+It downloads `v<version>/SHA256SUMS` and `v<version>/proxenos-<target>.tar.gz`
+from `https://github.com/husniadil/proxenos/releases/download`, the layout
+`install.sh` reads, and checks the archive's SHA-256 against its line. It
+unpacks it with the system `tar`, copies the binary beside its own under a
+staging name, and runs that copy's `--version`, which has to state `<version>`
+or `<version>+<build>`. The running binary gets a second name,
+`proxenos.previous`, for a manual rollback, and the staged copy is renamed over
+it. The running file is never written in place.
+
+Then it returns, and the process goes once the answer is written, as for
+`shutdown`:
+
+```json
+{ "from": "0.30.0+6511232", "to": "0.31.0+ab12cd3",
+  "path": "/Users/me/.local/bin/proxenos", "restarting": true }
+```
+
+`from` is the build serving (`status.version`), `to` is what the new binary
+states, and `path` is the binary replaced, symlinks resolved.
+
+Refused, with nothing downloaded or written, when:
+
+| Condition | Message |
+|---|---|
+| no `version`, or not `X.Y.Z` | `` `update` needs {"version": "X.Y.Z"} ... `` or `` `v0.31.0` is not a release version; expected X.Y.Z, without the leading `v` `` |
+| `status.supervised` is not `true` | `this daemon is not running under its supervisor, so nothing would start it again after the update. ...` |
+| the executable is not directly in the install directory | `this daemon runs from <path>, not from <dir>, where install.sh puts it. Update it the way it was installed.` |
+| the version is not newer than the one running | `this daemon runs <build>; <version> is not newer` |
+| this platform has no release target | `no release binary is published for this platform` |
+| a stop or another update is already under way | `this daemon is already stopping; ...` or `an update is already running on this daemon` |
+
+Refused after downloading, with the installed binary untouched, when the release
+answers anything but success (`could not download <url>: it answered 404 Not
+Found`), when `SHA256SUMS` has no line for this platform's archive (`v<version>
+publishes no binary for this platform: ...`), on a checksum mismatch, when the
+archive holds no `proxenos-<target>/proxenos`, or when the new binary states
+another version.
+
+The install directory is `PROXENOS_BIN_DIR` where the daemon's environment sets
+it, as `install.sh` reads it, else `~/.local/bin`. A supervisor unit carries no
+`PROXENOS_BIN_DIR`, so in practice it is `~/.local/bin`. `PROXENOS_RELEASES`
+replaces the download base, for a mirror or a test, and is not semver-bound.
+
+#### Why
+
+Updating a daemon on another machine used to mean a shell on that machine. The
+supervisor is what starts the new binary, so a daemon without one would be left
+down, and a binary installed some other way (a checkout's build, a package
+manager) is updated the way it was installed. A rename rather than a write,
+because macOS caches code-signing state per vnode and kills a signed binary
+overwritten in place. The staged copy is the file asked for its version, so the
+check is of what gets installed.
+
 ### `record.start` and `record.stop`
 
 `record.start` takes `{"mode": "ingress" | "upstream"}`, `ingress` by default, and
@@ -1908,6 +2000,7 @@ operator has to guess about.
 | `crates/proxy/src/incidents.rs` | Status-page polling |
 | `crates/proxy/src/catalog.rs` | Catalog, fallback, curated relay list |
 | `crates/proxy/src/version.rs` | The build id |
+| `crates/proxy/src/update.rs` | `update`'s refusals, download, verification and swap |
 
 ---
 
@@ -2324,14 +2417,15 @@ added.
 
 ### The bound names
 
-- **Methods** (nineteen, `METHODS` in `control/protocol.rs`): `status`,
+- **Methods** (twenty, `METHODS` in `control/protocol.rs`): `status`,
   `shutdown`, `accounts`, `accounts.select`, `accounts.rename`, `accounts.remove`,
   `models`, `tiers`, `tiers.set`, `effort.set`, `cross_account_tiers.set`,
   `usage`, `incidents`, `usage.refresh`, `env`, `doctor`, `record.start`,
-  `record.stop`, `config.reload`. `doctor` is bound though unimplemented.
+  `record.stop`, `config.reload`, `update`. `doctor` is bound though
+  unimplemented.
 - **Verbs**: `start`, `run`, `accounts` (`list`, `login`, `add-key`, `use`,
   `rename`, `remove`), `status`, `models`, `incidents`, `env`, `settings`,
-  `reload`, `stop`, `tiers` (`set`, `cross-account`), `effort` (`set`), `exec`,
+  `reload`, `stop`, `update`, `tiers` (`set`, `cross-account`), `effort` (`set`), `exec`,
   `doctor`, `usage`, `statusline`, `record` (`ingress`, `upstream`, `surface`),
   `supervisor` (`install`, `uninstall`, `status`), `inspect`.
 - **Environment**: `PROXENOS_DAEMON`, `PROXENOS_TOKEN`, `PROXENOS_TOKEN_FILE`.

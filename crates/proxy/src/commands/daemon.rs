@@ -11,6 +11,7 @@ use super::version_of;
 use super::watch;
 use crate::cli::RunArgs;
 use crate::cli::StartArgs;
+use crate::cli::UpdateArgs;
 use anyhow::Result;
 use anyhow::bail;
 use proxenos::config::Config;
@@ -127,6 +128,36 @@ pub(crate) async fn stop() -> Result<()> {
         ),
         None => println!("stopped {was}; nothing started it again within {RESTART_WINDOW:?}"),
     }
+    Ok(())
+}
+
+/// Ask the daemon this CLI dials to update itself (`api.md` §2.9).
+///
+/// Allowed in client mode for the reason `stop` is: the daemon acts on it
+/// itself, over a transport that already carries the token.
+pub(crate) async fn update(args: UpdateArgs) -> Result<()> {
+    let result = control::ask(
+        "update",
+        Some(serde_json::json!({ "version": args.version })),
+    )
+    .await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+    let field = |name: &str| {
+        result
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("?")
+            .to_owned()
+    };
+    println!(
+        "replaced {} with {} at {}; the daemon is stopping so its supervisor starts the new one",
+        field("from"),
+        field("to"),
+        field("path")
+    );
     Ok(())
 }
 

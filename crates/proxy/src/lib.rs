@@ -25,6 +25,7 @@ pub mod session;
 pub mod statusline;
 pub mod supervisor;
 pub mod surface;
+pub mod update;
 pub mod upstream;
 pub mod usage;
 pub mod version;
