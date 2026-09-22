@@ -1244,10 +1244,11 @@ async fn models_for_a_relay_account_lists_the_second_providers_models() {
     // The million-token window belongs to the `[1m]`-suffixed id — the
     // client's own long-context selector, relayed verbatim — and the plain id
     // stays at the standard window.
-    assert_eq!(windows.len(), 17, "{result}");
+    assert_eq!(windows.len(), 19, "{result}");
     for plain in [
         "claude-fable-5-1",
         "claude-fable-5",
+        "claude-opus-5-5",
         "claude-opus-5",
         "claude-sonnet-5",
         "claude-opus-4-8",
@@ -1263,6 +1264,7 @@ async fn models_for_a_relay_account_lists_the_second_providers_models() {
     for long in [
         "claude-fable-5-1[1m]",
         "claude-fable-5[1m]",
+        "claude-opus-5-5[1m]",
         "claude-opus-5[1m]",
         "claude-sonnet-5[1m]",
         "claude-opus-4-8[1m]",
