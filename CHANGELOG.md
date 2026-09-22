@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.31.0]
 
 - **A daemon can update itself: `proxenos update --version X.Y.Z`, the
   `update` control method.** It downloads that release, checks it against the
