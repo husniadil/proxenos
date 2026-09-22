@@ -45,6 +45,8 @@ struct Harness {
     /// asserted against two copies of the state would only prove the two
     /// copies matched.
     socket: std::path::PathBuf,
+    /// The signal the daemon's run loop waits on, shared by both doors.
+    shutdown: Arc<proxenos::daemon::Shutdown>,
     _dir: tempfile::TempDir,
 }
 
@@ -91,6 +93,7 @@ impl Harness {
             relay: None,
         };
 
+        let shutdown = Arc::new(proxenos::daemon::Shutdown::default());
         let control = ControlState {
             supervised: None,
             port: 8787,
@@ -101,7 +104,7 @@ impl Harness {
             usage,
             refusals,
             config: Arc::new(proxenos::config::Config::default()),
-            shutdown: Arc::new(proxenos::daemon::Shutdown::default()),
+            shutdown: Arc::clone(&shutdown),
             tokens: None,
             usage_endpoint: String::new(),
             anthropic_usage_endpoint: String::new(),
@@ -156,6 +159,7 @@ impl Harness {
             remote,
             client: reqwest::Client::new(),
             socket,
+            shutdown,
             _dir: dir,
         }
     }
@@ -493,6 +497,30 @@ async fn every_method_answers_the_same_over_both_transports() {
             ),
         }
     }
+}
+
+/// A stop over HTTP answers, then releases the run loop, as over the socket.
+///
+/// It used to answer `stopping` and release nothing, so a daemon told to stop
+/// from another machine kept serving until the next local socket request
+/// happened to release it.
+#[tokio::test]
+async fn a_stop_over_http_answers_and_then_releases_the_run_loop() {
+    let harness = Harness::start(Some(TOKEN)).await;
+
+    let response = harness
+        .control(
+            harness.remote(),
+            "shutdown",
+            Some(&format!("proxenos-token:{TOKEN}")),
+        )
+        .await;
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["result"]["stopping"], json!(true), "{body}");
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), harness.shutdown.wait())
+        .await
+        .expect("the run loop should be released once the answer has been written");
 }
 
 /// A method reaching one door moves the daemon the other door reports on:

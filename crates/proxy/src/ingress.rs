@@ -285,7 +285,40 @@ async fn control_over_http(
         }
     };
     let line = String::from_utf8_lossy(&body);
-    Json(crate::control::answer(&state, &line).await).into_response()
+    let answer = crate::control::answer(&state, &line).await;
+    if !state.shutdown.requested() {
+        return Json(answer).into_response();
+    }
+
+    // A stop asked for over HTTP, released only once the answer has gone,
+    // the order the socket keeps. The body holds the release and lets go of it
+    // when the server drops the body, which it does once it has taken the
+    // last byte, in the same poll that flushes it. Nothing released it here
+    // before, so a stop over HTTP answered `stopping` and the daemon kept
+    // running until the next socket request happened to release it.
+    let release = ReleaseWhenSent(Arc::clone(&state.shutdown));
+    let body = bytes::Bytes::from(serde_json::to_vec(&answer).unwrap_or_default());
+    let stream = stream::iter([Ok::<_, std::convert::Infallible>(body)]).map(move |chunk| {
+        let _held = &release;
+        chunk
+    });
+    (
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CONNECTION, "close"),
+        ],
+        Body::from_stream(stream),
+    )
+        .into_response()
+}
+
+/// Releases a requested stop when dropped. See `control_over_http`.
+struct ReleaseWhenSent(Arc<crate::daemon::Shutdown>);
+
+impl Drop for ReleaseWhenSent {
+    fn drop(&mut self) {
+        self.0.release();
+    }
 }
 
 /// The mapped models, in the Anthropic list shape.
