@@ -4,6 +4,21 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.30.0]
+
+- **The default tiers move to the newest generation: fable `gpt-6-astra`,
+  opus `gpt-6-sol`, sonnet `gpt-5.6-terra`, haiku `gpt-6-luna`.** Sonnet stays
+  on 5.6 because no account's catalog lists a 6 terra yet. A tier stated in
+  `config.toml` is untouched; only an omitted tier follows the default.
+- **A defaulted tier the account lacks falls back by generation, then by
+  tier.** It tries its own earlier generation (`gpt-6-sol` then
+  `gpt-5.6-sol`), then the defaults of each tier below it, then `gpt-5.5`.
+  It used to take one shared preference list headed by luna, so a free
+  account, which lists neither sol nor astra, ran opus and fable on luna; it
+  now runs them on terra.
+- **`claude-opus-5-5` joins the curated Anthropic menu**, with its `[1m]`
+  long-context sibling. `claude-opus-5` stays on the menu.
+
 ## [0.29.1]
 
 - **Translation stays faithful to what upstream sent and the client replays.**
