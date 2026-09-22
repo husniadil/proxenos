@@ -75,8 +75,8 @@ fn an_omitted_tier_takes_its_default() {
     };
 
     assert_eq!(model("opus"), "gpt-5.5");
-    assert_eq!(model("haiku"), "gpt-5.6-luna");
-    assert_eq!(model("fable"), "gpt-5.6-sol");
+    assert_eq!(model("haiku"), "gpt-6-luna");
+    assert_eq!(model("fable"), "gpt-6-astra");
 }
 
 /// A tier mapped to an empty string is not mapped. Treating it as present sends
@@ -507,10 +507,10 @@ fn every_tier_has_the_default_the_readme_states() {
             .expect("every tier is mapped")
     };
 
-    assert_eq!(model("opus"), "gpt-5.6-terra");
-    assert_eq!(model("sonnet"), "gpt-5.6-luna");
-    assert_eq!(model("haiku"), "gpt-5.6-luna");
-    assert_eq!(model("fable"), "gpt-5.6-sol");
+    assert_eq!(model("opus"), "gpt-6-sol");
+    assert_eq!(model("sonnet"), "gpt-5.6-terra");
+    assert_eq!(model("haiku"), "gpt-6-luna");
+    assert_eq!(model("fable"), "gpt-6-astra");
 }
 
 /// A configuration stating nothing at all is a working configuration.
@@ -550,11 +550,7 @@ fn a_stated_tier_overrides_only_itself() {
     };
 
     assert_eq!(model("opus"), "gpt-5.5");
-    assert_eq!(
-        model("haiku"),
-        "gpt-5.6-luna",
-        "the rest keep their defaults"
-    );
+    assert_eq!(model("haiku"), "gpt-6-luna", "the rest keep their defaults");
 }
 
 /// A tier written as blank is still refused. Defaulting a *missing* value is

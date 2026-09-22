@@ -470,7 +470,7 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
     }
 
     // A shipped default naming a model this account cannot see is replaced
-    // rather than refused: `gpt-5.6-sol` is plan-gated, so the default mapping
+    // rather than refused: `gpt-6-sol` is plan-gated, so the default mapping
     // would otherwise fail to start for most accounts. A model the operator
     // stated is left alone and validated below.
     let substituted = catalog

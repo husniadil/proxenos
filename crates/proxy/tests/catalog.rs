@@ -277,6 +277,17 @@ fn the_fallback_states_no_windows() {
     }
 }
 
+/// The fallback names the current generation, so an unreachable catalog does
+/// not hide the models a default points at.
+#[test]
+fn the_fallback_names_the_current_generation() {
+    let catalog = Catalog::fallback();
+
+    for id in ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"] {
+        assert!(catalog.get(id).is_some(), "{id} should be in the fallback");
+    }
+}
+
 /// A catalog that arrives unreadable is an error rather than an empty catalog.
 /// An empty one reads as "no models exist", which would fail every mapping.
 #[test]
@@ -511,6 +522,59 @@ fn a_defaulted_model_the_catalog_lacks_is_substituted() {
     assert_eq!(
         tiers[1].model, "gpt-5.6-terra",
         "and the absent one takes a model this account actually has"
+    );
+}
+
+/// A defaulted tier walks back through its own earlier generations, then down
+/// through the tiers below it, and takes the first model this account lists.
+///
+/// Measured shapes: a free account lists `gpt-6-luna` but neither sol nor
+/// astra, so every upper tier lands on terra and haiku keeps the newest luna.
+#[test]
+fn a_defaulted_tier_falls_back_through_its_generations_then_the_tier_below() {
+    let free = Catalog::parse(
+        r#"{"data":[
+            {"id":"gpt-6-luna","is_visible":true},
+            {"id":"gpt-5.6-terra","is_visible":true},
+            {"id":"gpt-5.6-luna","is_visible":true},
+            {"id":"gpt-5.5","is_visible":true}
+        ]}"#,
+        SHIPPING,
+    )
+    .unwrap();
+    let mut tiers = proxenos::config::Tiers::default()
+        .resolve(proxenos::config::CrossAccountTiers::Refused)
+        .unwrap();
+
+    free.substitute_unavailable_defaults(&mut tiers);
+
+    let model = |name: &str| {
+        tiers
+            .iter()
+            .find(|tier| tier.tier == name)
+            .map(|tier| tier.model.clone())
+            .unwrap()
+    };
+    assert_eq!(model("fable"), "gpt-5.6-terra");
+    assert_eq!(model("opus"), "gpt-5.6-terra");
+    assert_eq!(model("sonnet"), "gpt-5.6-terra");
+    assert_eq!(model("haiku"), "gpt-6-luna");
+
+    let without_new_sol = Catalog::parse(
+        r#"{"data":[
+            {"id":"gpt-5.6-sol","is_visible":true},
+            {"id":"gpt-5.6-terra","is_visible":true}
+        ]}"#,
+        SHIPPING,
+    )
+    .unwrap();
+    let mut tiers = vec![tier("opus", "gpt-6-sol", true)];
+
+    without_new_sol.substitute_unavailable_defaults(&mut tiers);
+
+    assert_eq!(
+        tiers[0].model, "gpt-5.6-sol",
+        "the previous generation first"
     );
 }
 

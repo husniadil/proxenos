@@ -1528,8 +1528,11 @@ never hidden. It made a first run fail on a file nobody had written, and
 #### A stated model is never overruled; a default may be
 
 A defaulted tier naming a model this account's catalog does not carry is
-replaced with one it has (another default where available, otherwise the first
-offered model), and the substitution is logged.
+replaced with one it has, and the substitution is logged. The replacement is the
+first listed model among the tier's own earlier generations, then the defaults
+of each tier below it (fable, opus, sonnet, haiku, in that order), then
+`gpt-5.5`; failing all of those, the first offered model. A free account, which
+lists neither sol nor astra, runs fable and opus on terra.
 
 ##### Why
 

@@ -188,10 +188,10 @@ port = 8787
 # arrives. Two tiers on one model must agree on its effort. Both keys may sit in
 # one table: `haiku = { account = "spare", model = "...", effort = "low" }`.
 [tiers]
-opus   = "gpt-5.6-terra"
-sonnet = "gpt-5.6-luna"
-haiku  = "gpt-5.6-luna"
-fable  = "gpt-5.6-sol"
+opus   = "gpt-6-sol"
+sonnet = "gpt-5.6-terra"
+haiku  = "gpt-6-luna"
+fable  = "gpt-6-astra"
 
 # What differs for one account, keyed by the name `accounts` lists it under.
 # Two subscriptions on different plans are offered different models, and a key
@@ -1601,12 +1601,26 @@ pub fn parse_client_effort(effort: &str) -> Result<(), ProxyError> {
 /// Named once so an error can list them rather than describing them.
 pub const TIER_NAMES: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
 
-const DEFAULT_TIERS: [(&str, &str); 4] = [
-    ("opus", "gpt-5.6-terra"),
-    ("sonnet", "gpt-5.6-luna"),
-    ("haiku", "gpt-5.6-luna"),
-    ("fable", "gpt-5.6-sol"),
+/// Each tier's shipped models, newest generation first, with the tiers ordered
+/// from the top down. The head of each list is the default; the rest is where
+/// a defaulted tier falls back to when an account's catalog lacks it.
+const DEFAULT_TIERS: [(&str, &[&str]); 4] = [
+    ("fable", &["gpt-6-astra"]),
+    ("opus", &["gpt-6-sol", "gpt-5.6-sol"]),
+    ("sonnet", &["gpt-5.6-terra"]),
+    ("haiku", &["gpt-6-luna", "gpt-5.6-luna"]),
 ];
+
+/// Where a defaulted tier falls back to, in order: its own earlier
+/// generations, then every tier below it, then the oldest model every account
+/// has been seen to list.
+pub fn default_candidates(tier: &str) -> impl Iterator<Item = &'static str> {
+    DEFAULT_TIERS
+        .iter()
+        .skip_while(move |(name, _)| *name != tier)
+        .flat_map(|(_, models)| models.iter().copied())
+        .chain(["gpt-5.5"])
+}
 
 impl Tiers {
     /// Whether this table states a model for one tier, by name.
@@ -1710,7 +1724,8 @@ impl Tiers {
                         DEFAULT_TIERS
                             .iter()
                             .find(|(name, _)| name == tier)
-                            .map_or_else(String::new, |(_, model)| (*model).to_owned())
+                            .and_then(|(_, models)| models.first())
+                            .map_or_else(String::new, |model| (*model).to_owned())
                     },
                     |value| value.model().to_owned(),
                 ),

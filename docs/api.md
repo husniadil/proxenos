@@ -1928,10 +1928,10 @@ claude_program = "/opt/homebrew/bin/claude"
 codex_program  = "/opt/homebrew/bin/codex"
 
 [tiers]
-opus   = "gpt-5.6-terra"
-sonnet = "gpt-5.6-luna"
-haiku  = "gpt-5.6-luna"
-fable  = "gpt-5.6-sol"
+opus   = "gpt-6-sol"
+sonnet = "gpt-5.6-terra"
+haiku  = "gpt-6-luna"
+fable  = "gpt-6-astra"
 
 # Optional, one per account, keyed by the name `accounts` lists it under.
 [accounts.spare]

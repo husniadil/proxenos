@@ -3,9 +3,6 @@
 use crate::config::ResolvedTier;
 use crate::error::ProxyError;
 
-/// Which model to fall back to when a shipped default is unavailable, in order
-/// of preference. The workhorse first: it is the one most accounts have.
-const DEFAULT_PREFERENCE: [&str; 3] = ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.5"];
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -138,13 +135,16 @@ impl Catalog {
     /// for is marked non-authoritative when it is used.
     ///
     /// `gpt-6-astra` and `gpt-5.6-sol` are plan-gated: a paid account serves
-    /// both (measured 2026-09-07), a free one refuses each as unsupported. They
-    /// are listed all the same, because this list is a menu for whichever
+    /// both (measured 2026-09-07), a free one refuses each as unsupported.
+    /// `gpt-6-sol` is likewise in a paid account's catalog and not a free
+    /// one's. They are listed all the same, because this list is a menu for whichever
     /// account is asked about, and a fallback that hides what a paid account
     /// has is a worse guess than one that names what a free account lacks.
     pub fn fallback() -> Self {
         let models = [
             "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",
@@ -348,7 +348,7 @@ impl Catalog {
     /// Replace defaulted models this account cannot see.
     ///
     /// A shipped default is a guess about an account this proxy has never seen.
-    /// `gpt-5.6-sol` is plan-gated and absent from a free account's catalog, so
+    /// `gpt-6-sol` is plan-gated and absent from a free account's catalog, so
     /// a default naming it would refuse to start for most people — and a
     /// default that cannot start is worse than no default. The same happens
     /// whenever a model is renamed or retired out from under a released binary.
@@ -363,28 +363,27 @@ impl Catalog {
             return Vec::new();
         }
 
-        // Prefer another default that this account does have, so the
-        // substitution stays close to the intended shape; otherwise anything
-        // the catalog offers is better than a model that is not there.
-        let Some(replacement) = DEFAULT_PREFERENCE
-            .iter()
-            .find(|id| self.models.get(**id).is_some_and(|model| model.visible))
-            .map(|id| (*id).to_owned())
-            .or_else(|| self.selectable().first().map(|model| model.id.clone()))
-        else {
-            return Vec::new();
-        };
-
         let mut swapped = Vec::new();
         for tier in tiers.iter_mut() {
             if tier.defaulted && !self.models.contains_key(&tier.model) {
+                // The tier's own earlier generations first, then the tiers
+                // below it, so the substitution stays close to the intended
+                // shape; otherwise anything the catalog offers is better than
+                // a model that is not there.
+                let Some(replacement) = crate::config::default_candidates(tier.tier)
+                    .find(|id| self.models.get(*id).is_some_and(|model| model.visible))
+                    .map(str::to_owned)
+                    .or_else(|| self.selectable().first().map(|model| model.id.clone()))
+                else {
+                    continue;
+                };
                 tracing::warn!(
                     tier = tier.tier,
                     wanted = %tier.model,
                     using = %replacement,
                     "this account's catalog has no such model; the default was substituted"
                 );
-                tier.model = replacement.clone();
+                tier.model = replacement;
                 swapped.push(tier.tier.to_owned());
             }
         }
