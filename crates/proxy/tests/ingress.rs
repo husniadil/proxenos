@@ -860,6 +860,34 @@ async fn a_refusal_behind_a_preamble_is_still_a_status() {
     assert_eq!(body["error"]["type"], json!("rate_limit_error"));
 }
 
+/// A stream that ends after its preamble, before the response starts, is a
+/// failure, not an empty answer. Streamed, it would be a 200 with no frames at
+/// all, which the client can neither read nor retry.
+#[tokio::test]
+async fn a_stream_that_ends_before_the_response_starts_is_a_retryable_status() {
+    let harness = Harness::start(Behavior::Events(vec![json!({
+        "type": "codex.rate_limits",
+        "rate_limits": { "primary": { "used_percent": 6 } },
+    })]))
+    .await;
+
+    let response = harness
+        .post(
+            "/v1/messages",
+            json!({
+                "model": "claude-sonnet-5",
+                "max_tokens": 64,
+                "stream": true,
+                "messages": [{ "role": "user", "content": "hello" }],
+            }),
+        )
+        .await;
+
+    assert_eq!(response.status(), 529);
+    let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
+    assert_eq!(body["error"]["type"], json!("overloaded_error"));
+}
+
 /// §2.1 — the configured lead and trailer reach the backend, around the
 /// client's own prompt.
 ///
@@ -2064,6 +2092,84 @@ async fn a_failed_turn_does_not_advance_the_baseline() {
     );
 }
 
+/// A turn that ended in `response.failed` is not a response to continue. Its
+/// id is never offered as `previous_response_id`: a delta attached to it
+/// continues from context the client never saw, or is refused and repeated on
+/// every later turn. Only a completed response is chained from (§4.3).
+#[tokio::test]
+async fn a_failed_response_is_not_remembered_as_the_one_to_continue() {
+    let harness = Harness::start(Behavior::Events(vec![
+        json!({ "type": "response.created", "response": { "id": "resp_failed" } }),
+        json!({ "type": "response.output_text.delta", "delta": "partial" }),
+        json!({
+            "type": "response.failed",
+            "response": { "id": "resp_failed", "error": { "code": "server_error", "message": "boom" } },
+        }),
+    ]))
+    .await;
+    let body = json!({
+        "model": "claude-sonnet-5",
+        "max_tokens": 64,
+        "stream": true,
+        "messages": [{ "role": "user", "content": "question 1" }],
+    });
+
+    let _ = harness
+        .post("/v1/messages", body.clone())
+        .await
+        .text()
+        .await;
+
+    let session = harness
+        .sessions
+        .lookup(&input_of(&body))
+        .expect("the conversation should be known");
+    assert_eq!(session.previous().1, None);
+}
+
+/// An item the client will replay but the baseline cannot hold (here a
+/// message mixing text with a refusal part) leaves no response to continue.
+/// The client replays it, the baseline lacks it, and a delta would send it
+/// again to a response that already has it.
+#[tokio::test]
+async fn an_output_item_the_baseline_cannot_hold_forces_a_full_send_next() {
+    let harness = Harness::start(Behavior::Events(vec![
+        json!({ "type": "response.created", "response": { "id": "resp_1" } }),
+        json!({ "type": "response.output_text.delta", "delta": "partly" }),
+        json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    { "type": "output_text", "text": "partly" },
+                    { "type": "refusal", "refusal": "no" },
+                ],
+            },
+        }),
+        json!({ "type": "response.completed", "response": { "id": "resp_1" } }),
+    ]))
+    .await;
+    let body = json!({
+        "model": "claude-sonnet-5",
+        "max_tokens": 64,
+        "stream": true,
+        "messages": [{ "role": "user", "content": "question 1" }],
+    });
+
+    let _ = harness
+        .post("/v1/messages", body.clone())
+        .await
+        .text()
+        .await;
+
+    let session = harness
+        .sessions
+        .lookup(&input_of(&body))
+        .expect("the conversation should be known");
+    assert_eq!(session.previous().1, None);
+}
+
 /// Translate a Messages body the way ingress does when identifying a session.
 fn input_of(body: &Value) -> Vec<proxenos_core::responses::InputItem> {
     let request: proxenos_core::anthropic::MessagesRequest =
@@ -3045,4 +3151,31 @@ fn a_new_session_is_claimed_before_anyone_else_can_join_it() {
     let b = sessions.resolve(&second);
 
     assert!(!Arc::ptr_eq(&a, &b), "two conversations share one session");
+}
+
+/// Captures from an earlier run are kept. The numbering started at zero in
+/// every process, so the first capture after a restart (every supervised
+/// update is one) overwrote the last run's first file.
+#[test]
+fn a_new_recorder_does_not_overwrite_an_earlier_runs_captures() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ingress-0000.json"), "earlier").unwrap();
+    std::fs::write(dir.path().join("upstream-0003.json"), "earlier").unwrap();
+
+    let recorder = proxenos::recorder::Recorder::new(dir.path());
+    let written = recorder
+        .record(
+            proxenos::recorder::Mode::Ingress,
+            &json!({}),
+            Vec::new(),
+            Vec::new(),
+            "a later run",
+        )
+        .expect("written");
+
+    assert_eq!(written.file_name().unwrap(), "ingress-0004.json");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("ingress-0000.json")).unwrap(),
+        "earlier"
+    );
 }

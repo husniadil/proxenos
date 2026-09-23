@@ -165,20 +165,35 @@ impl Transport for HttpTransport {
                 .with_retry_after(retry_after));
         }
 
-        let mut decoder = SseDecoder::default();
+        // Shared with the tail below, which flushes an event the body left
+        // unterminated when it ended (§5.0).
+        let decoder = std::sync::Arc::new(std::sync::Mutex::new(SseDecoder::default()));
+        let pushing = std::sync::Arc::clone(&decoder);
         let byte_stream = response.bytes_stream();
 
         let events = byte_stream
             .flat_map(move |chunk| match chunk {
                 Ok(bytes) => {
-                    let payloads: Vec<Result<String, ProxyError>> =
-                        decoder.push(&bytes).map(Ok).collect();
+                    let payloads: Vec<Result<String, ProxyError>> = match pushing.lock() {
+                        Ok(mut decoder) => decoder.push(&bytes).map(Ok).collect(),
+                        Err(_) => Vec::new(),
+                    };
                     stream::iter(payloads)
                 }
                 Err(error) => stream::iter(vec![Err(ProxyError::overloaded(format!(
                     "upstream stream failed: {error}"
                 )))]),
             })
+            .chain(
+                stream::once(async move {
+                    let payloads: Vec<Result<String, ProxyError>> = match decoder.lock() {
+                        Ok(mut decoder) => decoder.finish().into_iter().map(Ok).collect(),
+                        Err(_) => Vec::new(),
+                    };
+                    stream::iter(payloads)
+                })
+                .flatten(),
+            )
             .boxed();
 
         Ok(events)

@@ -226,6 +226,12 @@ pub fn pump(
 
         if healthy {
             park(slot, connection).await;
+        } else {
+            // Closed before the turn's terminal event: a transport failure.
+            // Ending quietly would close the message as a finished answer.
+            let _ = sender.send(Err(ProxyError::overloaded(
+                "the websocket closed before the turn completed".to_owned(),
+            )));
         }
     });
 

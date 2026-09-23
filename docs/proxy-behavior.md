@@ -720,7 +720,10 @@ succeeds, and says nothing.
 
 A failure on a connection carried over from an earlier turn is retried once on
 a new connection as a full send. Only a failure on a fresh connection latches
-the session to HTTP (§4.2).
+the session to HTTP (§4.2). A first event of type `error` whose code is
+`websocket_connection_limit_reached` or `previous_response_not_found` is such a
+failure, although the socket stays open: it says the connection cannot carry
+the turn, not what the model answered.
 
 ##### Why
 
@@ -806,8 +809,10 @@ unchanged conversation would receive the previous turn again.
 #### A turn enters the baseline only when its stream ends
 
 The baseline advances to what was sent plus what the server returned when the
-upstream stream ends. A turn whose transport failed before or during the stream
-never advances it.
+upstream stream ends with `response.completed`, and that response is the one a
+later delta continues. A turn whose transport failed before or during the
+stream, or whose response failed or ended on an `error` event, never advances
+it.
 
 ##### Why
 
@@ -997,6 +1002,8 @@ indistinguishable from a model still thinking.
 The first four upstream events are read before anything is written. An `error`
 event among them becomes an HTTP error response in the shape of `api.md` §1.1,
 with the status the event states (502 where it states none) mapped as in §2.8.
+A stream that ends among them, before any event of the response itself, is
+`overloaded_error`.
 
 ##### Why
 
@@ -1012,7 +1019,9 @@ frame, typed from its code: `server_is_overloaded` and `slow_down` →
 `overloaded_error`; `rate_limit_exceeded`, `usage_limit_reached`, and
 `insufficient_quota` → `rate_limit_error`; `context_length_exceeded`,
 `invalid_prompt`, and `bio_policy` → `invalid_request_error`; anything else →
-`api_error`. A transport failure mid-stream is an `overloaded_error` frame.
+`api_error`. A transport failure mid-stream is an `overloaded_error` frame; a
+WebSocket closed before the turn's terminal event is one, and does not advance
+the baseline (§4.3).
 
 ##### Why
 

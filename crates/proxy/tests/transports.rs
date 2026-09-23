@@ -248,6 +248,13 @@ enum WsBehavior {
     /// Answer every generate frame with only `response.created`, then stay
     /// silent — a long stretch of hidden reasoning with nothing on the wire.
     Silent,
+    /// Answer the second generate frame ever received with the error the
+    /// backend sends on a socket past its connection-age limit, and keep the
+    /// socket open. Every other frame gets the full replay.
+    LimitSecondTurn,
+    /// Answer every generate frame with all but the last event, then close
+    /// the socket cleanly — a connection cut before the turn completed.
+    CloseMidTurn,
 }
 
 impl WsServer {
@@ -326,6 +333,23 @@ impl WsServer {
                         }
 
                         let turn = generates.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        if matches!(behavior, WsBehavior::LimitSecondTurn) && turn == 1 {
+                            let limit = json!({
+                                "type": "error",
+                                "status": 400,
+                                "error": {
+                                    "type": "invalid_request_error",
+                                    "code": "websocket_connection_limit_reached",
+                                    "message": "Responses websocket connection limit reached (60 minutes). Create a new websocket connection to continue."
+                                }
+                            });
+                            let _ = socket
+                                .send(tokio_tungstenite::tungstenite::Message::Text(
+                                    limit.to_string().into(),
+                                ))
+                                .await;
+                            continue;
+                        }
                         let silent = matches!(behavior, WsBehavior::Silent)
                             || (matches!(behavior, WsBehavior::AbandonSecondTurn) && turn == 1);
                         if silent {
@@ -337,6 +361,18 @@ impl WsServer {
                                     .await;
                             }
                             continue;
+                        }
+
+                        if matches!(behavior, WsBehavior::CloseMidTurn) {
+                            for event in &events[..events.len() - 1] {
+                                let _ = socket
+                                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                                        event.to_string().into(),
+                                    ))
+                                    .await;
+                            }
+                            let _ = socket.close(None).await;
+                            break;
                         }
 
                         for event in &events {
@@ -1179,6 +1215,74 @@ async fn a_stale_pooled_connection_retries_as_a_full_send() {
     assert_eq!(state, http_state);
 }
 
+/// A socket closed before the turn's terminal event is a transport failure,
+/// not the end of an answer. Ending the stream quietly would let the
+/// translator close the message as `end_turn` and advance the baseline, so
+/// the client would take a truncated reply as finished (§5.1, §4.3).
+#[tokio::test]
+async fn a_socket_closed_mid_turn_ends_the_stream_with_an_error() {
+    let ws = WsServer::start(stream_events(), WsBehavior::CloseMidTurn).await;
+    let addr = start_http().await;
+    let conduit = Conduit::new(
+        Arc::new(HttpTransport::new(format!("http://{addr}/responses"))),
+        Some(Arc::new(
+            WebSocketTransport::new(ws.url.clone()).with_compression(false),
+        )),
+        "test-session".to_owned(),
+    );
+
+    let (events, _) = conduit
+        .send(
+            &request(items(json!([message("turn 0")]))),
+            &Baseline::new(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("the turn should start");
+    let events: Vec<_> = events.collect().await;
+
+    let last = events.last().expect("some events");
+    let error = last
+        .as_ref()
+        .expect_err("the cut was reported as a clean end");
+    assert_eq!(
+        error.kind,
+        proxenos_core::anthropic::ErrorKind::OverloadedError
+    );
+    assert!(!conduit.has_pooled_connection().await);
+}
+
+/// A socket past the backend's connection-age limit is answered with an
+/// `error` event rather than closed, and the socket stays open. Treated as an
+/// answer, it would end the turn with a terminal 400 and be parked again, so
+/// every later turn would find it and fail the same way. It is a stale pooled
+/// connection like any other: the turn is retried once, in full, on a fresh
+/// one. `previous_response_not_found` is the same case.
+#[tokio::test]
+async fn a_socket_past_its_age_limit_retries_as_a_full_send() {
+    let ws = WsServer::start(stream_events(), WsBehavior::LimitSecondTurn).await;
+    let addr = start_http().await;
+    let conduit = Conduit::new(
+        Arc::new(HttpTransport::new(format!("http://{addr}/responses"))),
+        Some(Arc::new(
+            WebSocketTransport::new(ws.url.clone()).with_compression(false),
+        )),
+        "test-session".to_owned(),
+    );
+
+    let (state, sends) = drive(&conduit, 3).await;
+
+    assert!(!conduit.is_latched_to_http());
+    assert_eq!(ws.connections(), 2, "the limited socket was not replaced");
+    assert_eq!(sends[1], Sent::Full, "the retry was recorded as a delta");
+
+    let http_addr = start_http().await;
+    let (http_state, _) = drive(&http_only(http_addr), 3).await;
+    assert_eq!(state, http_state);
+}
+
 /// §4.3 — a delta never names a response the pooled connection did not
 /// produce.
 ///
@@ -1320,4 +1424,49 @@ async fn a_pooled_connection_is_not_reused_for_another_account() {
         2,
         "the pinned turn went up on a socket opened as the serving account"
     );
+}
+
+/// §5.0 — an event left unterminated when the body ends is still delivered.
+/// Here it is the `response.completed` that carries the real usage; dropped,
+/// the turn closes on the estimate instead.
+#[tokio::test]
+async fn an_unterminated_final_event_over_http_is_delivered() {
+    let body = format!(
+        "data: {}\n\ndata: {}\n",
+        json!({ "type": "response.created", "response": { "id": "resp_h" } }),
+        json!({ "type": "response.completed", "response": { "id": "resp_h" } }),
+    );
+    let app = axum::Router::new().route(
+        "/responses",
+        axum::routing::post(move || {
+            let body = body.clone();
+            async move {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    body,
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let conduit = http_only(addr);
+    let (events, _) = conduit
+        .send(
+            &request(items(json!([message("turn 0")]))),
+            &Baseline::new(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("the turn should start");
+    let events: Vec<String> = events.map(Result::unwrap).collect().await;
+
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert!(events[1].contains("response.completed"), "{events:?}");
 }

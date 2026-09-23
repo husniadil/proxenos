@@ -218,6 +218,15 @@ impl Conduit {
         // — a silent failure standing exactly where the fallback belongs.
         let first = match connection.next_event().await {
             Some(Err(error)) => return Err(failed(error)),
+            // The backend answers a socket past its age limit, and a delta
+            // naming a response it no longer holds, with an `error` event on a
+            // socket it leaves open. Either is a stale connection, not an
+            // answer: parked again, every later turn would find it and fail.
+            Some(Ok(event)) if stale_connection(&event) => {
+                return Err(failed(ProxyError::overloaded(format!(
+                    "the websocket can no longer serve this conversation: {event}"
+                ))));
+            }
             Some(first) => first,
             None => {
                 return Err(failed(ProxyError::overloaded(
@@ -273,4 +282,24 @@ impl Conduit {
     pub async fn has_pooled_connection(&self) -> bool {
         self.connection.lock().await.is_some()
     }
+}
+
+/// Whether a first event says the connection itself cannot carry the turn.
+fn stale_connection(event: &str) -> bool {
+    let code = serde_json::from_str::<serde_json::Value>(event)
+        .ok()
+        .and_then(|event| {
+            (event.get("type").and_then(serde_json::Value::as_str) == Some("error"))
+                .then(|| {
+                    event
+                        .pointer("/error/code")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
+                .flatten()
+        });
+    matches!(
+        code.as_deref(),
+        Some("websocket_connection_limit_reached" | "previous_response_not_found")
+    )
 }

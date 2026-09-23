@@ -148,9 +148,28 @@ pub struct Recorder {
 
 impl Recorder {
     pub fn new(directory: impl Into<PathBuf>) -> Self {
+        let directory = directory.into();
+        // Numbered past what an earlier run left, so a restart does not write
+        // its first capture over that run's.
+        let next = std::fs::read_dir(&directory)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter_map(|entry| {
+                        let name = entry.file_name().into_string().ok()?;
+                        let stem = name.strip_suffix(".json")?;
+                        let index = stem
+                            .strip_prefix("ingress-")
+                            .or_else(|| stem.strip_prefix("upstream-"))?;
+                        index.parse::<u64>().ok()
+                    })
+                    .max()
+                    .map_or(0, |last| last + 1)
+            })
+            .unwrap_or(0);
         Self {
-            directory: directory.into(),
-            sequence: Arc::new(AtomicU64::new(0)),
+            directory,
+            sequence: Arc::new(AtomicU64::new(next)),
         }
     }
 

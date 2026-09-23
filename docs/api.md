@@ -51,6 +51,13 @@ starts, and a local launch holds no token (§2.7). A daemon that moved to the
 stated address would cut off every session already running on its own machine
 with a 401 it could do nothing about.
 
+A browser is also a local process, but it acts for whatever page it has open,
+and a `text/plain` POST crosses origins with no preflight. So the loopback door
+refuses, as `authentication_error`, any request carrying `Origin` or a
+`Sec-Fetch-Site` other than `none`, and any whose `Host` is not `localhost`,
+`127.0.0.1`, or `[::1]` (a page that rebinds its own name to loopback arrives
+under that name). The client and the CLI send none of these.
+
 ### The token belongs to the door, not to the caller
 
 Which listener a request arrived on decides whether it needs a token. Nothing

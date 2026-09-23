@@ -417,6 +417,73 @@ async fn control_at_the_loopback_door_asks_nothing() {
     assert_eq!(response.status(), 200);
 }
 
+/// A web page is a local process too, acting for whoever served it. A browser
+/// sends a `text/plain` POST cross-origin with no preflight, so without this
+/// any page the user opens could stop the daemon or move serving to another
+/// account. A browser always names the page it acts for; the client and the
+/// CLI never do.
+#[tokio::test]
+async fn the_loopback_door_refuses_a_request_a_browser_made_for_a_page() {
+    let harness = Harness::start(None).await;
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"status"}"#;
+
+    for (name, value) in [
+        ("origin", "https://example.com"),
+        ("sec-fetch-site", "cross-site"),
+    ] {
+        let response = harness
+            .client
+            .post(format!("{}/control", harness.loopback))
+            .header("content-type", "text/plain")
+            .header(name, value)
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 401, "{name}");
+        let refused: Value = response.json().await.unwrap();
+        assert_eq!(refused["error"]["type"], "authentication_error", "{name}");
+
+        let response = harness
+            .client
+            .get(format!("{}/v1/models", harness.loopback))
+            .header(name, value)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 401, "{name} on the turn surface");
+    }
+}
+
+/// A page that rebinds its own name to 127.0.0.1 is same-origin to itself, so
+/// it arrives with its own name as the host. The loopback door answers only to
+/// the names loopback has.
+#[tokio::test]
+async fn the_loopback_door_refuses_a_host_that_is_not_loopback() {
+    let harness = Harness::start(None).await;
+
+    let response = harness
+        .client
+        .get(format!("{}/v1/models", harness.loopback))
+        .header("host", "rebound.example:8787")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 401);
+
+    let port = harness.loopback.rsplit(':').next().unwrap();
+    for host in [format!("localhost:{port}"), format!("[::1]:{port}")] {
+        let response = harness
+            .client
+            .get(format!("{}/v1/models", harness.loopback))
+            .header("host", &host)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "{host}");
+    }
+}
+
 /// An unknown method keeps its JSON-RPC code over HTTP, because "this daemon
 /// does not have that method" is the one distinction a caller acts on (§6).
 #[tokio::test]

@@ -47,6 +47,11 @@ pub struct Session {
     pub cache_key: String,
     /// When this conversation was last used, for idle expiry.
     last_used: Mutex<std::time::Instant>,
+    /// Held while the baseline, the last request, and the last response id
+    /// are read together or written together. Each has its own lock, and a
+    /// turn that read the baseline before another closed and the response id
+    /// after would compute a delta against one and continue the other (§4.3).
+    turn: Mutex<()>,
 }
 
 impl Session {
@@ -61,6 +66,7 @@ impl Session {
             discovered_tools: Mutex::new(BTreeSet::new()),
             cache_key,
             last_used: Mutex::new(std::time::Instant::now()),
+            turn: Mutex::new(()),
         }
     }
 
@@ -98,6 +104,43 @@ impl Session {
                 .ok()
                 .and_then(|held| held.clone()),
         )
+    }
+
+    /// The baseline and what the last turn left, read as one: what a delta is
+    /// computed against and what it continues.
+    pub fn snapshot(
+        &self,
+    ) -> (
+        Baseline,
+        Option<proxenos_core::responses::ResponsesRequest>,
+        Option<String>,
+    ) {
+        let _turn = self.turn.lock();
+        let baseline = self
+            .baseline
+            .lock()
+            .map(|baseline| baseline.clone())
+            .unwrap_or_default();
+        let (request, response) = self.previous();
+        (baseline, request, response)
+    }
+
+    /// Close a turn: what it sent, what came back, and the response a delta
+    /// continues next, written as one against `snapshot`.
+    pub fn close(
+        &self,
+        request: &proxenos_core::responses::ResponsesRequest,
+        returned: &[InputItem],
+        response_id: Option<String>,
+    ) {
+        let _turn = self.turn.lock();
+        // `None` clears the one before: a response id left from an earlier
+        // turn would be continued against a baseline that has moved past it.
+        if let Ok(mut held) = self.last_response_id.lock() {
+            *held = response_id;
+        }
+        self.remember_request(request);
+        self.advance(&request.input, returned);
     }
 
     pub fn remember_request(&self, request: &proxenos_core::responses::ResponsesRequest) {

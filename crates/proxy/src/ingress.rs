@@ -197,7 +197,7 @@ pub fn serving_router(state: AppState, access: Access) -> Router {
     }
 
     match access.door {
-        Door::Loopback => router,
+        Door::Loopback => router.layer(axum::middleware::from_fn(refuse_a_page)),
         Door::Remote { token } => router.layer(axum::middleware::from_fn_with_state(
             std::sync::Arc::<str>::from(token),
             require_token,
@@ -234,6 +234,43 @@ async fn require_token(
         )
         .into_response(),
     }
+}
+
+/// Refuse, at the loopback door, a request a browser made on a web page's
+/// behalf.
+///
+/// That door authenticates nothing because every caller is a local process
+/// running as the user, and a browser is one — acting for whatever page it
+/// has open. A `text/plain` POST crosses origins with no preflight, so a page
+/// could otherwise stop the daemon or move serving to another account. A
+/// browser names the page it acts for (`Origin`, `Sec-Fetch-Site`); the client
+/// and the CLI never do. A page that rebinds its own name to 127.0.0.1 is
+/// same-origin to itself and arrives under its own name, so the host must be
+/// one loopback answers to.
+async fn refuse_a_page(request: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let headers = request.headers();
+    let from_a_page = headers.contains_key(header::ORIGIN)
+        || headers
+            .get("sec-fetch-site")
+            .is_some_and(|site| site.as_bytes() != b"none");
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(|host| match host.rsplit_once(':') {
+            Some((name, port)) if port.bytes().all(|b| b.is_ascii_digit()) => name,
+            _ => host,
+        });
+    let loopback_host = host.is_none_or(|name| {
+        name.eq_ignore_ascii_case("localhost") || name == "127.0.0.1" || name == "[::1]"
+    });
+    if from_a_page || !loopback_host {
+        return ProxyError::authentication(
+            "the loopback door answers local programs, not web pages or other hosts. \
+             Reach this daemon from elsewhere through its `listen` address and token.",
+        )
+        .into_response();
+    }
+    next.run(request).await
 }
 
 /// Compare two secrets without leaking where they first differ.
@@ -766,11 +803,7 @@ async fn messages(
 
     // What the conversation contained *before* this turn. The delta is computed
     // against this, and it has to be taken before the baseline moves.
-    let baseline_before_turn = session
-        .baseline
-        .lock()
-        .map(|baseline| baseline.clone())
-        .unwrap_or_default();
+    let (baseline_before_turn, previous_request, previous_response_id) = session.snapshot();
 
     // §3.3 — put back what the client could not replay.
     //
@@ -831,8 +864,6 @@ async fn messages(
         ))
         .into_response();
     }
-
-    let (previous_request, previous_response_id) = session.previous();
 
     let events = match &state.conduits {
         Some(factory) => {
@@ -903,6 +934,22 @@ async fn messages(
             note_error(&state, account.as_deref(), &error);
             return error.into_response();
         }
+    }
+    // Fewer events than the peek allows, every one of them preamble: the
+    // stream ended before the response started. Streamed on, it would be a
+    // 200 with no frames at all.
+    if preamble.len() < PREAMBLE
+        && preamble.iter().all(|event| {
+            event
+                .as_ref()
+                .is_ok_and(|payload| is_preamble_event(payload))
+        })
+    {
+        let error = ProxyError::overloaded(
+            "the backend ended the stream before the response started".to_owned(),
+        );
+        note_error(&state, account.as_deref(), &error);
+        return error.into_response();
     }
 
     // The same preamble carries what quota is left, which is why it is read
@@ -1213,23 +1260,50 @@ impl StreamState {
     /// Without them the next turn's delta would resend what the backend already
     /// has, or worse, be computed against a conversation neither side holds.
     fn close_turn(&self) {
+        // Only a completed response is continued from. One that failed, or
+        // ended on an `error` event, holds context the client never received,
+        // and a delta attached to it is refused or silently wrong (§4.3).
+        if !self
+            .seen
+            .iter()
+            .any(|event| event.get("type").and_then(Value::as_str) == Some("response.completed"))
+        {
+            return;
+        }
+
         let mut returned: Vec<proxenos_core::responses::InputItem> = Vec::new();
+        let mut response_id = None;
+        let mut unheld = false;
 
         for event in &self.seen {
             if let Some(id) = event.pointer("/response/id").and_then(Value::as_str) {
-                self.session.remember_response(id.to_owned());
+                response_id = Some(id.to_owned());
             }
             if event.get("type").and_then(Value::as_str) == Some("response.output_item.done")
                 && let Some(item) = event.get("item")
-                && let Ok(parsed) =
-                    serde_json::from_value::<proxenos_core::responses::InputItem>(item.clone())
             {
-                returned.push(parsed);
+                match serde_json::from_value::<proxenos_core::responses::InputItem>(item.clone()) {
+                    Ok(parsed) => returned.push(parsed),
+                    // One the client replays but the baseline cannot hold:
+                    // the replay would read as new and be sent again to a
+                    // response that already has it, so nothing is continued.
+                    Err(_)
+                        if matches!(
+                            item.get("type").and_then(Value::as_str),
+                            Some("message" | "function_call")
+                        ) =>
+                    {
+                        unheld = true;
+                    }
+                    Err(_) => {}
+                }
             }
         }
+        if unheld {
+            response_id = None;
+        }
 
-        self.session.remember_request(&self.sent);
-        self.session.advance(&self.sent.input, &returned);
+        self.session.close(&self.sent, &returned, response_id);
     }
 
     /// §5.4 — a stream that completes having produced no content frames is
