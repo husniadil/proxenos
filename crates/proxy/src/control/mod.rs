@@ -333,9 +333,16 @@ pub fn require_client_policy(result: &serde_json::Value) -> Result<(), ProxyErro
 pub async fn serve(path: &Path, state: ControlState) -> Result<(), ProxyError> {
     ensure_addressable(path)?;
 
-    // A socket left behind by a crashed daemon would refuse the bind. Removing
-    // it is safe here because the port bind has already established that no
-    // other daemon is running.
+    // A socket left behind by a crashed daemon would refuse the bind, so a
+    // dead one is removed. A live one is another daemon's: the port bind does
+    // not rule that out when either was given another port, and taking its
+    // socket would leave it serving turns that no CLI verb can reach.
+    if std::os::unix::net::UnixStream::connect(path).is_ok() {
+        return Err(ProxyError::invalid_request(format!(
+            "another daemon is already answering on {}",
+            path.display()
+        )));
+    }
     let _ = std::fs::remove_file(path);
 
     let listener = tokio::net::UnixListener::bind(path).map_err(|error| {

@@ -415,6 +415,20 @@ fn an_unparseable_configuration_is_still_refused() {
     assert!(error.message.contains("config.toml"), "{}", error.message);
 }
 
+/// Every tier in the shipped file is a default, not a statement. The file is
+/// written whole the first time a change is persisted, and a mapping it stated
+/// would stop the catalog substituting a default the account lacks (§7.1): a
+/// persisted effort would quietly take opus away from a plan without it.
+#[test]
+fn the_example_states_no_tier() {
+    let config: Config = toml::from_str(proxenos::config::EXAMPLE).unwrap();
+    let tiers = config
+        .tiers
+        .resolve(proxenos::config::CrossAccountTiers::Refused)
+        .unwrap();
+    assert!(tiers.iter().all(|tier| tier.defaulted), "{tiers:?}");
+}
+
 /// The example in the error message is itself valid. An example that does not
 /// parse is worse than none.
 #[test]
@@ -849,6 +863,30 @@ fn the_example_states_the_defaults_it_documents() {
         mapping(&example),
         mapping(&defaults),
         "the example's tier mapping is not the compiled default"
+    );
+    // The tiers are shown commented out, so the file states none of them;
+    // what they show must still be the compiled default.
+    let mut in_tiers = false;
+    let shown = proxenos::config::EXAMPLE
+        .lines()
+        .map(|line| {
+            if line == "[tiers]" {
+                in_tiers = true;
+            } else if line.is_empty() {
+                in_tiers = false;
+            }
+            match line.strip_prefix("# ") {
+                Some(bare) if in_tiers => bare,
+                _ => line,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let shown: Config = toml::from_str(&shown).expect("the shown tiers should parse");
+    assert_eq!(
+        mapping(&shown),
+        mapping(&defaults),
+        "the tiers the example shows are not the compiled default"
     );
     assert_eq!(example.port, defaults.port);
     assert_eq!(example.effort_ceiling().unwrap(), None);

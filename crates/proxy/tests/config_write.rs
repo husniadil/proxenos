@@ -318,3 +318,75 @@ fn an_effort_is_written_in_table_form() {
         "{written}"
     );
 }
+
+/// An operator who uncommented nothing but wrote a live line below the shipped
+/// comment has two lines naming the key. The live one is the setting, so it is
+/// the one rewritten: editing the comment instead leaves the live line
+/// deciding, or makes a second live line the file cannot hold.
+#[test]
+fn a_live_key_below_its_shipped_comment_is_the_one_that_gets_set() {
+    let document = "# effort = \"low\"\neffort = \"high\"\n\n# cross_account_tiers = true\ncross_account_tiers = true\n\n[accounts.spare]\n# effort = \"low\"\neffort = \"high\"\n";
+    let read = |text: &str| text.parse::<toml::Table>().expect("the file still parses");
+
+    let set = edit::set_effort(document, None, Some("medium")).unwrap();
+    assert_eq!(read(&set)["effort"].as_str(), Some("medium"));
+
+    let removed = edit::set_effort(document, None, None).unwrap();
+    assert!(!read(&removed).contains_key("effort"), "{removed}");
+
+    let revoked = edit::set_cross_account_tiers(document, false).unwrap();
+    assert!(
+        !read(&revoked).contains_key("cross_account_tiers"),
+        "{revoked}"
+    );
+
+    let spare = edit::set_effort(document, Some("spare"), Some("medium")).unwrap();
+    assert_eq!(
+        read(&spare)["accounts"]["spare"]["effort"].as_str(),
+        Some("medium")
+    );
+}
+
+/// A model id, a pin, or a tier's effort is written as a TOML string, escaped. Not
+/// every path that writes one has checked it against a catalog first, and an
+/// unescaped quote or newline leaves a file the next start refuses.
+#[test]
+fn written_values_are_escaped() {
+    let awkward = "odd\"id\\with\nnewline";
+    let read = |text: &str| text.parse::<toml::Table>().expect("the file still parses");
+
+    let bare = edit::set_tier(DOCUMENT, None, "opus", awkward, None, None).unwrap();
+    assert_eq!(read(&bare)["tiers"]["opus"].as_str(), Some(awkward));
+
+    let table = edit::set_tier(
+        DOCUMENT,
+        Some("spare"),
+        "opus",
+        awkward,
+        Some(awkward),
+        Some(awkward),
+    )
+    .unwrap();
+    let opus = &read(&table)["accounts"]["spare"]["tiers"]["opus"];
+    assert_eq!(opus["model"].as_str(), Some(awkward));
+    assert_eq!(opus["account"].as_str(), Some(awkward));
+    assert_eq!(opus["effort"].as_str(), Some(awkward));
+}
+
+/// A header may carry a comment after it, and it is still the same table.
+/// Missing it appended a second `[tiers]`, and a table defined twice is a
+/// file that no longer parses.
+#[test]
+fn a_header_with_a_trailing_comment_is_the_same_table() {
+    let document = "[tiers] # the mapping\nopus = \"gpt-5.6-terra\"\n\n[accounts.spare] # spare\neffort = \"low\"\n";
+    let read = |text: &str| text.parse::<toml::Table>().expect("the file still parses");
+
+    let tier = edit::set_tier(document, None, "opus", "gpt-6-sol", None, None).unwrap();
+    assert_eq!(read(&tier)["tiers"]["opus"].as_str(), Some("gpt-6-sol"));
+
+    let effort = edit::set_effort(document, Some("spare"), Some("high")).unwrap();
+    assert_eq!(
+        read(&effort)["accounts"]["spare"]["effort"].as_str(),
+        Some("high")
+    );
+}

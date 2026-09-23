@@ -643,7 +643,12 @@ impl CatalogSource {
         // The endpoint this credential belongs to, chosen from the credential
         // rather than from whichever kind was selected when the daemon
         // started. The pairing is structural here: there is no argument that
-        // could cross it.
+        // could cross it. Both endpoints are the translating provider's, so an
+        // Anthropic credential has none: sending it would hand its secret to a
+        // provider it does not belong to.
+        if authorization.provider != crate::auth::store::Provider::Codex {
+            return None;
+        }
         let endpoint = self.endpoint(authorization.kind);
         if endpoint.is_empty() {
             return None;

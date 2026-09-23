@@ -644,7 +644,7 @@ async fn a_catalog_is_fetched_from_the_endpoint_its_credential_belongs_to() {
             .refresh(&Authorization {
                 account: None,
                 kind: Kind::Key,
-                provider: proxenos::auth::store::Provider::Anthropic,
+                provider: proxenos::auth::store::Provider::Codex,
                 headers: vec![("authorization".to_owned(), "Bearer key-secret".to_owned())],
             })
             .await
@@ -659,6 +659,39 @@ async fn a_catalog_is_fetched_from_the_endpoint_its_credential_belongs_to() {
         1,
         "the key was sent to the subscription endpoint"
     );
+}
+
+/// Both endpoints are the translating provider's. An Anthropic credential,
+/// a key or a grant, is never sent to either: the secret would leave for a
+/// provider it does not belong to, whatever the fetch then answered.
+#[tokio::test]
+async fn an_anthropic_credential_is_never_sent_for_a_catalog() {
+    let subscription = recording_catalog().await;
+    let key = recording_catalog().await;
+    let source = proxenos::catalog::CatalogSource::new(
+        Catalog::fallback(),
+        subscription.0.clone(),
+        key.0.clone(),
+        "2.0.0",
+        SHIPPING,
+    );
+
+    for kind in [Kind::Key, Kind::Subscription] {
+        let fetched = source
+            .fetch_for(&Authorization {
+                account: None,
+                kind,
+                provider: proxenos::auth::store::Provider::Anthropic,
+                headers: vec![(
+                    "authorization".to_owned(),
+                    "Bearer anthropic-secret".to_owned(),
+                )],
+            })
+            .await;
+        assert!(fetched.is_none());
+    }
+    assert_eq!(subscription.1.lock().unwrap().len(), 0);
+    assert_eq!(key.1.lock().unwrap().len(), 0);
 }
 
 // ---------------------------------------------------------------------------

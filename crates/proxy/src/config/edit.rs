@@ -47,15 +47,15 @@ pub fn set_tier(
     // The bare string where nothing goes with the model; the table form,
     // account first as the file's own example writes it, where something does.
     let rendered = if pin.is_none() && effort.is_none() {
-        format!("\"{model}\"")
+        string(model)
     } else {
         let mut fields = Vec::with_capacity(3);
         if let Some(pin) = pin {
-            fields.push(format!("account = \"{pin}\""));
+            fields.push(format!("account = {}", string(pin)));
         }
-        fields.push(format!("model = \"{model}\""));
+        fields.push(format!("model = {}", string(model)));
         if let Some(effort) = effort {
-            fields.push(format!("effort = \"{effort}\""));
+            fields.push(format!("effort = {}", string(effort)));
         }
         format!("{{ {} }}", fields.join(", "))
     };
@@ -158,17 +158,10 @@ pub fn set_effort(
     // A commented-out key counts: the shipped file ships it that way, and
     // writing a second line would leave the commented one looking like the
     // setting while a live one below it actually decides.
-    let existing = lines
-        .get(..first_table)
-        .unwrap_or_default()
-        .iter()
-        .position(|line| {
-            let bare = line.trim_start().trim_start_matches('#').trim_start();
-            is_assignment_to(bare, "effort")
-        });
+    let existing = assignment(lines.get(..first_table).unwrap_or_default(), "effort");
 
     let line = match effort {
-        Some(effort) => format!("effort = \"{effort}\""),
+        Some(effort) => format!("effort = {}", string(effort)),
         None => "# effort = \"low\"".to_owned(),
     };
 
@@ -206,14 +199,10 @@ pub fn set_cross_account_tiers(document: &str, enabled: bool) -> Result<String, 
 
     // A commented-out key counts — the shipped file ships it that way, and a
     // second live line would leave the commented one looking like the setting.
-    let existing = lines
-        .get(..first_table)
-        .unwrap_or_default()
-        .iter()
-        .position(|line| {
-            let bare = line.trim_start().trim_start_matches('#').trim_start();
-            is_assignment_to(bare, "cross_account_tiers")
-        });
+    let existing = assignment(
+        lines.get(..first_table).unwrap_or_default(),
+        "cross_account_tiers",
+    );
 
     let line = if enabled {
         "cross_account_tiers = true".to_owned()
@@ -234,6 +223,21 @@ pub fn set_cross_account_tiers(document: &str, enabled: bool) -> Result<String, 
     }
 
     Ok(with_trailing_newline(lines.join("\n")))
+}
+
+/// The line that sets this key: a live one where there is one, else a
+/// commented-out one. A live line is what the daemon reads, so rewriting the
+/// comment above it would leave the live line deciding.
+fn assignment(lines: &[String], key: &str) -> Option<usize> {
+    lines
+        .iter()
+        .position(|line| is_assignment_to(line.trim_start(), key))
+        .or_else(|| {
+            lines.iter().position(|line| {
+                let bare = line.trim_start().trim_start_matches('#').trim_start();
+                is_assignment_to(bare, key)
+            })
+        })
 }
 
 /// Whether a line assigns to this key, ignoring how it is spaced.
@@ -343,7 +347,7 @@ fn set_in_table(
     let header = format!("[accounts.{}]", key(account));
     let mut lines: Vec<String> = document.lines().map(str::to_owned).collect();
     let line = match value {
-        Some(value) => format!("{name} = \"{value}\""),
+        Some(value) => format!("{name} = {}", string(value)),
         None => format!("# {name} = \"low\""),
     };
 
@@ -365,13 +369,7 @@ fn set_in_table(
     let body = lines.get(start + 1..end).unwrap_or_default();
     // A commented-out key counts, so a second live line cannot end up below one
     // that still looks like the setting.
-    let existing = body
-        .iter()
-        .position(|line| {
-            let bare = line.trim_start().trim_start_matches('#').trim_start();
-            is_assignment_to(bare, name)
-        })
-        .map(|offset| start + 1 + offset);
+    let existing = assignment(body, name).map(|offset| start + 1 + offset);
 
     match existing {
         Some(index) => {
@@ -402,7 +400,11 @@ fn set_in_table(
 /// operator who wrote `[accounts."spare"]` got a second table appended, and a
 /// table defined twice is a file that no longer parses.
 fn opens_table(line: &str, account: Option<&str>, suffix: &str) -> bool {
-    let trimmed = line.trim();
+    // A comment may follow the header. Names this matches carry no `#`.
+    let trimmed = line
+        .split_once('#')
+        .map_or(line, |(header, _)| header)
+        .trim();
     let Some(account) = account else {
         return trimmed == format!("[{}]", suffix.trim_start_matches('.'));
     };
@@ -510,5 +512,21 @@ fn profile_header(line: &str, name: &str) -> Option<String> {
 /// A TOML basic string. A profile directory is often under a path with a space
 /// in it, and on Windows one with backslashes.
 fn string(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            control if control.is_control() => {
+                escaped.push_str(&format!("\\u{:04X}", u32::from(control)));
+            }
+            other => escaped.push(other),
+        }
+    }
+    escaped.push('"');
+    escaped
 }

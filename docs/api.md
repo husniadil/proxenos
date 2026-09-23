@@ -1798,7 +1798,7 @@ where the file took the serving profile away), `remaining`, and `needs_restart`.
   takes, except a model the catalog lacks **marks** its tier instead of
   refusing.
 - `needs_restart` is always `instructions`, `client`, `transport`, `upstream`,
-  `port`.
+  `port`, `listen`, `claude_program`, `codex_program`.
 - Nothing is fetched. A conversation in flight keeps what it started with.
 - A file that does not parse is refused with the parse error; the daemon keeps what
   it was running.

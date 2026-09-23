@@ -1647,7 +1647,8 @@ fn set_effort(state: &ControlState, params: Option<&Value>) -> Result<Value, Pro
     // shared ceiling applies again (§4) — reporting "no ceiling" there would be
     // a figure that lasts until the next start and then quietly comes back.
     let effective = if persisted {
-        configuration(state).effort_ceiling_for(serving_name(state).as_deref())?
+        let reported = target.clone().or_else(|| serving_name(state));
+        configuration(state).effort_ceiling_for(reported.as_deref())?
     } else {
         ceiling
     };
@@ -2011,14 +2012,35 @@ fn set_cross_account(state: &ControlState, params: Option<&Value>) -> Result<Val
     // restart, with no way back but an edit. Refused now instead, naming what
     // still needs the consent.
     if !enabled {
-        let pinned: Vec<&str> = state
+        let mut pinned: Vec<String> = state
             .policy
             .get()
             .tiers()
             .iter()
             .filter(|tier| tier.account.is_some())
-            .map(|tier| tier.tier)
+            .map(|tier| tier.tier.to_owned())
             .collect();
+        // And every pin the file states, for any account: a pin in a section
+        // not in force now is refused the moment that account serves or a
+        // session is tagged onto it.
+        let config = configuration(state);
+        for account in
+            std::iter::once(None).chain(config.accounts.keys().map(|name| Some(name.as_str())))
+        {
+            let resolved = config
+                .tiers_for(account)
+                .resolve(crate::config::CrossAccountTiers::Permitted)
+                .unwrap_or_default();
+            for tier in resolved.iter().filter(|tier| tier.account.is_some()) {
+                let named = match account {
+                    Some(account) => format!("{} (under `[accounts.{account}]`)", tier.tier),
+                    None => tier.tier.to_owned(),
+                };
+                if !pinned.contains(&named) {
+                    pinned.push(named);
+                }
+            }
+        }
         if !pinned.is_empty() {
             return Err(ProxyError::invalid_request(format!(
                 "consent cannot be revoked while {} still pin{} another account; point the \
@@ -2287,7 +2309,16 @@ async fn remove_account(state: &ControlState, params: Option<&Value>) -> Result<
 /// a session was opened with, the client program a profile is refreshed
 /// through, the transport and upstream settings a conduit dialed with, and the
 /// port the listener is already bound to.
-const NEEDS_RESTART: [&str; 5] = ["instructions", "client", "transport", "upstream", "port"];
+const NEEDS_RESTART: [&str; 8] = [
+    "instructions",
+    "client",
+    "transport",
+    "upstream",
+    "port",
+    "listen",
+    "claude_program",
+    "codex_program",
+];
 
 /// `config.reload` — re-read config.toml into the running daemon.
 ///
@@ -2345,6 +2376,18 @@ fn reload_config(state: &ControlState) -> Result<Value, ProxyError> {
         ));
     }
     let config = config_on_disk(state)?;
+
+    // Everything that can refuse the file is asked before anything is
+    // applied, for every account the reload could leave serving: a refusal
+    // after the profiles swap would leave them live under the old mapping.
+    for account in
+        std::iter::once(None).chain(config.accounts.keys().map(|name| Some(name.as_str())))
+    {
+        config
+            .tiers_for(account)
+            .resolve(config.cross_account_policy())?;
+        config.effort_ceiling_for(account)?;
+    }
 
     let mut reloaded = Vec::new();
 

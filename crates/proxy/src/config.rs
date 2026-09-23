@@ -172,7 +172,9 @@ port = 8787
 # codex_program = "/opt/homebrew/bin/codex"
 
 # The defaults, shown so they can be changed. An omitted tier takes the value
-# below; a tier written blank is refused rather than defaulted. WebFetch runs on
+# below, and stays a default the catalog may replace where the account lacks it;
+# uncommented, it is a statement nothing overrules. A tier written blank is
+# refused rather than defaulted. WebFetch runs on
 # the haiku tier, so that one matters more than it looks.
 #
 # A tier may also pin an account: `haiku = { account = "spare", model = "..." }`
@@ -188,10 +190,10 @@ port = 8787
 # arrives. Two tiers on one model must agree on its effort. Both keys may sit in
 # one table: `haiku = { account = "spare", model = "...", effort = "low" }`.
 [tiers]
-opus   = "gpt-6-sol"
-sonnet = "gpt-5.6-terra"
-haiku  = "gpt-6-luna"
-fable  = "gpt-6-astra"
+# opus   = "gpt-6-sol"
+# sonnet = "gpt-5.6-terra"
+# haiku  = "gpt-6-luna"
+# fable  = "gpt-6-astra"
 
 # What differs for one account, keyed by the name `accounts` lists it under.
 # Two subscriptions on different plans are offered different models, and a key

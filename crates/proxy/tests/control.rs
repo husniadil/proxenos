@@ -4350,6 +4350,62 @@ async fn a_change_for_another_account_does_not_claim_to_be_in_effect() {
     );
 }
 
+/// Consent is not revoked while the file still pins an account anywhere,
+/// including a section not in force now: that account's turns, or a session
+/// tagged onto it, would be refused from then on.
+#[tokio::test]
+async fn consent_is_not_revoked_while_the_file_pins_an_account() {
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add(&grant("acct_one", "a-one"), Some("spare"))
+        .unwrap();
+    harness
+        .store
+        .add(&grant("acct_two", "a-two"), Some("work"))
+        .unwrap();
+    harness.store.select("work").unwrap();
+    std::fs::write(
+        &harness.config_file,
+        "cross_account_tiers = true\n\n[accounts.spare.tiers]\nhaiku = { account = \"work\", model = \"gpt-5.6-luna\" }\n",
+    )
+    .unwrap();
+
+    let refusal = harness
+        .call_with("cross_account_tiers.set", json!({ "enabled": false }))
+        .await
+        .expect_err("spare's section still pins work");
+    assert!(refusal.contains("spare"), "{refusal}");
+}
+
+/// A ceiling written for another account reports that account's ceiling, the
+/// one its turns will run under, not the serving account's.
+#[tokio::test]
+async fn a_ceiling_written_for_another_account_reports_that_accounts_ceiling() {
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add(&grant("acct_one", "a-one"), Some("spare"))
+        .unwrap();
+    harness
+        .store
+        .add(&grant("acct_two", "a-two"), Some("work"))
+        .unwrap();
+    harness.store.select("work").unwrap();
+    std::fs::write(&harness.config_file, "effort = \"medium\"\n").unwrap();
+
+    let answer = harness
+        .call_with(
+            "effort.set",
+            json!({ "effort": "low", "account": "spare", "persist": true }),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(answer["account"], json!("spare"));
+    assert_eq!(answer["effort"], json!("low"), "{answer}");
+}
+
 /// §9.1 — a tier whose turns are relayed is not measured against the first
 /// provider's catalog.
 ///
@@ -6683,7 +6739,8 @@ async fn reloading_away_the_serving_profile_says_nothing_serves() {
     assert_eq!(
         proxenos::render::reloaded_config(&answer),
         "reloaded config.toml: profiles, tiers, effort\nstill needs a restart: instructions, \
-         client, transport, upstream, port\nno account is serving turns — the one that was \
+         client, transport, upstream, port, listen, claude_program, codex_program\nno account \
+         is serving turns — the one that was \
          is no longer declared; choose one with `proxenos accounts use NAME`"
     );
 }
@@ -6840,6 +6897,39 @@ async fn reloading_a_file_that_does_not_parse_changes_nothing() {
     assert_eq!(*state.policy.get(), *before);
 }
 
+/// A file that parses but cannot be applied (here an effort nothing
+/// recognizes) is refused before any of it is applied. Declaring the profiles
+/// first and failing on the mapping after would leave a new account set live,
+/// under the old mapping, with an answer saying nothing was reloaded.
+#[tokio::test]
+async fn reloading_a_file_that_cannot_be_applied_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut started_with = proxenos::config::Config::default();
+    started_with.profiles.insert(
+        "work".to_owned(),
+        proxenos::config::ProfileConfig {
+            provider: Provider::Codex,
+            path: Some(std::path::PathBuf::from("/profiles/work")),
+        },
+    );
+    let state = reloadable(dir.path(), started_with);
+
+    let document = format!(
+        "effort = \"cheap\"\n{}",
+        config_declaring(&[("work", "/profiles/work"), ("spare", "/profiles/spare")])
+    );
+    std::fs::write(dir.path().join("config.toml"), document).unwrap();
+
+    proxenos::control::handler::dispatch(&state, "config.reload", None)
+        .await
+        .expect_err("an effort nothing recognizes is refused");
+
+    let after = proxenos::control::handler::dispatch(&state, "accounts", None)
+        .await
+        .unwrap();
+    assert_eq!(after["accounts"].as_array().unwrap().len(), 1, "{after}");
+}
+
 /// What a reload cannot reach is named every time, not left to be discovered
 /// by an operator whose edit silently did nothing.
 #[tokio::test]
@@ -6853,7 +6943,16 @@ async fn reloading_names_what_still_needs_a_restart() {
         .unwrap();
 
     let restart = answer["needs_restart"].as_array().unwrap();
-    for key in ["instructions", "client", "transport", "upstream", "port"] {
+    for key in [
+        "instructions",
+        "client",
+        "transport",
+        "upstream",
+        "port",
+        "listen",
+        "claude_program",
+        "codex_program",
+    ] {
         assert!(restart.contains(&json!(key)), "{answer}");
     }
 }
@@ -7124,4 +7223,36 @@ async fn an_unrecognized_or_conflicting_tier_effort_is_refused_by_name() {
         harness.call("tiers").await.unwrap()["tiers"]["fable"],
         json!("gpt-5.4-mini")
     );
+}
+
+/// A second daemon on the same socket path is refused rather than taking the
+/// socket over. A different port (`--port`, `PROXENOS_PORT`) passes the port
+/// check, and removing the socket first left the first daemon serving turns
+/// while every CLI verb, `stop` included, reached the second.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_second_daemon_does_not_take_a_live_control_socket() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("proxenos.sock");
+    let first = reloadable(dir.path(), proxenos::config::Config::default());
+    let socket = path.clone();
+    tokio::spawn(async move {
+        let _ = control::serve(&socket, first).await;
+    });
+    for _ in 0..100 {
+        if path.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let second = reloadable(dir.path(), proxenos::config::Config::default());
+    let refused = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        control::serve(&path, second),
+    )
+    .await
+    .expect("the second serve should return rather than run")
+    .expect_err("the socket is live");
+    assert!(refused.message.contains("already"), "{}", refused.message);
 }
