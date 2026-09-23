@@ -452,6 +452,47 @@ fn an_incomplete_response_reports_upstream_usage() {
     assert_eq!(usage["output_tokens"], json!(7));
 }
 
+/// Two calls whose items interleave each become one block. The second call's
+/// start closes the first, so the first's completion finds it no longer open;
+/// opening it again emitted every call twice, under repeated ids.
+#[test]
+fn interleaved_function_calls_are_each_emitted_once() {
+    let call = |id: &str| json!({ "type": "function_call", "id": format!("fc_{id}"), "call_id": format!("call_{id}"), "name": "Read", "arguments": "{\"file_path\":\"/tmp/a\"}" });
+    let frames = run(&[
+        json!({ "type": "response.created", "response": { "id": "resp_1" } }),
+        json!({ "type": "response.output_item.added", "item": call("a") }),
+        json!({ "type": "response.function_call_arguments.delta", "item_id": "fc_a", "delta": "{\"file_path\":\"/tmp/a\"}" }),
+        json!({ "type": "response.output_item.added", "item": call("b") }),
+        json!({ "type": "response.output_item.done", "item": call("a") }),
+        json!({ "type": "response.output_item.done", "item": call("b") }),
+        json!({ "type": "response.completed", "response": { "id": "resp_1" } }),
+    ]);
+
+    let ids: Vec<&str> = frames
+        .iter()
+        .filter(|f| f["type"] == "content_block_start")
+        .filter_map(|f| f["content_block"]["id"].as_str())
+        .collect();
+    assert_eq!(ids, ["call_a", "call_b"]);
+}
+
+/// A `usage` that is present but null is not a usage block. Read as one, every
+/// count became zero at the end of the turn, and the context meter collapsed.
+#[test]
+fn a_null_usage_leaves_the_estimate_rather_than_zeroing_it() {
+    let frames = run(&[
+        json!({ "type": "response.created", "response": { "id": "resp_1" } }),
+        json!({ "type": "response.output_text.delta", "delta": "hi" }),
+        json!({ "type": "response.completed", "response": { "id": "resp_1", "usage": null } }),
+    ]);
+
+    let usage = &frames
+        .iter()
+        .find(|f| f["type"] == "message_delta")
+        .unwrap()["usage"];
+    assert_ne!(usage["input_tokens"], json!(0));
+}
+
 /// §5.0 — a payload that is not JSON is ignored rather than treated as an
 /// error. Keep-alives and sentinels arrive this way.
 #[test]

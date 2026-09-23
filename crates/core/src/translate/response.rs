@@ -62,6 +62,9 @@ pub struct ResponseTranslator {
     open: OpenBlock,
     next_index: usize,
     saw_tool_call: bool,
+    /// Calls already given a block. An item completing after another call's
+    /// start closed its block is not opened a second time.
+    emitted_calls: std::collections::BTreeSet<String>,
     stop_reason: StopReason,
     usage: Usage,
     /// §5.2 — the searches this turn ran, and the sources it drew on. Both are
@@ -94,6 +97,7 @@ impl ResponseTranslator {
             open: OpenBlock::None,
             next_index: 0,
             saw_tool_call: false,
+            emitted_calls: std::collections::BTreeSet::new(),
             stop_reason: StopReason::EndTurn,
             searches: Vec::new(),
             sources: Vec::new(),
@@ -162,7 +166,10 @@ impl ResponseTranslator {
             "response.output_item.done" => self.item_done(event, frames),
             "response.completed" => {
                 self.start_message(frames);
-                if let Some(usage) = event.pointer("/response/usage") {
+                if let Some(usage) = event
+                    .pointer("/response/usage")
+                    .filter(|usage| usage.is_object())
+                {
                     self.usage = translate_usage(usage);
                 }
                 self.close_message(frames);
@@ -174,7 +181,10 @@ impl ResponseTranslator {
                 // and it carries the same usage block a completed one does.
                 // Leaving the estimate in place would report a figure the
                 // backend never agreed to.
-                if let Some(usage) = event.pointer("/response/usage") {
+                if let Some(usage) = event
+                    .pointer("/response/usage")
+                    .filter(|usage| usage.is_object())
+                {
                     self.usage = translate_usage(usage);
                 }
                 self.close_message(frames);
@@ -323,6 +333,9 @@ impl ResponseTranslator {
         );
 
         if !already_open {
+            if self.emitted_calls.contains(&call_id) {
+                return;
+            }
             self.open_tool_use(item, name, frames);
         }
 
@@ -354,6 +367,7 @@ impl ResponseTranslator {
         self.close_block(frames);
         let call_id = call_id_of(item);
         self.saw_tool_call = true;
+        self.emitted_calls.insert(call_id.clone());
 
         frames.push(Frame::ContentBlockStart {
             index: self.next_index,

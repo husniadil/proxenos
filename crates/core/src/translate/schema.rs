@@ -87,20 +87,32 @@ pub(super) fn drop_unsupported_patterns(schema: &mut Value) {
 fn supported(pattern: &str) -> bool {
     let mut chars = pattern.chars().peekable();
     let mut depth = 0_i32;
+    // Whether what came last is something a quantifier may follow, and
+    // whether it was itself a quantifier (which only a lazy `?` may follow).
+    // A quantifier with nothing to repeat is an error in every dialect.
+    let mut quantifiable = false;
+    let mut after_quantifier = false;
 
     while let Some(c) = chars.next() {
+        let repeats = matches!(c, '*' | '+' | '?' | '{');
+        if !repeats {
+            after_quantifier = false;
+        }
         match c {
             '\\' => {
                 if !escape(chars.next()) {
                     return false;
                 }
+                quantifiable = true;
             }
             '[' => {
+                quantifiable = true;
                 if !class(&mut chars) {
                     return false;
                 }
             }
             '(' => {
+                quantifiable = false;
                 depth += 1;
                 if chars.peek() == Some(&'?') {
                     chars.next();
@@ -122,18 +134,30 @@ fn supported(pattern: &str) -> bool {
                 if depth < 0 {
                     return false;
                 }
+                quantifiable = true;
             }
             '{' => {
-                if !quantifier(&mut chars) {
+                if !quantifiable || !quantifier(&mut chars) {
                     return false;
                 }
+                quantifiable = false;
+                after_quantifier = true;
             }
             // A stray `]` or `}` is a literal in some dialects and an error in
             // others. Refused, on the rule above.
             ']' | '}' => return false,
-            '*' | '+' | '?' | '|' | '^' | '$' | '.' => {}
+            '?' if after_quantifier => after_quantifier = false,
+            '*' | '+' | '?' => {
+                if !quantifiable {
+                    return false;
+                }
+                quantifiable = false;
+                after_quantifier = true;
+            }
+            '|' | '^' | '$' => quantifiable = false,
+            '.' => quantifiable = true,
             c if c.is_control() => return false,
-            _ => {}
+            _ => quantifiable = true,
         }
     }
 
@@ -211,15 +235,25 @@ fn class(chars: &mut std::iter::Peekable<std::str::Chars>) -> bool {
 
 /// A repetition count, from just past its `{` to its `}`.
 fn quantifier(chars: &mut std::iter::Peekable<std::str::Chars>) -> bool {
-    let mut digits = 0_u32;
-    let mut commas = 0_u32;
+    let mut bounds = vec![String::new()];
 
     loop {
         match chars.next() {
-            Some('}') => return digits > 0 && commas <= 1,
-            Some(c) if c.is_ascii_digit() => digits += 1,
-            Some(',') => commas += 1,
+            Some('}') => break,
+            Some(c) if c.is_ascii_digit() => bounds.last_mut().map_or((), |b| b.push(c)),
+            Some(',') if bounds.len() == 1 => bounds.push(String::new()),
             _ => return false,
         }
+    }
+
+    // A minimum is required, and a maximum below it is an error.
+    let Some(Ok(minimum)) = bounds.first().map(|b| b.parse::<u64>()) else {
+        return false;
+    };
+    match bounds.get(1).filter(|maximum| !maximum.is_empty()) {
+        Some(maximum) => maximum
+            .parse::<u64>()
+            .is_ok_and(|maximum| minimum <= maximum),
+        None => true,
     }
 }
