@@ -1,6 +1,6 @@
 ---
 name: proxenos
-description: Run Claude Code on an OpenAI model through the proxenos daemon, mainly to spawn a second-eye agent on a different model family. Use when asked for a second opinion from gpt-5.6-sol or another OpenAI model, to launch a claude pane through proxenos, or to check proxenos status, models, accounts, or quota. Trigger words - proxenos, second eye, gpt-5.6, sol, luna, terra, OpenAI model, other model family.
+description: Run Claude Code on an OpenAI model through the proxenos daemon, mainly to spawn a second-eye agent on a different model family. Use when asked for a second opinion from an OpenAI model (GPT, Sol, Luna, Terra, Astra), to launch a claude pane through proxenos, or to check proxenos status, models, accounts, or quota.
 ---
 
 # proxenos
@@ -15,7 +15,7 @@ different model family than the one that wrote the code.
 ## Launch
 
 ```sh
-proxenos exec --account work-codex claude --model gpt-5.6-sol --effort high
+proxenos exec --account <codex-account> claude --model opus --effort high
 ```
 
 - `proxenos exec` applies the proxy environment (`ANTHROPIC_BASE_URL`, tier model
@@ -42,8 +42,8 @@ proxenos exec --account work-codex claude --model gpt-5.6-sol --effort high
   `proxenos tiers cross-account on`, both written to config.toml. These change the
   daemon for every session, so ask the operator first.
 
-Non-interactive works the same way: `proxenos exec --account work-codex claude -p
-"..." --model gpt-5.6-sol`.
+Non-interactive works the same way: `proxenos exec --account <codex-account> claude
+-p "..." --model opus`.
 
 ## In a Herdr pane
 
@@ -53,7 +53,7 @@ in `proxenos exec`. Use a plain pane instead:
 ```sh
 herdr pane split --current --direction right --cwd "$PWD" --no-focus   # .result.pane
 herdr pane wait-output <pane> --regex '\$ $' --timeout 30000             # shell prompt
-herdr pane run <pane> 'proxenos exec --account work-codex claude --model gpt-5.6-sol --effort high'
+herdr pane run <pane> 'proxenos exec --account <codex-account> claude --model opus --effort high'
 herdr agent wait <pane> --timeout 60000                                   # claude detected, idle
 herdr agent prompt <pane> "<brief>" --wait --timeout 1800000
 herdr pane read <pane> --source recent-unwrapped --lines 200
@@ -120,7 +120,7 @@ differently: `proxenos exec` points the client it starts at that daemon, and
 export PROXENOS_DAEMON=https://macbook.tailnet:8787
 export PROXENOS_TOKEN=...        # or PROXENOS_TOKEN_FILE=/path/to/token (0600)
 proxenos status                  # says where the daemon is
-proxenos exec claude --model gpt-5.6-sol --effort high
+proxenos exec claude --model opus --effort high
 ```
 
 What is refused in client mode, because it acts on the daemon's own machine:
@@ -132,10 +132,9 @@ restarts the daemon, so ask first too. `proxenos settings`
 is refused whenever a token is set, because the document would carry it; use
 `proxenos exec`.
 
-On the daemon's own machine nothing changes: that daemon always keeps a
-loopback door open that asks for no token, so a plain local `proxenos exec` and
-a plain local `proxenos status` work exactly as they always did — do not set
-`PROXENOS_TOKEN` there expecting it to be needed.
+On the daemon's own machine, that daemon always keeps a loopback door open that
+asks for no token, so a plain local `proxenos exec` and `proxenos status` need no
+`PROXENOS_TOKEN`.
 
 Never pass the token as a command-line argument — there is no flag for it, and
 argv is visible to every process on the machine. `proxenos env` deliberately

@@ -100,8 +100,8 @@ believed. No dates in specs or docs.
    - `ANTHROPIC_AUTH_TOKEN` is the one header the client offers, and carries
      both things read from it, whitespace-separated: `proxenos-account:<name>`
      (the `exec --account` launch tag) and `proxenos-token:<secret>`. A value
-     with no token part reads as it always did. A tag is a name; the credential
-     it resolves to never leaves the daemon. The token is a secret and never
+     with no token part is read whole, as the tag alone. A tag is a name; the
+     credential it resolves to never leaves the daemon. The token is a secret and never
      reaches argv, a log line, or what `status`, `env`, or `settings` print.
    - Nothing is collected, nothing is transmitted.
 
