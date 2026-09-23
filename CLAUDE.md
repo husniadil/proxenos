@@ -32,24 +32,57 @@ fixture corpus; `just record ingress` captures what the client sends and costs
 nothing. `record surface` spends a turn per exchange, so use `--only` to add
 one shape without re-buying the rest.
 
-## Docs that bind the code
+## Docs are part of the change, not a follow-up
+
+### Where each kind of doc lives
 
 - [`docs/proxy-behavior.md`](docs/proxy-behavior.md): the normative spec for
-  translation, transport, sessions, credentials, and token accounting. The code
-  is measured against it; most rules exist because the obvious implementation
+  translation, transport, sessions, credentials, and token accounting. Each
+  rule sits under its own heading, then why, then where it lives. The code is
+  measured against it; most rules exist because the obvious implementation
   fails silently. **Read the relevant section before touching any of those.**
 - [`docs/api.md`](docs/api.md): what the proxy exposes: ingress, error
-  vocabulary, CLI, control socket, configuration, and what is semver-bound (§6).
+  vocabulary, CLI (§2 opens with a synopsis of every verb), control socket,
+  configuration, and what is semver-bound (§6).
 - [`docs/roadmap.md`](docs/roadmap.md): current state, the intended work under
   `### Next` (named, never numbered), and §L, the questions only a live backend
-  settles. Release history lives in `CHANGELOG.md`, nowhere else.
+  settles.
+- `CHANGELOG.md`: release history, and nowhere else holds it.
+- `README.md`: for someone installing and running proxenos, ending with a
+  section for an AI agent helping them. `CONTRIBUTING.md`: a checkout, the
+  gate, releasing.
 - [`skills/proxenos/SKILL.md`](skills/proxenos/SKILL.md) and
-  [`herdr-plugin/`](herdr-plugin/) quote the CLI. A verb, flag, or config key
-  that moves, moves in both in the same commit.
+  [`herdr-plugin/`](herdr-plugin/): what an agent or a pane types. Both quote
+  the CLI.
+- This file: the rules and the map. No dates in specs or docs.
 
-If implementation disproves a spec rule, change the spec in the same commit as
-the code that proved it. A drifted spec is worse than none, because it is still
-believed. No dates in specs or docs.
+### What obliges a doc edit in the same commit
+
+Four things, and none is a judgement call. `crates/proxy/src/docs_check.rs`
+fails on the first two.
+
+1. **A CLI verb, flag, or config key moved.** Every `proxenos …` line in
+   README, CONTRIBUTING, this file, the skill, the herdr plugin, and the three
+   docs must still parse, and every verb needs its line in `api.md` §2's
+   synopsis.
+2. **A file the map below names moved or went.** The map is the only reader of
+   those paths, and a session reads it first.
+3. **Implementation disproved a spec rule.** Change the spec in the commit
+   whose code proved it. A drifted spec is worse than none, because it is
+   still believed.
+4. **Something the roadmap calls not done is done, or a §L question is
+   settled.** A doc that promises an absence is read as a decision.
+
+Everything else is judgement, and the question is whether the change would
+surprise the next reader: a new module needs a line in the map, and a constant
+a doc quotes needs its new value.
+
+### Do not delegate it
+
+Whoever wrote the change knows what moved; a subagent asked afterwards whether
+the docs need touching is a step somebody has to remember. What a subagent is
+good for is the periodic audit: one agent per document, reading it whole
+against the source.
 
 ## Non-negotiables
 
@@ -184,7 +217,8 @@ auth ──────── borrowed grants, stored keys, CredentialStore
   (how another process was started), `supervisor.rs` (launchd / systemd user
   unit).
 - Evidence: `probe.rs` and `doctor.rs` (capability probes), `recorder.rs`
-  (fixture capture), `surface.rs` (real Messages surface capture).
+  (fixture capture), `surface.rs` (real Messages surface capture),
+  `docs_check.rs` (the documents held to the CLI and the map, a test module).
 
 ## Naming
 

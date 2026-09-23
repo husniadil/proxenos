@@ -4,6 +4,8 @@
 
 mod cli;
 mod commands;
+#[cfg(test)]
+mod docs_check;
 
 use anyhow::Result;
 use clap::Parser;
