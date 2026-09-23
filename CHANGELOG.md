@@ -4,6 +4,63 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.32.0]
+
+- **The loopback door refuses a request a browser made for a web page.** It
+  authenticates nothing, and a `text/plain` POST crosses origins with no
+  preflight, so any page open in a browser could stop the daemon, update it, or
+  move serving to another account. A request carrying `Origin`, a
+  `Sec-Fetch-Site` other than `none`, or a `Host` that is not `localhost`,
+  `127.0.0.1` or `[::1]` is now refused as `authentication_error`. Reaching the
+  daemon from another machine goes through the `listen` address and its token,
+  as before.
+- **An Anthropic credential is never sent for a model catalog.** Both catalog
+  endpoints are the translating provider's, and a stored setup token or a
+  borrowed Claude profile was sent to them whenever that account served.
+- **Refreshing a stock profile refreshes that profile.** The client ran with
+  whatever `CLAUDE_CONFIG_DIR` or `CODEX_HOME` the daemon inherited, so a daemon
+  started from a shell pointing at another profile rotated that one's grant.
+- **Stored keys and grants are served only under a name that is theirs.** A key
+  sharing its name with a profile that appeared later is refused rather than
+  silently replaced by it; a grant left in `credentials.json` is refused by
+  name, as it already was in the listing; a label can no longer give two
+  entries one name; and a malformed credential file is reported without
+  quoting its contents.
+- **A socket past its age limit, or one closed mid-turn, no longer fails
+  quietly.** The backend's `websocket_connection_limit_reached` and
+  `previous_response_not_found` are retried once as a full send on a fresh
+  socket instead of failing every later turn, and a socket closed before the
+  turn completed is `overloaded_error` rather than a finished answer.
+- **A delta only continues a response that completed.** A failed response, one
+  ending on an `error` event, or one whose replayed items the baseline cannot
+  hold leaves the next turn a full send; the baseline and the response it
+  continues are read and written together. A stream that ends before the
+  response starts is a retryable 529, not an empty 200, and an unterminated
+  final event over HTTP is delivered.
+- **Translation keeps upstream's figures and calls.** A `usage` of null no
+  longer zeroes the context meter, interleaved function calls are emitted once
+  each, and patterns with a quantifier that repeats nothing or a reversed count
+  are dropped rather than forwarded to fail the turn.
+- **A persisted change writes the file it reports.** An edit rewrites a live
+  key rather than the commented one above it, escapes what it writes, and
+  recognizes a header with a comment after it. The shipped file shows the
+  default tiers commented out, so the first persisted change no longer turns
+  them into stated ones a plan without those models cannot serve.
+- **Control writes and reloads say what happened.** A reload that cannot be
+  applied changes nothing; a ceiling written for another account reports that
+  account's; revoking cross-account consent is refused while the file pins an
+  account anywhere; `needs_restart` also names `listen`, `claude_program` and
+  `codex_program`; and a second daemon no longer takes a live control socket.
+- **Tooling fails loud instead of plausible.** A live web-search probe needs a
+  result that carries something, `record surface` will not write an outage or
+  an answer without its code over a fixture, a status page that is not JSON is
+  an error rather than "no incident open", and a named quota window with no
+  reset is no longer carried forever. `env` names the token file when that is
+  where the token came from, `statusline` succeeds when the wrapped command
+  ignores its input, the usage popup exits on Ctrl-C, a failed supervisor
+  reinstall says the previous unit is gone too, and captures from an earlier
+  run are not overwritten.
+
 ## [0.31.0]
 
 - **A daemon can update itself: `proxenos update --version X.Y.Z`, the
