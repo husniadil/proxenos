@@ -459,7 +459,9 @@ impl Snapshot {
             {
                 continue;
             }
-            if has_reset(window.resets_at, now) {
+            // One with no reset would never be dropped, and would be shown
+            // at its old figure under this snapshot's age for good.
+            if window.resets_at.is_none() || has_reset(window.resets_at, now) {
                 continue;
             }
             merged.windows.push(window.clone());

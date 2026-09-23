@@ -1141,3 +1141,35 @@ async fn a_full_run_still_claims_the_translation_path() {
          Not exercised: the WebSocket transport, and no account was contacted."
     );
 }
+
+/// A live search that found nothing still emits both blocks, so "the blocks
+/// arrived" passes on the one outcome the probe exists to catch: an empty
+/// search the client reports as no results. The result block has to carry
+/// something, live as well as replayed.
+#[test]
+fn an_empty_live_search_does_not_pass() {
+    let probe = probe::all()
+        .into_iter()
+        .find(|probe| probe.name == "web-search")
+        .unwrap();
+    let request = serde_json::json!({ "tools": [{ "type": "web_search" }] });
+    let frames = |content: serde_json::Value| {
+        vec![
+            serde_json::json!({ "type": "content_block_start", "content_block": { "type": "server_tool_use" } }),
+            serde_json::json!({ "type": "content_block_start", "content_block": { "type": "web_search_tool_result", "content": content } }),
+        ]
+    };
+
+    assert!(matches!(
+        probe::evaluate_live(&probe, &request, &frames(serde_json::json!([]))),
+        Status::Failed(_)
+    ));
+    assert_eq!(
+        probe::evaluate_live(
+            &probe,
+            &request,
+            &frames(serde_json::json!([{ "type": "web_search_result", "url": "https://a.test" }]))
+        ),
+        Status::Passed
+    );
+}

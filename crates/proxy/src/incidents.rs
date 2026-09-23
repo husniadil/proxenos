@@ -69,19 +69,23 @@ pub struct Incident {
 /// whose rows carry `id`, `name`, `status`, `impact`, and either a
 /// `shortlink` or nothing, in which case the page's incident path is made.
 /// A row already `resolved` or in `postmortem` is not open and is dropped.
-#[must_use]
-pub fn parse(provider: Provider, body: &str) -> Vec<Incident> {
-    let Ok(document) = serde_json::from_str::<Value>(body) else {
-        return Vec::new();
-    };
-    let Some(rows) = document.get("incidents").and_then(Value::as_array) else {
-        return Vec::new();
-    };
+///
+/// A body that is not that document is an error, never an empty list: a
+/// challenge page or a changed shape would otherwise read as "no incident
+/// open", which is the one answer that must not be invented.
+pub fn parse(provider: Provider, body: &str) -> Result<Vec<Incident>, String> {
+    let document = serde_json::from_str::<Value>(body)
+        .map_err(|_| "the status page did not answer with JSON".to_owned())?;
+    let rows = document
+        .get("incidents")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "the status page's answer has no `incidents` list".to_owned())?;
     let page = match provider {
         Provider::Anthropic => "https://status.claude.com",
         Provider::Codex => "https://status.openai.com",
     };
-    rows.iter()
+    Ok(rows
+        .iter()
         .filter_map(|row| {
             let id = row.get("id")?.as_str()?;
             let name = row.get("name")?.as_str()?;
@@ -112,7 +116,7 @@ pub fn parse(provider: Provider, body: &str) -> Vec<Incident> {
                 updates: updates_of(row),
             })
         })
-        .collect()
+        .collect())
 }
 
 /// The updates posted on one incident row, newest first. A row with neither
@@ -281,7 +285,7 @@ pub async fn poll_once(
                 return Err(format!("{url}: HTTP {}", response.status().as_u16()));
             }
             let body = response.text().await.map_err(|e| format!("{url}: {e}"))?;
-            Ok(parse(provider, &body))
+            parse(provider, &body).map_err(|e| format!("{url}: {e}"))
         }
         .await;
         store.record(provider, result);
@@ -322,14 +326,19 @@ mod tests {
           {"id":"a2","name":"Old one","status":"resolved","impact":"minor"},
           {"id":"a3","name":"Login degraded","status":"investigating","impact":"minor","created_at":"2026-09-06T02:00:00Z"}
         ]}"#;
-        let open = parse(Provider::Anthropic, body);
+        let open = parse(Provider::Anthropic, body).unwrap();
         assert_eq!(open.len(), 2);
         assert_eq!(open[0].url, "https://stspg.io/a1");
         assert_eq!(open[0].since.as_deref(), Some("2026-09-06T01:00:00Z"));
         assert_eq!(open[1].url, "https://status.claude.com/incidents/a3");
         assert_eq!(open[1].provider, "anthropic");
-        assert!(parse(Provider::Codex, "not json").is_empty());
-        assert!(parse(Provider::Codex, r#"{"status":{"indicator":"none"}}"#).is_empty());
+        assert!(parse(Provider::Codex, "<html>Just a moment...</html>").is_err());
+        assert!(parse(Provider::Codex, r#"{"status":{"indicator":"none"}}"#).is_err());
+        assert!(
+            parse(Provider::Codex, r#"{"incidents":[]}"#)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -340,7 +349,7 @@ mod tests {
             {"status":"monitoring","body":"A fix is in place.","display_at":"2026-09-06T02:00:00Z"},
             {"status":"","body":"","created_at":"2026-09-06T03:00:00Z"}
           ]}]}"#;
-        let open = parse(Provider::Anthropic, body);
+        let open = parse(Provider::Anthropic, body).unwrap();
         let updates = &open[0].updates;
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[0].status, "monitoring");
@@ -353,7 +362,8 @@ mod tests {
         let bare = parse(
             Provider::Anthropic,
             r#"{"incidents":[{"id":"b","name":"Bare","status":"identified","impact":"minor"}]}"#,
-        );
+        )
+        .unwrap();
         assert!(bare[0].updates.is_empty());
         let answer = serde_json::to_value(&bare[0]).unwrap();
         assert_eq!(answer["updates"], serde_json::json!([]));
@@ -364,10 +374,10 @@ mod tests {
         let store = IncidentStore::default();
         store.record(
             Provider::Anthropic,
-            Ok(parse(
+            parse(
                 Provider::Anthropic,
                 r#"{"incidents":[{"id":"x","name":"Slow","status":"identified","impact":"minor"}]}"#,
-            )),
+            ),
         );
         store.record(Provider::Codex, Err("timed out".to_owned()));
         store.checked(1_700_000_000);
@@ -396,10 +406,10 @@ mod tests {
         let store = IncidentStore::default();
         store.record(
             Provider::Codex,
-            Ok(parse(
+            parse(
                 Provider::Codex,
                 r#"{"incidents":[{"id":"m","name":"Minor","status":"monitoring","impact":"minor"},{"id":"c","name":"Critical","status":"investigating","impact":"critical"}]}"#,
-            )),
+            ),
         );
         let ids: Vec<String> = store.open().into_iter().map(|i| i.id).collect();
         assert_eq!(ids, ["c", "m"]);

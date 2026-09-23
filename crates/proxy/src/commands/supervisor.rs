@@ -158,8 +158,9 @@ async fn launchd(args: cli::SupervisorArgs, unit: &proxenos::supervisor::Unit) -
                 // not survive the failure that produced it.
                 let _ = std::fs::remove_file(&plist);
                 bail!(
-                    "launchctl refused the unit, so nothing was installed: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
+                    "launchctl refused the unit, so nothing was installed: {}{}",
+                    String::from_utf8_lossy(&output.stderr).trim(),
+                    previous_unit_gone(booted_out)
                 );
             }
 
@@ -465,8 +466,9 @@ async fn systemd(args: cli::SupervisorArgs, unit: &proxenos::supervisor::Unit) -
             if !reload.status.success() {
                 undo_install(&path);
                 bail!(
-                    "systemd would not reload its units, so nothing was installed: {}",
-                    String::from_utf8_lossy(&reload.stderr).trim()
+                    "systemd would not reload its units, so nothing was installed: {}{}",
+                    String::from_utf8_lossy(&reload.stderr).trim(),
+                    previous_unit_gone(booted_out)
                 );
             }
 
@@ -475,9 +477,10 @@ async fn systemd(args: cli::SupervisorArgs, unit: &proxenos::supervisor::Unit) -
             if !enabled.status.success() {
                 undo_install(&path);
                 bail!(
-                    "systemctl refused the unit, so nothing was installed: {}\n  what it \
+                    "systemctl refused the unit, so nothing was installed: {}{}\n  what it \
                      tried to start is in the journal: {}",
                     String::from_utf8_lossy(&enabled.stderr).trim(),
+                    previous_unit_gone(booted_out),
                     supervisor::journal_command()
                 );
             }
@@ -590,4 +593,16 @@ fn systemd_state() -> (Option<String>, Option<u64>) {
         return (None, None);
     };
     proxenos::supervisor::parse_systemd_show(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// What a failed reinstall also cost. The unit that was supervising was
+/// stopped before the new one was offered, and "nothing was installed" read
+/// as though it were still there.
+fn previous_unit_gone(booted_out: bool) -> &'static str {
+    if booted_out {
+        "\n  the unit that was supervising before was stopped to make room, so nothing \
+         supervises the daemon now; `proxenos start` runs one unsupervised"
+    } else {
+        ""
+    }
 }

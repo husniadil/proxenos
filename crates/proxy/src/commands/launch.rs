@@ -26,7 +26,8 @@ pub(crate) async fn print_env() -> Result<()> {
         println!(
             "# ANTHROPIC_AUTH_TOKEN is left out: it would carry this daemon's token. Set it with"
         );
-        println!("#   export ANTHROPIC_AUTH_TOKEN=\"proxenos-token:$PROXENOS_TOKEN\"");
+        let from_variable = std::env::var(control::TOKEN_VAR).is_ok_and(|token| !token.is_empty());
+        println!("#   {}", token_export(from_variable));
         println!("# or start the client with `proxenos exec`, which sets it without printing it.");
     }
     println!("{}", render::env_shell(&result));
@@ -287,4 +288,38 @@ pub(crate) async fn print_settings() -> Result<()> {
     control::require_client_policy(&result)?;
     println!("{}", render::settings_json(&result));
     Ok(())
+}
+
+/// The line that sets the token from where this process read it: the
+/// variable when it is set, else the file, the same order it is read in.
+/// Naming the variable to someone who holds only the file sets an empty token.
+fn token_export(from_variable: bool) -> String {
+    if from_variable {
+        format!(
+            "export ANTHROPIC_AUTH_TOKEN=\"proxenos-token:${}\"",
+            control::TOKEN_VAR
+        )
+    } else {
+        format!(
+            "export ANTHROPIC_AUTH_TOKEN=\"proxenos-token:$(cat \"${}\")\"",
+            control::TOKEN_FILE_VAR
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::token_export;
+
+    #[test]
+    fn the_token_line_reads_from_where_the_token_came_from() {
+        assert_eq!(
+            token_export(true),
+            r#"export ANTHROPIC_AUTH_TOKEN="proxenos-token:$PROXENOS_TOKEN""#
+        );
+        assert_eq!(
+            token_export(false),
+            r#"export ANTHROPIC_AUTH_TOKEN="proxenos-token:$(cat "$PROXENOS_TOKEN_FILE")""#
+        );
+    }
 }

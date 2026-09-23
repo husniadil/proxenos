@@ -115,6 +115,9 @@ pub struct Plan {
     /// Sizing has its own path and is answered locally by this proxy (§5), so
     /// only a direct call can say what the real one returns.
     pub sizing: bool,
+    /// The code the answer must speak back, where the plan has one. A reply
+    /// without it answered something other than this request.
+    pub code: Option<&'static str>,
     pub request: fn() -> Value,
 }
 
@@ -133,6 +136,7 @@ pub const PLANS: [Plan; 7] = [
                spoken back, so the body is an answer to this request and not a shape \
                something plausible produced.",
         sizing: false,
+        code: Some("7VQK2M"),
         request: || {
             serde_json::json!({
                 "model": "claude-haiku-4-5-20251001",
@@ -152,6 +156,7 @@ pub const PLANS: [Plan; 7] = [
                call takes. The code 4HXR9T is passed through the tool arguments, so the \
                stream is an answer to this request.",
         sizing: false,
+        code: Some("4HXR9T"),
         request: || {
             serde_json::json!({
                 "model": "claude-haiku-4-5-20251001",
@@ -182,6 +187,7 @@ pub const PLANS: [Plan; 7] = [
                nearly every frame a client renders carries. The code 3PMD8L is spoken in \
                the deltas, so the stream answered this request.",
         sizing: false,
+        code: Some("3PMD8L"),
         request: || {
             serde_json::json!({
                 "model": "claude-haiku-4-5-20251001",
@@ -203,6 +209,7 @@ pub const PLANS: [Plan; 7] = [
                answer never carries, and until this capture nothing had ever measured \
                them. The code 6WNP4J is spoken back, so the stream answered this request.",
         sizing: false,
+        code: Some("6WNP4J"),
         request: || {
             serde_json::json!({
                 "model": "claude-haiku-4-5-20251001",
@@ -228,6 +235,7 @@ pub const PLANS: [Plan; 7] = [
                others do; what it proves is that the block shapes came from a real search \
                the server actually ran, rather than from a plausible reconstruction.",
         sizing: false,
+        code: None,
         request: || {
             serde_json::json!({
                 "model": "claude-haiku-4-5-20251001",
@@ -253,6 +261,7 @@ pub const PLANS: [Plan; 7] = [
                understands, and that claim was never measured against a real refusal. The \
                model id is deliberately one no account serves.",
         sizing: false,
+        code: None,
         request: || {
             serde_json::json!({
                 "model": "claude-not-a-model-00000000",
@@ -267,6 +276,7 @@ pub const PLANS: [Plan; 7] = [
                its estimator (docs/api.md §5) and never relays it, so no turn through the \
                daemon can ever show what the real one returns — only a direct call can.",
         sizing: true,
+        code: None,
         request: || {
             serde_json::json!({
                 "model": "claude-haiku-4-5-20251001",
@@ -336,6 +346,30 @@ async fn capture_one(relay: &Relay, account: &str, plan: &Plan) -> Result<Captur
     })
 }
 
+/// Why a capture must not replace the committed fixture, if it must not.
+///
+/// A capture is written over a committed fixture, so one made during an
+/// outage, or one whose answer ignored the plan's code, would replace a real
+/// measurement with evidence of something else. Only the plan that exists to
+/// record a refusal keeps a refusal.
+pub fn unfit(plan: &Plan, capture: &Capture) -> Option<String> {
+    let refusal_plan = plan.name == "error-envelope";
+    let succeeded = (200..300).contains(&capture.status);
+    if succeeded == refusal_plan {
+        return Some(format!(
+            "`{}` answered {}, which is not what this plan records",
+            plan.name, capture.status
+        ));
+    }
+    let code = plan.code?;
+    let answered = capture
+        .events
+        .iter()
+        .chain(capture.body.iter())
+        .any(|value| value.to_string().contains(code));
+    (!answered).then(|| format!("`{}` never spoke back its code {code}", plan.name))
+}
+
 /// Make every planned exchange and write each as a fixture. Returns the files
 /// written, in plan order.
 ///
@@ -377,6 +411,11 @@ pub async fn capture_some(
     {
         let relay = if plan.sizing { sizing } else { messages };
         let capture = capture_one(relay, account, plan).await?;
+        if let Some(reason) = unfit(plan, &capture) {
+            return Err(ProxyError::overloaded(format!(
+                "{reason}; the fixture on disk was left as it was"
+            )));
+        }
 
         let path = directory.join(format!("{}.json", plan.name));
         let rendered = serde_json::to_string_pretty(&capture).map_err(|error| {

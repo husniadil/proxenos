@@ -1440,7 +1440,9 @@ or withdrawn later is not noticed until something makes the daemon ask again.
 The list is attributed to the account it was fetched for. It is fetched again
 when the daemon changes which account serves: selecting another, or removing
 the one serving. A `models` question about another stored account (`api.md` §3)
-fetches that account's list to answer with and puts nothing in force.
+fetches that account's list to answer with and puts nothing in force. Both
+catalog endpoints are the translating provider's, so an Anthropic account's
+credential is never sent to either; its menu is the relay's (§9.1).
 
 ##### Why
 
@@ -2315,7 +2317,9 @@ line comes first, and that is the reassuring one.
 #### A window the provider named rather than measured is kept under its name
 
 An overage window has a figure and a reset but no duration, so it is carried
-under the provider's word for it.
+under the provider's word for it. A named window a newer snapshot does not
+restate is kept from the older one until its reset; one that states no reset is
+not kept, since nothing would ever drop it.
 
 #### Staleness belongs to a window, never to a snapshot
 

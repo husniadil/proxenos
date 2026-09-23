@@ -189,6 +189,42 @@ mod cli {
             .expect("the binary should run")
     }
 
+    /// A wrapped command that exits without reading its input leaves the
+    /// write with nowhere to go. That is not the wrapper failing: the status
+    /// line is the command's, and it succeeded (§2.1).
+    #[test]
+    fn a_command_that_ignores_its_input_does_not_fail_the_status_line() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+            .env_remove("PROXENOS_DAEMON")
+            .env_remove("PROXENOS_TOKEN_FILE")
+            .env_remove("PROXENOS_TOKEN")
+            .env("PROXENOS_HOME", dir.path())
+            .env("TMPDIR", dir.path())
+            .args(["statusline", "--", "sh", "-c", "echo line"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("the binary should run");
+        let payload = format!("{{\"padding\":\"{}\"}}", "x".repeat(400_000));
+        child
+            .stdin
+            .take()
+            .expect("piped")
+            .write_all(payload.as_bytes())
+            .expect("written");
+        let output = child.wait_with_output().expect("it ends");
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "line");
+    }
+
     fn inspect(arguments: &[&str]) -> std::process::Output {
         std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
             .env_remove("PROXENOS_DAEMON")

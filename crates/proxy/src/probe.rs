@@ -30,6 +30,9 @@ pub enum Check {
     FrameEmitted { frame_type: String },
     /// A content block of this type must be emitted.
     BlockEmitted { block_type: String },
+    /// A content block of this type must be emitted carrying a non-empty
+    /// `content` array. An empty one renders as an answer that found nothing.
+    BlockNonEmpty { block_type: String },
     /// A number that must be present and above zero in a client frame. Zero
     /// and absent are both failures, and they fail differently from a wrong
     /// value: a zero here renders.
@@ -160,7 +163,7 @@ pub fn all() -> Vec<Probe> {
                 Check::BlockEmitted {
                     block_type: "server_tool_use".to_owned(),
                 },
-                Check::BlockEmitted {
+                Check::BlockNonEmpty {
                     block_type: "web_search_tool_result".to_owned(),
                 },
             ],
@@ -509,6 +512,17 @@ fn check_all<'a>(
                     frame.pointer("/content_block/type").and_then(Value::as_str) == Some(block_type)
                 }) {
                     return Status::Failed(format!("no `{block_type}` block was emitted"));
+                }
+            }
+            Check::BlockNonEmpty { block_type } => {
+                if !client_frames.iter().any(|frame| {
+                    frame.pointer("/content_block/type").and_then(Value::as_str) == Some(block_type)
+                        && frame
+                            .pointer("/content_block/content")
+                            .and_then(Value::as_array)
+                            .is_some_and(|content| !content.is_empty())
+                }) {
+                    return Status::Failed(format!("no `{block_type}` block carried any content"));
                 }
             }
         }

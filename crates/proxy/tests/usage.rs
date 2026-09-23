@@ -2078,4 +2078,18 @@ fn a_named_window_survives_a_snapshot_from_the_other_source() {
         labels,
         vec![None, None, Some("Fable"), Some("Stale"), Some("overage")]
     );
+
+    // A named window with no reset is not carried: nothing would ever drop
+    // it, so it would be shown at its old figure for as long as the daemon
+    // runs, under the newer snapshot's age.
+    let unbounded = snapshot(vec![window(Some("Unbounded"), None, None)]);
+    let carried = headers.carrying(&unbounded, 1_000);
+    assert!(
+        carried
+            .windows
+            .iter()
+            .all(|w| w.label.as_deref() != Some("Unbounded")),
+        "{:?}",
+        carried.windows
+    );
 }

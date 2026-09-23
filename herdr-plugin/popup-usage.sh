@@ -13,7 +13,11 @@ command -v proxenos >/dev/null 2>&1 || { echo "proxenos usage: proxenos is not o
 # where Enter is still needed and Esc cannot be seen.
 saved_tty=$(stty -g 2>/dev/null || true)
 restore_tty() { [ -n "$saved_tty" ] && stty "$saved_tty" 2>/dev/null; }
-trap 'restore_tty' EXIT INT TERM
+# A signal ends the popup. A handler that only restored the terminal let the
+# loop go on in line mode, still reading as if the terminal were raw.
+trap 'restore_tty' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 raw=0
 if [ -n "$saved_tty" ] && stty -icanon -echo min 0 time 0 2>/dev/null; then
     raw=1

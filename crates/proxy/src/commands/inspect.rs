@@ -132,8 +132,13 @@ pub(crate) async fn statusline(args: cli::StatuslineArgs) -> Result<()> {
         .args(arguments)
         .stdin(std::process::Stdio::piped())
         .spawn()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(body.as_bytes())?;
+    // A command that exits without reading its input closes the pipe first.
+    // That is its choice, not a failure of this wrapper.
+    if let Some(mut stdin) = child.stdin.take()
+        && let Err(error) = stdin.write_all(body.as_bytes())
+        && error.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        return Err(error.into());
     }
     let status = child.wait()?;
 

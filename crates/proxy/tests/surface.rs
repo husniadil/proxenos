@@ -109,17 +109,27 @@ async fn endpoint() -> String {
                         "{\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"model: not found\"}}".to_owned(),
                     );
                 }
+                // Spoken back, as a real answer speaks the plan's code.
+                let echo = request["messages"].to_string();
                 if request["stream"] == Value::Bool(true) {
                     return (
                         axum::http::StatusCode::OK,
                         [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
-                        STREAM.to_owned(),
+                        format!(
+                            "{STREAM}data: {}\n\n",
+                            serde_json::json!({ "type": "ping", "echo": echo })
+                        ),
                     );
                 }
                 (
                     axum::http::StatusCode::OK,
                     [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    "{\"type\":\"message\",\"id\":\"msg_y\",\"content\":[]}".to_owned(),
+                    serde_json::json!({
+                        "type": "message",
+                        "id": "msg_y",
+                        "content": [{ "type": "text", "text": echo }],
+                    })
+                    .to_string(),
                 )
             }),
         )
@@ -278,4 +288,55 @@ async fn one_named_exchange_can_be_captured_without_paying_for_the_rest() {
     let refused =
         surface::capture_some(&relay, &relay, "personal", &out, Some("no-such-plan")).await;
     assert!(refused.is_err());
+}
+
+/// A capture made during an outage, or one whose answer ignored the plan's
+/// code, is refused before it can replace a committed fixture. The refusal
+/// plan is the one that keeps a refusal.
+#[test]
+fn a_capture_that_is_not_the_plans_answer_is_not_written() {
+    let plan = |name: &str| {
+        surface::PLANS
+            .iter()
+            .find(|plan| plan.name == name)
+            .unwrap()
+    };
+    let capture = |status: u16, body: serde_json::Value| surface::Capture {
+        name: String::new(),
+        provenance: "captured".to_owned(),
+        note: String::new(),
+        endpoint: "/v1/messages".to_owned(),
+        request: serde_json::Value::Null,
+        status,
+        headers: Vec::new(),
+        events: Vec::new(),
+        body: Some(body),
+    };
+    let plain = plan("plain-generation");
+
+    assert!(surface::unfit(plain, &capture(529, serde_json::json!({"type": "error"}))).is_some());
+    assert!(
+        surface::unfit(
+            plain,
+            &capture(200, serde_json::json!({"content": [{"text": "hi"}]}))
+        )
+        .is_some()
+    );
+    assert!(
+        surface::unfit(
+            plain,
+            &capture(200, serde_json::json!({"content": [{"text": "7VQK2M"}]}))
+        )
+        .is_none()
+    );
+
+    let envelope = plan("error-envelope");
+    assert!(surface::unfit(envelope, &capture(200, serde_json::json!({}))).is_some());
+    assert!(
+        surface::unfit(
+            envelope,
+            &capture(404, serde_json::json!({"type": "error"}))
+        )
+        .is_none()
+    );
 }
