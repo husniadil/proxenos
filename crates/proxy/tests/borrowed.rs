@@ -1960,6 +1960,39 @@ fn the_client_runs_the_program_it_was_given() {
     assert_eq!(recorded.trim(), "/profiles/work -p ok --model haiku");
 }
 
+/// The stock profile is the one the program keeps with no variable set, so
+/// the refresh runs with the variable removed rather than inherited: a daemon
+/// started from a shell pointing `CLAUDE_CONFIG_DIR` at another profile would
+/// otherwise refresh that one and report the stock grant as poked (§8.4).
+#[cfg(unix)]
+#[test]
+fn the_stock_profile_is_refreshed_with_no_directory_variable_inherited() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let record = dir.path().join("record");
+    let script = stand_in(
+        dir.path(),
+        &format!(
+            "#!/bin/sh\nprintf '%s %s\\n' \"${{CLAUDE_CONFIG_DIR-unset}}\" \"${{CODEX_HOME-unset}}\" >> {}\n",
+            record.display()
+        ),
+    );
+    // SAFETY: nextest runs each test in its own process.
+    unsafe {
+        std::env::set_var("CLAUDE_CONFIG_DIR", "/some/other/profile");
+        std::env::set_var("CODEX_HOME", "/some/other/home");
+    }
+
+    let client = borrowed::poke::OwningClient::new(&script, &script, borrowed::poke::DEADLINE);
+    client.refresh(Provider::Anthropic, None).expect("it ran");
+    client.refresh(Provider::Codex, None).expect("it ran");
+
+    let recorded = std::fs::read_to_string(&record).expect("it recorded");
+    assert_eq!(
+        recorded.lines().collect::<Vec<_>>(),
+        ["unset /some/other/home", "/some/other/profile unset"]
+    );
+}
+
 /// The Codex arm runs `codex exec` against `CODEX_HOME`, with no model id and
 /// the git-repo check skipped, so a daemon running anywhere can refresh it.
 #[cfg(unix)]
@@ -3065,4 +3098,91 @@ impl poke::Client for NeverRuns {
             "nothing here asks a client to refresh",
         ))
     }
+}
+
+/// A key stored under a name before a profile of that name appeared (a first
+/// sign-in to the stock profile, a `[profiles]` edit) is not quietly replaced
+/// by the profile. Which one serves decides whose subscription pays, and a
+/// switch nothing reports is the one failure the operator cannot see (§8.1).
+#[test]
+fn a_key_a_later_profile_shares_a_name_with_is_refused_rather_than_shadowed() {
+    use proxenos::auth::store::AccountStore;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = Arc::new(FakeClient::default());
+    accounts_over(dir.path(), vec![], &[], Arc::clone(&client))
+        .add_key("personal", "sk-ant-api03-stored", Provider::Anthropic)
+        .expect("no profile holds the name yet");
+
+    let personal = profile("personal", Provider::Anthropic, Some("/profiles/personal"));
+    let accounts = accounts_over(
+        dir.path(),
+        vec![personal.clone()],
+        &[(&personal, claude_blob(4_000_000_000, 4_000_000_000))],
+        client,
+    );
+
+    let refusal = accounts
+        .credential_for("personal")
+        .expect_err("the key was shadowed")
+        .to_string();
+    assert!(refusal.contains("personal"), "{refusal}");
+    assert!(refusal.contains("key"), "{refusal}");
+}
+
+/// A grant left in the key file is not read any more, and a name that reaches
+/// it (a pinned tier, an `exec --account` tag) is refused with that reason
+/// rather than authenticated with it: no program owns it to refresh it.
+#[test]
+fn a_grant_left_in_the_key_file_is_not_served_by_name() {
+    use proxenos::auth::store::AccountStore;
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("credentials.json"),
+        serde_json::json!({
+            "accounts": [{
+                "name": "old",
+                "access_token": "access-old",
+                "refresh_token": "refresh-old",
+                "account_id": "acct_old",
+                "expires_at": 4_000_000_000_u64,
+            }],
+        })
+        .to_string(),
+    )
+    .expect("written");
+    let accounts = accounts_over(dir.path(), vec![], &[], Arc::new(FakeClient::default()));
+    assert_eq!(accounts.ignored_grants().expect("reads"), ["old"]);
+
+    let refusal = accounts
+        .credential_for("old")
+        .expect_err("an unread grant was served")
+        .to_string();
+    assert!(refusal.contains("no longer read"), "{refusal}");
+}
+
+/// A file in the wrong shape is refused without its contents. A parser's own
+/// message quotes the value it could not read, and that value can be a token.
+#[test]
+fn a_malformed_credential_file_is_refused_without_quoting_it() {
+    use proxenos::auth::store::CredentialStore;
+    let codex = borrowed::codex(r#"{"tokens":"eyJSECRETVALUE"}"#, "auth.json")
+        .expect_err("a string is not a tokens block")
+        .to_string();
+    assert!(!codex.contains("SECRETVALUE"), "{codex}");
+    let claude = borrowed::claude(r#"{"claudeAiOauth":"sk-ant-oat01-SECRETVALUE"}"#, "item")
+        .expect_err("a string is not an oauth block")
+        .to_string();
+    assert!(!claude.contains("SECRETVALUE"), "{claude}");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("credentials.json"),
+        r#""sk-ant-api03-SECRETVALUE""#,
+    )
+    .expect("written");
+    let stored = proxenos::auth::store::FileStore::new(dir.path().join("credentials.json"))
+        .load()
+        .expect_err("a bare string is not a credentials file")
+        .to_string();
+    assert!(!stored.contains("SECRETVALUE"), "{stored}");
 }

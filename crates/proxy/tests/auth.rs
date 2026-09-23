@@ -537,6 +537,34 @@ fn a_label_already_naming_another_account_is_refused() {
     assert_eq!(store.accounts().unwrap().len(), 1);
 }
 
+/// A label naming an entry that states no account id is still taken. The
+/// id comparison cannot see it, and renaming this account onto it left two
+/// entries answering to one name (§8.1).
+#[test]
+fn a_label_naming_an_entry_without_an_account_id_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = FileStore::new(dir.path().join("credentials.json"));
+    store.add(&sample(), Some("x")).unwrap();
+    let idless = Credentials {
+        account_id: None,
+        ..other()
+    };
+    store.add(&idless, Some("y")).unwrap();
+
+    store
+        .add(&sample(), Some("y"))
+        .expect_err("`y` already names another entry");
+
+    let mut names: Vec<String> = store
+        .accounts()
+        .unwrap()
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
+    names.sort();
+    assert_eq!(names, ["x", "y"]);
+}
+
 /// And a label that already names a *key* is refused too — the same refusal
 /// `add_key` makes from the other side.
 ///

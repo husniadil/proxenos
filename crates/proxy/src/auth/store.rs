@@ -718,7 +718,10 @@ impl FileStore {
 
         // The error names the parse failure, never the content.
         let unreadable = |error: serde_json::Error| {
-            ProxyError::authentication(format!("stored credentials are unreadable: {error}"))
+            ProxyError::authentication(format!(
+                "stored credentials are unreadable: {}",
+                parse_failure(&error)
+            ))
         };
         let value: serde_json::Value = serde_json::from_str(&raw).map_err(unreadable)?;
 
@@ -1153,6 +1156,19 @@ impl AccountStore for FileStore {
                 )));
             }
 
+            // A label held by an entry other than the one this grant renames,
+            // including one stating no id for the check above to compare.
+            if let Some(label) = label
+                && let Some(holder) = file.index_of(label)
+                && file
+                    .index_by_account(credentials.account_id.as_deref())
+                    .is_some_and(|renamed| renamed != holder)
+            {
+                return Err(ProxyError::invalid_request(format!(
+                    "`{label}` already names another account; log in again with another label"
+                )));
+            }
+
             let name = match label {
                 Some(label) => label.to_owned(),
                 // Already stored, under whatever it is already called: a login
@@ -1335,4 +1351,17 @@ impl CredentialStore for AccountSlot {
             self.account
         )))
     }
+}
+
+/// Where and how a credential document failed to parse, and nothing of what
+/// it held. The parser's own message quotes the value it could not read, and
+/// in a credential file that value can be a token.
+pub(crate) fn parse_failure(error: &serde_json::Error) -> String {
+    let kind = match error.classify() {
+        serde_json::error::Category::Data => "a value of the wrong type",
+        serde_json::error::Category::Syntax => "not valid JSON",
+        serde_json::error::Category::Eof => "cut short",
+        serde_json::error::Category::Io => "not readable",
+    };
+    format!("{kind} at line {} column {}", error.line(), error.column())
 }

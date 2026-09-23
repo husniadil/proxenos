@@ -520,9 +520,11 @@ impl Environment for Stdio {
         process.args(&command.arguments);
         // No variable for the stock profile: setting it to where that profile
         // is believed to be would sign in to a different one (§8.4).
-        if let Some(directory) = &command.directory {
-            process.env(command.variable, directory);
-        }
+        // An inherited one is removed for the same reason.
+        match &command.directory {
+            Some(directory) => process.env(command.variable, directory),
+            None => process.env_remove(command.variable),
+        };
         let status = process.status()?;
         Ok(Exit {
             success: status.success(),

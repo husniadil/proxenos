@@ -1986,7 +1986,9 @@ is selected.
 
 The name is the operator's label where given, else the account id, else an
 assigned `account-N`. Renaming never touches the credential. A name another
-account holds is refused.
+account holds is refused. Where one arrives anyway, a stored key and a profile
+that appeared later under its name, neither serves that name until one is
+renamed.
 
 ##### Why
 

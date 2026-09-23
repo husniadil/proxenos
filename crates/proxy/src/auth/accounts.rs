@@ -347,7 +347,29 @@ impl AccountStore for Accounts {
 
     fn credential_for(&self, name: &str) -> Result<Credential, ProxyError> {
         if self.is_borrowed(name) {
+            // A key stored before a profile of that name appeared. Serving
+            // either would decide whose account pays without saying so.
+            if self
+                .keys
+                .accounts()?
+                .iter()
+                .any(|account| account.name == name && account.kind != "grant")
+            {
+                return Err(ProxyError::authentication(format!(
+                    "a stored key and a borrowed profile both answer to `{name}`, so neither \
+                     serves. Declare the profile under another name in `[profiles]`, then \
+                     rename or remove the key."
+                )));
+            }
             return self.borrowed.credential_for(name);
+        }
+        // Listed nowhere and refreshed by no one, so not served either.
+        if self.ignored()?.iter().any(|ignored| ignored == name) {
+            return Err(ProxyError::authentication(format!(
+                "`{name}` in credentials.json is a stored grant, which is no longer read. \
+                 A subscription is borrowed from the profile that holds it — declare that \
+                 profile under `[profiles]`."
+            )));
         }
         self.keys.credential_for(name)
     }

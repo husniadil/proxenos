@@ -108,8 +108,9 @@ struct Tokens {
 /// than a handle: the read happened before this was called, so a profile that
 /// moved is described by the path it was expected at.
 pub fn codex(raw: &str, source: &str) -> Result<Credentials, BorrowedError> {
-    let parsed: AuthFile = serde_json::from_str(raw)
-        .map_err(|error| BorrowedError::Malformed(source.to_owned(), error.to_string()))?;
+    let parsed: AuthFile = serde_json::from_str(raw).map_err(|error| {
+        BorrowedError::Malformed(source.to_owned(), crate::auth::store::parse_failure(&error))
+    })?;
 
     // Read before the tokens are: a profile in API-key mode can still carry a
     // stale `tokens` block from a previous sign-in, and borrowing that would
@@ -237,8 +238,9 @@ pub struct ClaudeGrant {
 ///
 /// `source` names the item, and appears in every refusal.
 pub fn claude(raw: &str, source: &str) -> Result<ClaudeGrant, BorrowedError> {
-    let parsed: ClaudeItem = serde_json::from_str(raw)
-        .map_err(|error| BorrowedError::Malformed(source.to_owned(), error.to_string()))?;
+    let parsed: ClaudeItem = serde_json::from_str(raw).map_err(|error| {
+        BorrowedError::Malformed(source.to_owned(), crate::auth::store::parse_failure(&error))
+    })?;
 
     let oauth = parsed
         .oauth

@@ -173,9 +173,12 @@ impl Client for OwningClient {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        if let Some(config_dir) = config_dir {
-            command.env(directory_variable, config_dir);
-        }
+        // The stock profile is the one kept with no variable set, so an
+        // inherited one is removed rather than left to name another (§8.4).
+        match config_dir {
+            Some(config_dir) => command.env(directory_variable, config_dir),
+            None => command.env_remove(directory_variable),
+        };
 
         let mut child = command.spawn().map_err(|error| {
             ProxyError::authentication(format!(
