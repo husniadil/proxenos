@@ -6,7 +6,7 @@ not repeat it.
 
 ## Where this stands
 
-The current release is **v0.29.0**. Shipped, at the level of capability:
+The current release is **v0.32.0**. Shipped, at the level of capability:
 
 - **Two providers behind one Messages surface.** Codex through the translate
   path (Messages ⇄ Responses), Anthropic through the relay path, which forwards

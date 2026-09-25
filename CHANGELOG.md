@@ -45,7 +45,9 @@ in [`docs/api.md`](docs/api.md) §6.
   key rather than the commented one above it, escapes what it writes, and
   recognizes a header with a comment after it. The shipped file shows the
   default tiers commented out, so the first persisted change no longer turns
-  them into stated ones a plan without those models cannot serve.
+  them into stated ones a plan without those models cannot serve. A
+  `config.toml` an earlier release already wrote keeps its `[tiers]` lines
+  live; comment them out to return them to defaults.
 - **Control writes and reloads say what happened.** A reload that cannot be
   applied changes nothing; a ceiling written for another account reports that
   account's; revoking cross-account consent is refused while the file pins an
