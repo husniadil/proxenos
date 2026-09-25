@@ -601,6 +601,8 @@ fn a_started_daemon_that_dies_at_startup_is_reported_from_its_log() {
         .env_remove("PROXENOS_DAEMON")
         .env_remove("PROXENOS_TOKEN_FILE")
         .env_remove("PROXENOS_TOKEN")
+        .env_remove("RUST_BACKTRACE")
+        .env_remove("RUST_LIB_BACKTRACE")
         .args(["start", "--port", &port])
         .env("PROXENOS_HOME", &home)
         .env("TMPDIR", dir.path())
@@ -619,6 +621,48 @@ fn a_started_daemon_that_dies_at_startup_is_reported_from_its_log() {
     assert!(
         !said.contains("STALE LINE"),
         "only this start's writes may be quoted: {said}"
+    );
+}
+
+/// A child that dies with a backtrace is still reported by its reason.
+///
+/// `RUST_BACKTRACE` in the operator's environment reaches the child, which
+/// then follows its error with dozens of frames. The last lines of the log are
+/// all frames, so quoting them names a stack instead of the reason.
+#[cfg(unix)]
+#[test]
+fn a_started_daemon_that_dies_with_a_backtrace_is_reported_by_its_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let binary = env!("CARGO_BIN_EXE_proxenos");
+
+    let holder = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = holder.local_addr().unwrap().port().to_string();
+
+    let started = std::process::Command::new(binary)
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
+        .env_remove("RUST_LIB_BACKTRACE")
+        .env("RUST_BACKTRACE", "1")
+        .args(["start", "--port", &port])
+        .env("PROXENOS_HOME", &home)
+        .env("TMPDIR", dir.path())
+        .output()
+        .expect("the start command should run");
+
+    assert!(
+        !started.status.success(),
+        "a daemon that never came up must not be reported as running"
+    );
+    // The start command's own error carries its own backtrace after the
+    // message, as the operator asked; what it quotes comes before that.
+    let said = String::from_utf8_lossy(&started.stderr);
+    let quoted = said.split("Stack backtrace:").next().unwrap_or_default();
+    assert!(
+        quoted.contains("already in use"),
+        "the daemon's own reason should be quoted: {said}"
     );
 }
 
