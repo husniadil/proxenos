@@ -2218,13 +2218,9 @@ async fn a_refused_effort_never_reaches_the_file() {
 async fn a_change_that_cannot_be_written_is_not_applied_either() {
     let harness = Harness::start().await;
 
-    // A real configuration that reads fine and cannot be written: the read leg
-    // has to succeed, or this would prove the wrong half of the ordering.
-    let unwritable = harness.config_file.parent().unwrap().join("read-only.toml");
-    std::fs::write(&unwritable, "port = 8787\n").unwrap();
-    let mut permissions = std::fs::metadata(&unwritable).unwrap().permissions();
-    permissions.set_readonly(true);
-    std::fs::set_permissions(&unwritable, permissions).unwrap();
+    // A configuration that reads fine and cannot be written: the read leg has
+    // to succeed, or this would prove the wrong half of the ordering.
+    let unwritable = unwritable_config(harness.config_file.parent().unwrap());
     let harness = harness.with_config(unwritable).await;
 
     let before = harness.policy.get();
@@ -2248,6 +2244,29 @@ async fn a_change_that_cannot_be_written_is_not_applied_either() {
         harness.policy.get().effort_ceiling(),
         before.effort_ceiling()
     );
+}
+
+/// A configuration path that reads and cannot be written, whoever runs the
+/// suite. On unix it is a link into a directory that does not exist: reading
+/// finds no file, which is a first run, and writing has nowhere to create one.
+/// A read-only file would not do there, because root writes it anyway.
+#[cfg(unix)]
+fn unwritable_config(dir: &std::path::Path) -> std::path::PathBuf {
+    let link = dir.join("dangling.toml");
+    std::os::unix::fs::symlink(dir.join("missing").join("config.toml"), &link).unwrap();
+    link
+}
+
+/// A configuration path that reads and cannot be written. Windows enforces
+/// the read-only attribute for administrators too.
+#[cfg(not(unix))]
+fn unwritable_config(dir: &std::path::Path) -> std::path::PathBuf {
+    let file = dir.join("read-only.toml");
+    std::fs::write(&file, "port = 8787\n").unwrap();
+    let mut permissions = std::fs::metadata(&file).unwrap().permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&file, permissions).unwrap();
+    file
 }
 
 /// A grant that cannot be spent is reported as such.

@@ -346,14 +346,37 @@ fn log_tail(path: &std::path::Path, since: u64) -> String {
         .unwrap_or(usize::MAX)
         .min(content.len());
     let text = String::from_utf8_lossy(content.get(start..).unwrap_or(&[]));
-    let count = text.lines().count();
-    if count == 0 {
+    if text.lines().next().is_none() {
         return "(nothing was written this start)".to_owned();
     }
-    text.lines()
-        .skip(count.saturating_sub(12))
+    let lines = without_backtraces(&text);
+    lines
+        .iter()
+        .skip(lines.len().saturating_sub(12))
+        .copied()
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The lines of `text` with every backtrace removed. `RUST_BACKTRACE` in the
+/// operator's environment reaches the daemon, which then follows its error
+/// with dozens of indented frames, and a tail of those names no reason.
+fn without_backtraces(text: &str) -> Vec<&str> {
+    let mut kept = Vec::new();
+    let mut in_backtrace = false;
+    for line in text.lines() {
+        // anyhow writes `Stack backtrace:`, a panic `stack backtrace:`.
+        if line.eq_ignore_ascii_case("stack backtrace:") {
+            in_backtrace = true;
+            continue;
+        }
+        if in_backtrace && (line.starts_with(' ') || line.starts_with("note: Some details")) {
+            continue;
+        }
+        in_backtrace = false;
+        kept.push(line);
+    }
+    kept
 }
 
 pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
