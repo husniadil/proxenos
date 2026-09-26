@@ -346,16 +346,19 @@ fn log_tail(path: &std::path::Path, since: u64) -> String {
         .unwrap_or(usize::MAX)
         .min(content.len());
     let text = String::from_utf8_lossy(content.get(start..).unwrap_or(&[]));
-    if text.lines().next().is_none() {
+    if text.trim().is_empty() {
         return "(nothing was written this start)".to_owned();
     }
-    let lines = without_backtraces(&text);
-    lines
-        .iter()
-        .skip(lines.len().saturating_sub(12))
-        .copied()
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut lines = without_backtraces(&text);
+    // anyhow separates its message from the backtrace with a blank line, which
+    // would otherwise be the last line quoted.
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+    if lines.is_empty() {
+        return "(nothing but a backtrace was written this start)".to_owned();
+    }
+    lines.split_off(lines.len().saturating_sub(12)).join("\n")
 }
 
 /// The lines of `text` with every backtrace removed. `RUST_BACKTRACE` in the
@@ -797,6 +800,46 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// anyhow's backtrace goes, and so does the blank line before it: the
+    /// reason is the last thing quoted.
+    #[test]
+    fn an_error_backtrace_is_not_quoted() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("daemon.log");
+        std::fs::write(
+            &log,
+            "Error: port 1 is already in use.\n\nStack backtrace:\n   0: anyhow::msg\n             at ./src/x.rs:1:1\n",
+        )
+        .unwrap();
+        assert_eq!(log_tail(&log, 0), "Error: port 1 is already in use.");
+    }
+
+    /// A panic's backtrace goes with its trailing note, and what the daemon
+    /// wrote after it is kept.
+    #[test]
+    fn a_panic_backtrace_is_not_quoted() {
+        let text = "thread 'main' panicked at src/x.rs:1:1:\nboom\nstack backtrace:\n   0: std::panic\n             at ./src/x.rs:1:1\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\nafter";
+        assert_eq!(
+            without_backtraces(text),
+            ["thread 'main' panicked at src/x.rs:1:1:", "boom", "after"]
+        );
+    }
+
+    /// A start that wrote nothing but a backtrace says so, rather than quoting
+    /// an empty tail.
+    #[test]
+    fn a_tail_of_only_backtrace_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("daemon.log");
+        std::fs::write(&log, "stack backtrace:\n   0: std::panic\n").unwrap();
+        assert_eq!(
+            log_tail(&log, 0),
+            "(nothing but a backtrace was written this start)"
+        );
+        std::fs::write(&log, "\n\n").unwrap();
+        assert_eq!(log_tail(&log, 0), "(nothing was written this start)");
+    }
 
     fn answering_as(version: &str, pid: Option<u64>, supervised: Option<bool>) -> Answering {
         Answering {
