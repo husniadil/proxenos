@@ -4,6 +4,15 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.32.1]
+
+- **A daemon that fails to start is quoted by its reason, not its backtrace.**
+  With `RUST_BACKTRACE` set in the operator's environment, the error was
+  followed by dozens of frames, so the log tail `start` quoted was all frames
+  (a held port read as a stack). The tail now skips backtrace blocks before
+  taking its last lines, and says so when a backtrace was all this start
+  wrote.
+
 ## [0.32.0]
 
 - **The loopback door refuses a request a browser made for a web page.** It
