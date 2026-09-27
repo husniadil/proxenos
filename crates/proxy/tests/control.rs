@@ -7275,3 +7275,194 @@ async fn a_second_daemon_does_not_take_a_live_control_socket() {
     .expect_err("the socket is live");
     assert!(refused.message.contains("already"), "{}", refused.message);
 }
+
+/// A quota endpoint that counts what reaches it, answering every account the
+/// same way: a body, or a refusal with the status given.
+struct CountingQuota {
+    url: String,
+    hits: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl CountingQuota {
+    async fn start(answer: Result<String, u16>) -> Self {
+        use axum::routing::get;
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&hits);
+        let app = axum::Router::new().route(
+            "/quota",
+            get(move || {
+                let answer = answer.clone();
+                let counted = Arc::clone(&counted);
+                async move {
+                    counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    match answer {
+                        Ok(body) => (axum::http::StatusCode::OK, body),
+                        Err(code) => (
+                            axum::http::StatusCode::from_u16(code).unwrap(),
+                            String::from("{}"),
+                        ),
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        Self {
+            url: format!("http://{addr}/quota"),
+            hits,
+        }
+    }
+
+    fn hits(&self) -> usize {
+        self.hits.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// §8.3 — an account's quota endpoint is asked at most once an hour, however
+/// many sweeps ask. The second sweep's row keeps the figure it has and says
+/// why it was not asked, rather than going blank for the hour.
+#[tokio::test]
+async fn a_second_sweep_within_the_hour_does_not_reach_the_endpoint() {
+    let endpoint = CountingQuota::start(Ok(quota_body(21.0))).await;
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add(&grant("acct_serving", "a-serving"), None)
+        .unwrap();
+    harness.store.select("acct_serving").unwrap();
+    let harness = harness.with_quota_endpoint(&endpoint.url).await;
+
+    harness.call("usage.refresh").await.unwrap();
+    let second = harness.call("usage.refresh").await.unwrap();
+    assert_eq!(endpoint.hits(), 1, "{second}");
+
+    let row = &second["accounts"][0];
+    assert_eq!(row["known"], json!(true), "{second}");
+    assert_eq!(row["windows"][0]["used_percent"], json!(21.0), "{second}");
+    assert!(
+        row["detail"]
+            .as_str()
+            .unwrap()
+            .contains("at most once an hour"),
+        "{second}"
+    );
+}
+
+/// A refusal spends the hour too. Counted from an answer, a 429 would be
+/// asked again at once, which is what keeps an endpoint refusing.
+#[tokio::test]
+async fn a_refused_ask_is_not_asked_again_within_the_hour() {
+    let endpoint = CountingQuota::start(Err(429)).await;
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add(&grant("acct_serving", "a-serving"), None)
+        .unwrap();
+    harness.store.select("acct_serving").unwrap();
+    let harness = harness.with_quota_endpoint(&endpoint.url).await;
+
+    let first = harness.call("usage.refresh").await.unwrap();
+    assert!(
+        first["accounts"][0]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("429"),
+        "{first}"
+    );
+    let second = harness.call("usage.refresh").await.unwrap();
+    assert_eq!(
+        endpoint.hits(),
+        1,
+        "a refused ask was asked again: {second}"
+    );
+    assert_eq!(second["accounts"][0]["known"], json!(false), "{second}");
+}
+
+/// A status line's own quota, in the shape the client hands it.
+fn status_limits(five: f64, seven: f64) -> Value {
+    json!({
+        "five_hour": { "used_percentage": five, "resets_at": 1_900_000_000u64 },
+        "seven_day": { "used_percentage": seven, "resets_at": 1_900_500_000u64 },
+    })
+}
+
+/// §8.3 — the client's own status line is the normal road for a borrowed
+/// Claude account's figure: filed under the profile it was launched with,
+/// replacing the two windows it states and keeping what only the endpoint
+/// states (the plan, each model's own window).
+#[tokio::test]
+async fn a_status_lines_quota_is_filed_under_the_profile_it_ran_in() {
+    let harness = Harness::start().await;
+    let earlier = proxenos::usage::Snapshot {
+        plan: Some("max 20x".into()),
+        windows: vec![
+            proxenos::usage::Window {
+                used_percent: 3.0,
+                window_minutes: Some(300),
+                resets_at: Some(1_900_000_000),
+                ..Default::default()
+            },
+            proxenos::usage::Window {
+                used_percent: 40.0,
+                label: Some("Fable".into()),
+                resets_at: Some(1_900_500_000),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    harness
+        .usage
+        .record_for(Some("claude"), &earlier, proxenos::usage::Source::Fetch);
+
+    let answer = harness
+        .call_with(
+            "usage.record",
+            json!({ "config_dir": null, "rate_limits": status_limits(7.0, 17.0) }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(answer, json!({ "recorded": true, "account": "claude" }));
+
+    let measured = harness.usage.latest_for("claude").unwrap();
+    assert_eq!(measured.source, proxenos::usage::Source::StatusLine);
+    assert_eq!(measured.snapshot.plan.as_deref(), Some("max 20x"));
+    let used = |minutes: Option<u64>, label: Option<&str>| {
+        measured
+            .snapshot
+            .windows
+            .iter()
+            .find(|w| w.window_minutes == minutes && w.label.as_deref() == label)
+            .map(|w| w.used_percent)
+    };
+    assert_eq!(used(Some(300), None), Some(7.0));
+    assert_eq!(used(Some(10_080), None), Some(17.0));
+    assert_eq!(used(None, Some("Fable")), Some(40.0));
+}
+
+/// A figure filed under a guessed account is another account's quota with a
+/// fresh age, so a directory no profile is launched from records nothing.
+#[tokio::test]
+async fn a_status_line_from_an_unknown_profile_records_nothing() {
+    let harness = Harness::start().await;
+    let answer = harness
+        .call_with(
+            "usage.record",
+            json!({ "config_dir": "/nowhere/claude", "rate_limits": status_limits(7.0, 17.0) }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(answer["recorded"], json!(false), "{answer}");
+    assert!(harness.usage.latest_for("claude").is_none());
+
+    // A window already over, or a figure outside 0..100, is no window.
+    let stale = json!({ "five_hour": { "used_percentage": 7.0, "resets_at": 1u64 } });
+    let answer = harness
+        .call_with("usage.record", json!({ "rate_limits": stale }))
+        .await
+        .unwrap();
+    assert_eq!(answer["recorded"], json!(false), "{answer}");
+}

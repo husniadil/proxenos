@@ -98,14 +98,15 @@ line() { printf '%s\n' "$lines" | sed -n "${1}p"; }
 
 # `usage --refresh` keeps the direct account's figure moving — no relayed turn
 # updates it — but it asks the providers, so it runs from this one place and
-# at most every five minutes across every reporter and watcher.
+# at most once an hour across every reporter and watcher. The daemon holds
+# every account to the same hour whoever asks.
 state_dir="${HERDR_PLUGIN_STATE_DIR:-${TMPDIR:-/tmp}/proxenos-plugin}"
 mkdir -p "$state_dir" 2>/dev/null || exit 0
 stamp="$state_dir/refresh.stamp"
 now=$(date +%s)
 last=$(cat "$stamp" 2>/dev/null || echo 0)
 case "$last" in *[!0-9]* | '') last=0 ;; esac
-if [ $((now - last)) -ge 300 ] && mkdir "$state_dir/refresh.lock" 2>/dev/null; then
+if [ $((now - last)) -ge 3600 ] && mkdir "$state_dir/refresh.lock" 2>/dev/null; then
     echo "$now" >"$stamp"
     proxenos usage --refresh >/dev/null 2>&1
     rmdir "$state_dir/refresh.lock" 2>/dev/null

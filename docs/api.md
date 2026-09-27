@@ -671,12 +671,13 @@ percentages cannot show — quota reads untouched while every turn is refused.
 ### `usage --refresh`
 
 Calls `usage.refresh` (§3), then prints the same document. One request per
-askable account.
+askable account, and at most one an hour per account, however it is asked.
 
 #### Why
 
 Asking spends a request per account, so it is opted into. The `--json` shape is
-the same either way.
+the same either way. There is no flag past the hour: every caller reaches the
+same endpoint on the same account, and so do the provider's own clients.
 
 ### The quota headers do not reach the status line
 
@@ -769,6 +770,21 @@ matching neither slot is left to `windows` rather than announced as one it is
 not. On a daemon that has served no turn, who is paying is the only thing worth
 rendering.
 
+### It hands a direct session's own quota to this machine's daemon
+
+A session talking to its own provider (no `ANTHROPIC_BASE_URL`) is handed its
+account's `rate_limits.five_hour` and `seven_day` in the payload. Those are sent
+to the daemon on this machine with `usage.record` (§3), with the session's
+`CLAUDE_CONFIG_DIR`, before the payload is merged. Always the local socket,
+whichever daemon `PROXENOS_DAEMON` names for everything else.
+
+#### Why
+
+It is the free figure for a borrowed Claude account, carried by every status
+line of every session on it, where the quota endpoint is a request that the
+provider refuses when asked too often. The profile is on this machine, so only
+this machine's daemon can file it under the right account.
+
 ### It never breaks the status line
 
 A daemon not running, a socket not answering, a payload that will not parse:
@@ -796,7 +812,7 @@ every session that has it to prevent a case that may not be happening.
 
 | File | What it holds |
 |---|---|
-| `crates/proxy/src/statusline.rs` | The merge and the session check |
+| `crates/proxy/src/statusline.rs` | The merge, the session check, and the payload's own quota |
 | `crates/proxy/src/commands/inspect.rs` | The verb |
 
 ### 2.2 `env` and `settings`
@@ -1851,6 +1867,11 @@ name as asked-for. Returns the serving account's outcome plus `accounts`, each
 with its figure or the sentence why not. Nothing about the selection moves.
 
 - A failure belongs to its own entry.
+- **An account's endpoint is asked at most once an hour**, counted from the ask
+  whether or not it answered, kept on disk (`asked.json` beside the quota) so a
+  restart does not ask again. Within the hour its entry is the figure already
+  held with a `detail` saying when it can be asked again, or `known: false`
+  where none is held. Nothing is retried, and nothing passes the hour.
 - A key, or a credential whose provider states quota only on turns, is not asked.
 - A non-serving account's expired grant is never refreshed; its row says so and
   what to do. The serving account is the exception.
@@ -1868,6 +1889,26 @@ to it. A refresh rotates a token family, and a second holder would be left with 
 retired token. Neither the socket nor the CLI times out, so four lapsed profiles
 at one run each would look hung. Running the client over a lapsed refresh token
 would blank what is left of the grant.
+
+### `usage.record`
+
+Params: `rate_limits` as the client's status-line payload states it
+(`five_hour` and `seven_day`, each `used_percentage` and `resets_at` in epoch
+seconds), and `config_dir`, the session's `CLAUDE_CONFIG_DIR` or absent for the
+stock profile. Files the two windows under the anthropic profile launched from
+that directory, keeping the plan, the credit and every other window of the
+figure already held, as `source: "statusline"`. Returns `recorded` and the
+`account`, or `recorded: false` with a `detail` where no profile matches or no
+window is current. A figure outside 0 to 100, or a window already reset, is not
+a window.
+
+#### Why
+
+The status line is where a borrowed Claude account's figure normally comes
+from, for nothing, and the quota endpoint is the fallback. The profile is
+matched exactly, since a stated stock directory is a different profile (§8.4),
+and a figure filed under a guessed account is another account's quota with a
+fresh age.
 
 ### `incidents`
 
@@ -2424,10 +2465,10 @@ added.
 
 ### The bound names
 
-- **Methods** (twenty, `METHODS` in `control/protocol.rs`): `status`,
+- **Methods** (twenty-one, `METHODS` in `control/protocol.rs`): `status`,
   `shutdown`, `accounts`, `accounts.select`, `accounts.rename`, `accounts.remove`,
   `models`, `tiers`, `tiers.set`, `effort.set`, `cross_account_tiers.set`,
-  `usage`, `incidents`, `usage.refresh`, `env`, `doctor`, `record.start`,
+  `usage`, `incidents`, `usage.refresh`, `usage.record`, `env`, `doctor`, `record.start`,
   `record.stop`, `config.reload`, `update`. `doctor` is bound though
   unimplemented.
 - **Verbs**: `start`, `run`, `accounts` (`list`, `login`, `add-key`, `use`,

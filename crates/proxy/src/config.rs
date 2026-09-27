@@ -83,6 +83,14 @@ pub fn quota_path() -> std::path::PathBuf {
     config_dir().join("quota.json")
 }
 
+/// When each account's quota endpoint was last asked (§8.3).
+///
+/// Kept on disk so a restarted daemon still knows, since a restart that
+/// forgot would ask again at once.
+pub fn asked_path() -> std::path::PathBuf {
+    config_dir().join("asked.json")
+}
+
 /// The project was `codex-cc-proxy` before v0.5.0, and a store written under
 /// that name does not stop existing because this binary got a new one.
 ///

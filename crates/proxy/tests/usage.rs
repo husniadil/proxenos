@@ -2093,3 +2093,25 @@ fn a_named_window_survives_a_snapshot_from_the_other_source() {
         carried.windows
     );
 }
+
+/// §8.3 — the hour an ask spends outlives the daemon. A restart that forgot
+/// it would ask every account again at once.
+#[test]
+fn the_hour_an_ask_spends_is_kept_across_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("asked.json");
+    let now = 1_900_000_000;
+
+    let first = proxenos::usage::UsageStore::default().asking_at(path.clone());
+    assert_eq!(first.claim_ask("claude", now), Ok(()));
+    assert_eq!(first.claim_ask("claude", now + 60), Err(now));
+    // Another account has its own hour.
+    assert_eq!(first.claim_ask("codex", now + 60), Ok(()));
+
+    let restarted = proxenos::usage::UsageStore::default().asking_at(path);
+    assert_eq!(restarted.claim_ask("claude", now + 120), Err(now));
+    assert_eq!(
+        restarted.claim_ask("claude", now + proxenos::usage::ASK_EVERY_SECS),
+        Ok(())
+    );
+}

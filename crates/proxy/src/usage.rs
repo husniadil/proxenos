@@ -813,6 +813,10 @@ pub enum Source {
     Turn,
     /// Asked for over the control socket.
     Fetch,
+    /// Stated by the provider's own client in its status line payload, and
+    /// handed on by `statusline` (§8.3).
+    #[serde(rename = "statusline")]
+    StatusLine,
 }
 
 impl Source {
@@ -820,6 +824,7 @@ impl Source {
         match self {
             Self::Turn => "turn",
             Self::Fetch => "fetch",
+            Self::StatusLine => "statusline",
         }
     }
 }
@@ -1006,6 +1011,11 @@ pub struct UsageStore {
     /// be told the same word. The whole answer is kept, so a cached row states
     /// as much as a fresh one.
     profiles: Mutex<std::collections::BTreeMap<String, (u64, Profile)>>,
+    /// When each account's quota endpoint was last asked, answered or not
+    /// (§8.3). What holds the ask to once per `ASK_EVERY_SECS`.
+    asked: Mutex<std::collections::BTreeMap<String, u64>>,
+    /// Where `asked` is written, so a restart does not ask again at once.
+    asked_file: Option<std::path::PathBuf>,
     /// Where the tally is written, if it is written anywhere.
     ///
     /// `None` in a test harness and in `doctor`, which have no daemon state
@@ -1022,6 +1032,14 @@ pub struct UsageStore {
     /// the providers stand — and is reported beside the quota.
     incidents: crate::incidents::IncidentStore,
 }
+
+/// How often one account's quota endpoint may be asked (§8.3).
+///
+/// The endpoint is the fallback: a turn and the client's own status line
+/// carry the figure for nothing. The second provider's endpoint answers 429
+/// well before five-minute asks add up, and it is shared with that
+/// provider's own clients on the same account.
+pub const ASK_EVERY_SECS: u64 = 3_600;
 
 /// How many times a write starts over when it finds the file changed.
 ///
@@ -1112,6 +1130,50 @@ impl UsageStore {
         }
         self.quota = Some(path);
         self
+    }
+
+    /// Bind the record of when each account was last asked to a file, and
+    /// read back what is in it. A file that cannot be read is no record,
+    /// which asks each account once and writes one.
+    #[must_use]
+    pub fn asking_at(mut self, path: std::path::PathBuf) -> Self {
+        if let Some(loaded) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|body| serde_json::from_str(&body).ok())
+            && let Ok(mut asked) = self.asked.lock()
+        {
+            *asked = loaded;
+        }
+        self.asked_file = Some(path);
+        self
+    }
+
+    /// Take the one ask an account has this hour, or say when it was spent.
+    ///
+    /// **Counted from the ask, answered or not.** A refused ask (a 429) is
+    /// the case this exists for: counting from an answer would ask a refusing
+    /// endpoint again at once, which keeps it refusing. There is no way past
+    /// it, since every caller of the sweep reaches the same endpoint on the
+    /// same account, and so do the provider's own clients.
+    pub fn claim_ask(&self, account: &str, now: u64) -> Result<(), u64> {
+        let Ok(mut asked) = self.asked.lock() else {
+            return Ok(());
+        };
+        if let Some(&at) = asked.get(account)
+            && now.saturating_sub(at) < ASK_EVERY_SECS
+        {
+            return Err(at);
+        }
+        asked.insert(account.to_owned(), now);
+        if let Some(path) = self.asked_file.as_ref()
+            && let Ok(body) = serde_json::to_string_pretty(&*asked)
+        {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            replace_file(path, &body);
+        }
+        Ok(())
     }
 
     /// A snapshot that rode a turn made as whoever is serving.

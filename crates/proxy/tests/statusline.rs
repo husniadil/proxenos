@@ -264,3 +264,21 @@ fn an_absent_serving_block_adds_nothing() {
 
     assert_eq!(merged.get("serving"), None);
 }
+
+/// §8.3 — the client's own quota is read out of its payload only where it
+/// states one, so a session with none records nothing.
+#[test]
+fn a_payload_states_its_own_quota_only_where_the_client_put_one() {
+    let own = json!({
+        "rate_limits": { "five_hour": { "used_percentage": 7, "resets_at": 1_900_000_000u64 } }
+    });
+    assert_eq!(
+        proxenos::statusline::own_limits(&own),
+        Some(json!({ "five_hour": { "used_percentage": 7, "resets_at": 1_900_000_000u64 } }))
+    );
+    assert_eq!(proxenos::statusline::own_limits(&payload()), None);
+    assert_eq!(
+        proxenos::statusline::own_limits(&json!({ "rate_limits": { "windows": [] } })),
+        None
+    );
+}

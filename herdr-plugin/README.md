@@ -45,7 +45,7 @@ detached per-pane watcher:
 The watcher re-publishes the bars every 60 seconds
 (`PROXENOS_USAGE_WATCH_INTERVAL`, minimum 5) until the pane closes, because
 quota ticks with no herdr event. `usage --refresh` is the one command here
-that contacts the providers. The reporter runs it at most every five minutes,
+that contacts the providers. The reporter runs it at most once an hour,
 guarded by a stamp shared across every reporter and watcher, and the popup
 runs it when you press `r`. The scripts write only herdr's own pane metadata plus a
 stamp and one pidfile per watched pane in the plugin state directory.

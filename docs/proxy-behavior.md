@@ -2273,6 +2273,23 @@ the provider said is reported as said.
 `usage.refresh` asks once per account, each on its own credential. Which account
 serves turns is neither read nor changed.
 
+#### Asking is the fallback, once an hour per account
+
+An account's quota endpoint is asked at most once an hour, counted from the
+ask, answered or not, and the hour is kept across a restart. A refusal is not
+retried. What normally keeps a figure moving costs nothing: a turn's own
+snapshot, and for a borrowed Claude account the client's status line, which
+states the five-hour and seven-day windows of the session's own account and is
+handed to this machine's daemon by `statusline` (`usage.record`).
+
+##### Why
+
+The second provider's endpoint answered 429 under asks five minutes apart, and
+a refused ask left the figure stale, which asked again, which kept it refused.
+The endpoint is shared with that provider's own clients on the same account, so
+a refusal earned here is felt there too. Counting from an answer would ask a
+refusing endpoint again at once.
+
 ##### Why
 
 Riding a turn only ever fills in the account that made the turn. A spare

@@ -53,6 +53,18 @@ fn serves(usage: &Value, payload: &Value) -> bool {
     served.iter().any(|id| id.as_str() == Some(model))
 }
 
+/// The client's own quota, where its payload states one (§8.3).
+///
+/// A session talking to its own provider is handed its five-hour and seven-day
+/// windows in every status line, which is the cheapest figure there is. `None`
+/// where neither is stated: a session not subscribed, one before its first
+/// response, or one pointed at a proxy, which is handed none.
+#[must_use]
+pub fn own_limits(payload: &Value) -> Option<Value> {
+    let limits = payload.get("rate_limits")?;
+    (limits.get("five_hour").is_some() || limits.get("seven_day").is_some()).then(|| limits.clone())
+}
+
 /// Merge a quota snapshot into the payload a status line receives.
 ///
 /// `usage` is the control socket's answer. Anything unrecognizable leaves the

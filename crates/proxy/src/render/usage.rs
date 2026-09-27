@@ -129,6 +129,7 @@ fn account_rows(account: &Value, now: u64) -> Vec<Vec<String>> {
     // turn; one that was asked for is as old as the asking.
     let source = match field(account, "source").and_then(Value::as_str) {
         Some("fetch") => "asked",
+        Some("statusline") => "status line",
         _ => "last turn",
     };
     let age = field(account, "measured_at")

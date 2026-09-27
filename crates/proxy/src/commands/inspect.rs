@@ -109,6 +109,24 @@ pub(crate) async fn statusline(args: cli::StatuslineArgs) -> Result<()> {
 
     let payload: serde_json::Value =
         serde_json::from_str(&input).unwrap_or(serde_json::Value::Null);
+
+    // §8.3 — a session on its own provider states its account's quota here,
+    // for nothing, so it is handed to the daemon on this machine: the one
+    // holding that profile, whichever daemon this process otherwise dials.
+    // A proxied session is handed no quota of its own and records nothing.
+    let proxied = std::env::var_os("ANTHROPIC_BASE_URL").is_some_and(|url| !url.is_empty());
+    if !proxied && let Some(limits) = proxenos::statusline::own_limits(&payload) {
+        let config_dir = std::env::var("CLAUDE_CONFIG_DIR")
+            .ok()
+            .filter(|dir| !dir.is_empty());
+        let _ = control::call(
+            &control::default_path(),
+            "usage.record",
+            Some(serde_json::json!({ "config_dir": config_dir, "rate_limits": limits })),
+        )
+        .await;
+    }
+
     let usage = control::ask("usage", None)
         .await
         .unwrap_or(serde_json::Value::Null);

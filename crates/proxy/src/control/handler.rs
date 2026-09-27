@@ -194,6 +194,7 @@ pub async fn dispatch(
         "effort.set" => set_effort(state, params),
         "cross_account_tiers.set" => set_cross_account(state, params),
         "usage.refresh" => refresh_usage(state).await,
+        "usage.record" => record_usage(state, params),
         // Answers, then goes, exactly as `shutdown` does: the new binary is
         // in place by the time the answer is written, and the supervisor
         // starts it when this process is gone.
@@ -2599,8 +2600,37 @@ pub async fn refresh_usage_within(
         // belongs to the account it happened to, and a sweep that abandoned
         // itself on the first one would leave every later row blank — which
         // reads as "no quota left to show" rather than "not asked".
-        let mut row = match ask_for(state, &authorizer, &client, account, may_ask).await {
-            Ok(snapshot) => {
+        // §8.3 — once an hour per account, answered or not, and nothing past
+        // it. Only a grant is ever asked, so only a grant spends the hour.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or_default();
+        let held = if account.kind == "grant" {
+            state.usage.claim_ask(&account.name, now).err()
+        } else {
+            None
+        };
+        let asked = match held {
+            // Held: the figure already stored, saying why it was not asked.
+            // A row that went blank for the hour would read as nothing known.
+            Some(at) => Ok(Err(held_detail(at, now))),
+            None => ask_for(state, &authorizer, &client, account, may_ask)
+                .await
+                .map(Ok),
+        };
+        let mut row = match asked {
+            Ok(Err(held)) => match state.usage.latest_for(&account.name) {
+                Some(measured) => {
+                    let mut row = measured.snapshot.to_json();
+                    if let Some(object) = row.as_object_mut() {
+                        object.insert("detail".to_owned(), json!(held));
+                    }
+                    row
+                }
+                None => json!({ "known": false, "detail": held }),
+            },
+            Ok(Ok(snapshot)) => {
                 // Recorded where the stream path records its own, under the
                 // account it was asked for as, and saying it was asked for
                 // rather than volunteered.
@@ -2642,6 +2672,107 @@ pub async fn refresh_usage_within(
         object.insert("accounts".to_owned(), json!(rows));
     }
     Ok(answer)
+}
+
+/// §8.3 `usage.record` — the second provider's own client's figure, as its
+/// status line was handed it, filed under the account of that profile.
+///
+/// The client states the five-hour and seven-day windows in every status
+/// line payload of a subscribed session, and that costs nothing. So this is
+/// the path a borrowed Claude account's figure normally arrives by, and the
+/// quota endpoint is the fallback for an account no session is running on.
+///
+/// The profile is named the way the client was launched: `config_dir` is its
+/// `CLAUDE_CONFIG_DIR`, absent for the stock profile. An account is matched
+/// on exactly that, since a stated stock directory is a different profile
+/// (§8.4). No match records nothing and says so: a figure filed under a
+/// guessed account would be the wrong account's quota with a fresh age.
+fn record_usage(state: &ControlState, params: Option<&Value>) -> Result<Value, ProxyError> {
+    let params = params.ok_or_else(|| ProxyError::invalid_request("usage.record needs params"))?;
+    let config_dir = match params.get("config_dir") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(dir)) if !dir.is_empty() => Some(std::path::PathBuf::from(dir)),
+        Some(_) => {
+            return Err(ProxyError::invalid_request(
+                "`config_dir` is a directory, or absent for the stock profile",
+            ));
+        }
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default();
+    let limits = params.get("rate_limits");
+    let windows: Vec<crate::usage::Window> = [("five_hour", 300), ("seven_day", 10_080)]
+        .into_iter()
+        .filter_map(|(key, minutes)| {
+            let window = limits?.get(key)?;
+            let used = window.get("used_percentage")?.as_f64()?;
+            let resets = window.get("resets_at")?.as_u64()?;
+            (used.is_finite() && (0.0..=100.0).contains(&used) && resets > now).then(|| {
+                crate::usage::Window {
+                    used_percent: used,
+                    window_minutes: Some(minutes),
+                    resets_at: Some(resets),
+                    ..crate::usage::Window::default()
+                }
+            })
+        })
+        .collect();
+    if windows.is_empty() {
+        return Ok(json!({ "recorded": false, "detail": "no window to record" }));
+    }
+
+    let same = |a: &std::path::Path, b: &std::path::Path| {
+        a == b || std::fs::canonicalize(a).ok() == std::fs::canonicalize(b).ok()
+    };
+    let (profiles, _) = crate::auth::accounts::profiles_of(&state.config);
+    let Some(profile) = profiles.into_iter().find(|profile| {
+        profile.provider == crate::auth::store::Provider::Anthropic
+            && match (&profile.config_dir, &config_dir) {
+                (None, None) => true,
+                (Some(a), Some(b)) => same(a, b),
+                _ => false,
+            }
+    }) else {
+        return Ok(json!({
+            "recorded": false,
+            "detail": "no anthropic profile is launched from that directory",
+        }));
+    };
+
+    // The previous figure with these two windows replaced: the plan, the
+    // credit and each model's own window are the endpoint's, and a status
+    // line states none of them.
+    let mut snapshot = state
+        .usage
+        .latest_for(&profile.name)
+        .map(|measured| measured.snapshot)
+        .unwrap_or_default();
+    snapshot.windows.retain(|kept| {
+        !windows
+            .iter()
+            .any(|new| new.window_minutes == kept.window_minutes)
+    });
+    snapshot.windows.splice(0..0, windows);
+    state.usage.record_for(
+        Some(&profile.name),
+        &snapshot,
+        crate::usage::Source::StatusLine,
+    );
+    Ok(json!({ "recorded": true, "account": profile.name }))
+}
+
+/// What a row says about an account whose hour is not up.
+fn held_detail(asked: u64, now: u64) -> String {
+    let minutes = |secs: u64| secs.div_ceil(60).max(1);
+    let since = now.saturating_sub(asked);
+    format!(
+        "It was asked {} min ago, and the quota endpoint is asked at most once an hour. \
+         It can be asked again in {} min.",
+        since / 60,
+        minutes(crate::usage::ASK_EVERY_SECS.saturating_sub(since)),
+    )
 }
 
 /// One account's figure, asked for on its own credential.

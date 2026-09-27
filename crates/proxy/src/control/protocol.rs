@@ -83,7 +83,7 @@ pub mod codes {
 /// Listed as a constant rather than left implicit so the CLI, the tests, and
 /// any future front-end all agree on the surface, and so removing one is a
 /// visible change.
-pub const METHODS: [&str; 20] = [
+pub const METHODS: [&str; 21] = [
     "status",
     "shutdown",
     "accounts",
@@ -98,6 +98,7 @@ pub const METHODS: [&str; 20] = [
     "usage",
     "incidents",
     "usage.refresh",
+    "usage.record",
     "env",
     "doctor",
     "record.start",
