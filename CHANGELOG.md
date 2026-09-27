@@ -4,6 +4,20 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.33.0]
+
+- **A quota endpoint is asked at most once an hour per account.** `usage.refresh`
+  counts the hour from the ask, answered or not, keeps it on disk across a
+  restart, and never retries. Within the hour an account's row is the figure
+  already held and says when it can be asked again. The second provider's
+  endpoint answered 429 under asks five minutes apart, and a refused ask left
+  the figure stale, which asked again.
+- **A Claude session's own status line keeps its account's figure moving.**
+  `statusline` hands the five-hour and seven-day windows the client states for
+  a session on its own provider to this machine's daemon, which files them
+  under the profile the session was launched from (`usage.record`, new).
+  `usage` reports those figures as `source: "statusline"`.
+
 ## [0.32.1]
 
 - **A daemon that fails to start is quoted by its reason, not its backtrace.**
