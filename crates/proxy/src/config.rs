@@ -198,7 +198,7 @@ port = 8787
 # arrives. Two tiers on one model must agree on its effort. Both keys may sit in
 # one table: `haiku = { account = "spare", model = "...", effort = "low" }`.
 [tiers]
-# opus   = "gpt-6-sol"
+# opus   = "gpt-6.1-sol"
 # sonnet = "gpt-5.6-terra"
 # haiku  = "gpt-6-luna"
 # fable  = "gpt-6-astra"
@@ -1616,7 +1616,7 @@ pub const TIER_NAMES: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
 /// a defaulted tier falls back to when an account's catalog lacks it.
 const DEFAULT_TIERS: [(&str, &[&str]); 4] = [
     ("fable", &["gpt-6-astra"]),
-    ("opus", &["gpt-6-sol", "gpt-5.6-sol"]),
+    ("opus", &["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"]),
     ("sonnet", &["gpt-5.6-terra"]),
     ("haiku", &["gpt-6-luna", "gpt-5.6-luna"]),
 ];

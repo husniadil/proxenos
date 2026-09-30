@@ -117,7 +117,7 @@ port = 8787
 effort = "high"            # a ceiling on what the client asks for; unset means none
 
 [tiers]
-opus   = "gpt-6-sol"       # these four are the defaults
+opus   = "gpt-6.1-sol"     # these four are the defaults
 sonnet = "gpt-5.6-terra"
 haiku  = "gpt-6-luna"      # WebFetch and WebSearch run on haiku
 fable  = "gpt-6-astra"

@@ -137,12 +137,15 @@ impl Catalog {
     /// `gpt-6-astra` and `gpt-5.6-sol` are plan-gated: a paid account serves
     /// both (measured 2026-09-07), a free one refuses each as unsupported.
     /// `gpt-6-sol` is likewise in a paid account's catalog and not a free
-    /// one's. They are listed all the same, because this list is a menu for whichever
-    /// account is asked about, and a fallback that hides what a paid account
-    /// has is a worse guess than one that names what a free account lacks.
+    /// one's, and `gpt-6.1-sol` is served to a paid account and refused to a
+    /// free one (measured 2026-09-30). They are listed all the same, because
+    /// this list is a menu for whichever account is asked about, and a
+    /// fallback that hides what a paid account has is a worse guess than one
+    /// that names what a free account lacks.
     pub fn fallback() -> Self {
         let models = [
             "gpt-6-astra",
+            "gpt-6.1-sol",
             "gpt-6-sol",
             "gpt-6-luna",
             "gpt-5.6-sol",
@@ -350,7 +353,7 @@ impl Catalog {
     /// Replace defaulted models this account cannot see.
     ///
     /// A shipped default is a guess about an account this proxy has never seen.
-    /// `gpt-6-sol` is plan-gated and absent from a free account's catalog, so
+    /// `gpt-6.1-sol` is plan-gated and absent from a free account's catalog, so
     /// a default naming it would refuse to start for most people — and a
     /// default that cannot start is worse than no default. The same happens
     /// whenever a model is renamed or retired out from under a released binary.

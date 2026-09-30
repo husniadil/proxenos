@@ -283,7 +283,7 @@ fn the_fallback_states_no_windows() {
 fn the_fallback_names_the_current_generation() {
     let catalog = Catalog::fallback();
 
-    for id in ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"] {
+    for id in ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"] {
         assert!(catalog.get(id).is_some(), "{id} should be in the fallback");
     }
 }
@@ -576,6 +576,25 @@ fn a_defaulted_tier_falls_back_through_its_generations_then_the_tier_below() {
         tiers[0].model, "gpt-5.6-sol",
         "the previous generation first"
     );
+
+    // A paid account whose catalog has not yet listed the newest sol keeps
+    // opus on the sol before it rather than dropping a generation.
+    let without_newest_sol = Catalog::parse(
+        r#"{"data":[
+            {"id":"gpt-6-sol","is_visible":true},
+            {"id":"gpt-5.6-sol","is_visible":true}
+        ]}"#,
+        SHIPPING,
+    )
+    .unwrap();
+    let mut tiers = proxenos::config::Tiers::default()
+        .resolve(proxenos::config::CrossAccountTiers::Refused)
+        .unwrap();
+    tiers.retain(|tier| tier.tier == "opus");
+
+    without_newest_sol.substitute_unavailable_defaults(&mut tiers);
+
+    assert_eq!(tiers[0].model, "gpt-6-sol", "the sol one step back");
 }
 
 /// A model the operator stated is never substituted. They may know something
