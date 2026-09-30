@@ -4,6 +4,13 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.34.0]
+
+- **Opus defaults to `gpt-6.1-sol`.** A paid codex account serves it and a free
+  one refuses it as unsupported, the same gating `gpt-6-sol` has. A defaulted
+  opus walks back through `gpt-6-sol`, then `gpt-5.6-sol`, so an account whose
+  catalog does not list it keeps the sol it had. The fallback catalog names it.
+
 ## [0.33.0]
 
 - **A quota endpoint is asked at most once an hour per account.** `usage.refresh`
