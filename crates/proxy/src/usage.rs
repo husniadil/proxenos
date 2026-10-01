@@ -445,6 +445,19 @@ impl Snapshot {
     /// measured by duration is never carried, since every source states
     /// those, and a reset window is dropped rather than shown at a figure
     /// the reset erased.
+    /// The windows in the one order every reader gets them in (`api.md` §3):
+    /// the account's own by length, shortest first, then the named ones in
+    /// the order they came.
+    ///
+    /// Each source writes its own order, and a status line that stated the
+    /// seven-day window alone was filed ahead of the five-hour one it did not
+    /// restate, so the two swapped places on a meter from one reading to the
+    /// next.
+    pub fn order_windows(&mut self) {
+        self.windows
+            .sort_by_key(|window| (window.window_minutes.is_none(), window.window_minutes));
+    }
+
     #[must_use]
     pub fn carrying(&self, previous: &Self, now: u64) -> Self {
         let mut merged = self.clone();
@@ -915,6 +928,7 @@ fn restore(mut measured: Measured, now: u64) -> Option<Measured> {
     if measured.snapshot.windows.is_empty() {
         return None;
     }
+    measured.snapshot.order_windows();
     Some(measured)
 }
 
@@ -1198,10 +1212,11 @@ impl UsageStore {
                     // an overage, the endpoint each model's own — and a
                     // snapshot that replaced the whole set made a named
                     // window come and go with whichever source spoke last.
-                    let snapshot = match by_account.get(&name) {
+                    let mut snapshot = match by_account.get(&name) {
                         Some(previous) => snapshot.carrying(&previous.snapshot, at),
                         None => snapshot.clone(),
                     };
+                    snapshot.order_windows();
                     by_account.insert(
                         name,
                         Measured {
@@ -1215,8 +1230,10 @@ impl UsageStore {
             }
             None => {
                 if let Ok(mut unattributed) = self.unattributed.lock() {
+                    let mut snapshot = snapshot.clone();
+                    snapshot.order_windows();
                     *unattributed = Some(Measured {
-                        snapshot: snapshot.clone(),
+                        snapshot,
                         source,
                         at,
                     });

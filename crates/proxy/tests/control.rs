@@ -7455,6 +7455,84 @@ async fn a_status_lines_quota_is_filed_under_the_profile_it_ran_in() {
     assert_eq!(used(None, Some("Fable")), Some(40.0));
 }
 
+/// A status line that states the seven-day window alone (its five-hour one
+/// is over) keeps the windows in their order, shortest first and then the
+/// named ones, and drops the kept five-hour figure whose reset has passed.
+#[tokio::test]
+async fn a_status_line_keeps_the_windows_in_order_and_drops_a_reset_one() {
+    let harness = Harness::start().await;
+    let window = |minutes: Option<u64>, label: Option<&str>, used: f64, resets: u64| {
+        proxenos::usage::Window {
+            used_percent: used,
+            window_minutes: minutes,
+            label: label.map(str::to_owned),
+            resets_at: Some(resets),
+            ..Default::default()
+        }
+    };
+    let earlier = proxenos::usage::Snapshot {
+        windows: vec![
+            window(Some(300), None, 3.0, 1),
+            window(Some(10_080), None, 70.0, 1_900_500_000),
+            window(None, Some("Fable"), 40.0, 1_900_500_000),
+        ],
+        ..Default::default()
+    };
+    harness
+        .usage
+        .record_for(Some("claude"), &earlier, proxenos::usage::Source::Fetch);
+
+    let seven_only =
+        json!({ "seven_day": { "used_percentage": 75.0, "resets_at": 1_900_500_000u64 } });
+    let answer = harness
+        .call_with("usage.record", json!({ "rate_limits": seven_only }))
+        .await
+        .unwrap();
+    assert_eq!(answer["recorded"], json!(true), "{answer}");
+    let order: Vec<_> = harness
+        .usage
+        .latest_for("claude")
+        .unwrap()
+        .snapshot
+        .windows
+        .iter()
+        .map(|w| (w.window_minutes, w.label.clone(), w.used_percent))
+        .collect();
+    assert_eq!(
+        order,
+        vec![
+            (Some(10_080), None, 75.0),
+            (None, Some("Fable".to_owned()), 40.0)
+        ]
+    );
+
+    let both = harness
+        .call_with(
+            "usage.record",
+            json!({ "rate_limits": status_limits(7.0, 76.0) }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(both["recorded"], json!(true), "{both}");
+    let order: Vec<_> = harness
+        .usage
+        .latest_for("claude")
+        .unwrap()
+        .snapshot
+        .windows
+        .iter()
+        .map(|w| (w.window_minutes, w.label.clone()))
+        .collect();
+    assert_eq!(
+        order,
+        vec![
+            (Some(300), None),
+            (Some(10_080), None),
+            (None, Some("Fable".to_owned()))
+        ]
+    );
+}
+
 /// A figure filed under a guessed account is another account's quota with a
 /// fresh age, so a directory no profile is launched from records nothing.
 #[tokio::test]

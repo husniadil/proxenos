@@ -1862,7 +1862,9 @@ turn has been made, plus:
 
 Each window carries `used_percent`, `window_minutes`, `resets_at`, and where the
 provider stated them `status`, `surpassed_threshold`, `representative`, and
-`label` for a window no duration identifies. An entry with a credit balance
+`label` for a window no duration identifies. An entry's windows come in one
+order whatever source measured them: those with a `window_minutes` by length,
+shortest first, then the labelled ones in the order they were stated. An entry with a credit balance
 carries `credit`: `used_minor`, `limit_minor`, `exponent`, `currency`, `percent`,
 `severity`. An entry whose subscription is not active carries
 `subscription_status`, the provider's word; absent where active.
@@ -1871,7 +1873,9 @@ carries `credit`: `used_minor`, `limit_minor`, `exponent`, `currency`, `percent`
 
 `reason` is the fact in a word, so a renderer never matches on prose. Staleness is
 per window, since one snapshot can hold a turned-over five-hour window beside a
-current seven-day one.
+current seven-day one. The order is fixed because each source writes its own,
+and a status line that stated the seven-day window alone was filed ahead of the
+five-hour one, so the two swapped places on a meter between readings.
 
 ### `usage.refresh`
 
@@ -1911,7 +1915,8 @@ Params: `rate_limits` as the client's status-line payload states it
 seconds), and `config_dir`, the session's `CLAUDE_CONFIG_DIR` or absent for the
 stock profile. Files the two windows under the anthropic profile launched from
 that directory, keeping the plan, the credit and every other window of the
-figure already held, as `source: "statusline"`. Returns `recorded` and the
+figure already held, as `source: "statusline"`. A held window whose reset has
+passed is dropped rather than given the new figure's age. Returns `recorded` and the
 `account`, or `recorded: false` with a `detail` where no profile matches or no
 window is current. A figure outside 0 to 100, or a window already reset, is not
 a window.

@@ -2756,18 +2756,21 @@ fn record_usage(state: &ControlState, params: Option<&Value>) -> Result<Value, P
 
     // The previous figure with these two windows replaced: the plan, the
     // credit and each model's own window are the endpoint's, and a status
-    // line states none of them.
+    // line states none of them. A kept window whose reset has passed is
+    // dropped rather than given this record's age, since it describes a
+    // window back at zero.
     let mut snapshot = state
         .usage
         .latest_for(&profile.name)
         .map(|measured| measured.snapshot)
         .unwrap_or_default();
     snapshot.windows.retain(|kept| {
-        !windows
-            .iter()
-            .any(|new| new.window_minutes == kept.window_minutes)
+        !kept.is_stale_at(now)
+            && !windows
+                .iter()
+                .any(|new| new.window_minutes == kept.window_minutes)
     });
-    snapshot.windows.splice(0..0, windows);
+    snapshot.windows.extend(windows);
     state.usage.record_for(
         Some(&profile.name),
         &snapshot,
