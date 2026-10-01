@@ -4,6 +4,16 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.35.0]
+
+- **A translated launch skips auto mode's server-side classifier.** `env` and
+  `exec` set `CLAUDE_CODE_AUTO_MODE_SERVER=0` wherever any tier translates. The
+  translating backend cannot answer the `safeguards` field auto mode sends, so
+  the client stopped mid-session on a notice before running the classifier
+  itself; it now does so from the start, with the same requests. A launch served
+  entirely by the relay omits it and keeps the server-side classifier, which the
+  relay carries verbatim (measured live).
+
 ## [0.34.0]
 
 - **Opus defaults to `gpt-6.1-sol`.** A paid codex account serves it and a free
