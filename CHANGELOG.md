@@ -4,6 +4,15 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.35.1]
+
+- **An account's quota windows come in one order.** `usage` lists the windows
+  with a length shortest first, then the labelled ones, whatever source
+  measured them. A status line that stated the seven-day window alone was
+  filed ahead of the five-hour one, so a meter swapped the two between
+  readings. `usage.record` also drops a held window whose reset has passed
+  instead of showing it at the new figure's age.
+
 ## [0.35.0]
 
 - **A translated launch skips auto mode's server-side classifier.** `env` and
