@@ -1206,6 +1206,19 @@ pub fn environment_for(
     if translating {
         variables.push(("CLAUDE_CODE_DISABLE_1M_CONTEXT".to_owned(), "1".to_owned()));
     }
+
+    // Auto mode asks the backend to run its safety classifier inside the turn,
+    // through a `safeguards` request field answered by `safeguard_results`. The
+    // relay forwards both verbatim (measured live: no fallback notice, tool-use
+    // ids intact), so a relayed session keeps that. The translating backend has
+    // neither, and the client finds out mid-session, stopping on a notice before
+    // falling back to classifier requests of its own. Saying so at launch skips
+    // the stop; the requests it makes instead are what the fallback makes anyway.
+    // Keyed on any tier translating, because the variable is global and one
+    // translated turn is enough to drop the session to the fallback.
+    if translating {
+        variables.push(("CLAUDE_CODE_AUTO_MODE_SERVER".to_owned(), "0".to_owned()));
+    }
     variables
 }
 

@@ -1718,6 +1718,24 @@ costs nothing; on a relayed id it denies an entitlement the account may hold. A
 split mapping keeps it, because a denied entitlement makes a smaller session
 while a fabricated window makes one that overruns.
 
+#### `CLAUDE_CODE_AUTO_MODE_SERVER=0` is set wherever any tier translates
+
+A mapping served entirely by the relay omits it.
+
+##### Why
+
+In auto mode the client sends a `safeguards` request field asking the backend to
+classify tool use inside the turn, and reads the verdict from
+`safeguard_results` in the reply. The relay forwards both verbatim. Measured
+live: a relayed auto-mode session ran a shell command with no fallback notice,
+and its second request carried the first turn's tool-use id in
+`prior_turn_context`. The translating backend has no such field, so the client
+discovers the gap mid-session and stops on a notice before falling back to
+classifier requests of its own, which the translating path then serves like
+any turn. Setting the variable takes that fallback at launch. The variable is
+global and the client falls back for the rest of a session once any turn does,
+so a split mapping sets it too.
+
 #### The window is stated only when no tier is relayed
 
 With every tier translating and the catalog knowing at least one window,

@@ -832,6 +832,7 @@ export ANTHROPIC_DEFAULT_FABLE_MODEL=<mapped>
 export CLAUDE_CODE_MAX_CONTEXT_TOKENS=<effective window>
 export CLAUDE_CODE_AUTO_COMPACT_WINDOW=<effective window>
 export CLAUDE_CODE_DISABLE_1M_CONTEXT=1
+export CLAUDE_CODE_AUTO_MODE_SERVER=0
 export ENABLE_TOOL_SEARCH=true
 export ENABLE_CLAUDEAI_MCP_SERVERS=false
 ```
@@ -872,6 +873,19 @@ it knows with a figure this catalog cannot supply (`proxy-behavior.md` §7.2).
 Load-bearing. Without it the client appends `[1m]` to an unrecognized id and
 assumes a million tokens. With it, the client also strips `context-1m-2025-08-07`
 from the beta list it sends (`proxy-behavior.md` §7.2).
+
+### `CLAUDE_CODE_AUTO_MODE_SERVER=0`
+
+Where any tier translates, on the same rule as `CLAUDE_CODE_DISABLE_1M_CONTEXT`.
+A mapping served entirely by the relay omits it.
+
+#### Why
+
+Auto mode asks the backend to run its classifier inside the turn. The relay
+carries that and the translating backend cannot, so a translated session would
+stop on a notice mid-session before falling back to the client's own classifier
+requests. The variable takes the fallback from the start; the requests are the
+same either way (`proxy-behavior.md` §7.2).
 
 ### `ENABLE_TOOL_SEARCH=true`
 

@@ -720,6 +720,10 @@ async fn env_emits_all_four_tiers_and_the_context_floor() {
     assert_eq!(lookup("ANTHROPIC_BASE_URL"), "http://127.0.0.1:8787");
     assert_eq!(lookup("ANTHROPIC_DEFAULT_HAIKU_MODEL"), "gpt-5.4-mini");
     assert_eq!(lookup("CLAUDE_CODE_DISABLE_1M_CONTEXT"), "1");
+    // The translating path cannot carry `safeguards` / `safeguard_results`, so
+    // the client is told up front to run auto mode's classifier itself rather
+    // than discover the gap mid-session and stop to say so.
+    assert_eq!(lookup("CLAUDE_CODE_AUTO_MODE_SERVER"), "0");
 }
 
 /// The token is required for the client's sake and its value is ignored, so it
@@ -4652,6 +4656,7 @@ async fn an_all_relay_mapping_states_no_window_and_no_long_context_flag() {
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
         "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+        "CLAUDE_CODE_AUTO_MODE_SERVER",
     ] {
         assert!(!shell.contains(absent), "{absent} in {shell}");
         assert_eq!(settings["env"][absent], Value::Null, "{absent} in settings");
@@ -4832,6 +4837,7 @@ async fn the_environment_for_a_named_account_takes_that_accounts_side_of_the_for
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
         "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+        "CLAUDE_CODE_AUTO_MODE_SERVER",
     ] {
         assert!(!injected.contains_key(absent), "{absent} in {injected:?}");
     }
@@ -4953,6 +4959,12 @@ haiku = "gpt-5.4-mini"
             .get("CLAUDE_CODE_DISABLE_1M_CONTEXT")
             .map(String::as_str),
         Some("1")
+    );
+    assert_eq!(
+        injected
+            .get("CLAUDE_CODE_AUTO_MODE_SERVER")
+            .map(String::as_str),
+        Some("0")
     );
 }
 
