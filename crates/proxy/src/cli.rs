@@ -133,7 +133,8 @@ pub struct TiersArgs {
     #[arg(long, global = true)]
     pub json: bool,
     /// Whose mapping to read: a stored account's own section rather than the
-    /// one in force. Reading only; `set` names its account with `--as`.
+    /// one in force. Reading only; `set` writes an account's own section with
+    /// its own `--account`.
     #[arg(long, value_name = "ACCOUNT")]
     pub account: Option<String>,
 }
@@ -186,8 +187,8 @@ pub struct SetTierArgs {
     /// naming this flag.
     #[arg(long, requires = "as_account")]
     pub allow_cross_account: bool,
-    /// The effort the client starts this tier's model at: none, minimal, low,
-    /// medium, high, xhigh or max. Delivered in the launch settings as that
+    /// The effort the client starts this tier's model at: low, medium, high,
+    /// xhigh or max. Delivered in the launch settings as that
     /// model's own effort; a session's --effort outranks it and the ceiling
     /// still caps it. Omitted, the tier carries none — a set replaces the
     /// tier's whole value.

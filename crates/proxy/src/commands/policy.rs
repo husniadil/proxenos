@@ -17,7 +17,7 @@ pub(crate) async fn tiers(args: cli::TiersArgs) -> Result<()> {
     let endpoint = control::Endpoint::resolve()?;
     if args.account.is_some() && args.action.is_some() {
         anyhow::bail!(
-            "--account reads a stored account's mapping; `tiers set` names its account with --as"
+            "--account reads a stored account's mapping; `tiers set` writes one with its own --account"
         );
     }
     let set = match args.action {
