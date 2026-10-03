@@ -61,7 +61,7 @@ pub struct Incident {
     /// asking whether an incident is moving needs no second request and no
     /// second allowlist of status hosts. Present and empty rather than
     /// absent: a caller reads its absence as a daemon older than the field
-    /// (§12) rather than as an incident nothing has been said about.
+    /// (api.md §6) rather than as an incident nothing has been said about.
     pub updates: Vec<Update>,
 }
 

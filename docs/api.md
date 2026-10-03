@@ -1569,7 +1569,7 @@ No parameters.
 | `port`, `base_url` | the daemon's port and loopback URL |
 | `auth.connected` | there is a credential to spend, of either kind |
 | `auth.dead` | the credential cannot be spent as it stands: unreadable, or lapsed and waiting on the program that owns the profile (`proxy-behavior.md` §8.4) |
-| `auth.refused` | the backend's own words where it turned the credential away; null otherwise |
+| `auth.refused` | where the backend turned the credential away: `{status, detail, at}`, the status it answered, its own words, and when, in unix seconds. Apart from `auth.dead`: a credential revoked upstream still reads and is refused on every turn. Null otherwise |
 | `auth.account` | what this daemon calls the serving account; what selects it |
 | `auth.account_id` | what the backend calls it |
 | `auth.kind` | `grant` or `key` |

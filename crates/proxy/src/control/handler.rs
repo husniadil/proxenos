@@ -540,7 +540,7 @@ fn status(state: &ControlState) -> Value {
         "catalog_stale": catalog.is_stale_for(serving_account(&stored).as_deref()),
         "catalog_account": catalog.fetched_for.clone(),
         // Every method this build answers. A front-end that needs one has to
-        // establish it is there, and §12 forbids inferring that from the
+        // establish it is there, and api.md §6 forbids inferring that from the
         // version: comparing versions forces a policy about which differences
         // matter and gets it wrong for a patched build or a forgotten bump.
         // Without this the only thing to compare was the version, so that is

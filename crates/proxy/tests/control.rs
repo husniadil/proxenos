@@ -491,9 +491,9 @@ async fn every_documented_method_is_answered() {
 }
 
 /// `status` publishes the same vocabulary, so a front-end can establish a
-/// method is there instead of comparing versions (§12). The two lists must be
-/// the same one: a method answered but not published is one no caller will
-/// use, and a method published but not answered is the contract above.
+/// method is there instead of comparing versions (api.md §6). The two lists
+/// must be the same one: a method answered but not published is one no caller
+/// will use, and a method published but not answered is the contract above.
 #[tokio::test]
 async fn status_publishes_every_method_it_answers() {
     let harness = Harness::start().await;
