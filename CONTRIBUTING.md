@@ -13,6 +13,11 @@ The toolchain is pinned in `.tool-versions` and installed with mise.
 just setup     # mise install, rustfmt and clippy, cargo-nextest, cargo-insta
 ```
 
+A Claude Code cloud session has no mise, so the SessionStart hook in
+`.claude/settings.json` runs `.claude/cloud-tooling.sh`, which installs the
+same tools at the same pins. A bump to `.tool-versions` reaches the next
+session. Outside a cloud session the hook does nothing.
+
 ## The gate
 
 ```sh
