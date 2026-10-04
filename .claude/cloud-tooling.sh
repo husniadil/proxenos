@@ -2,35 +2,17 @@
 # Installs what `just check` needs in a Claude Code cloud session, at the
 # versions .tool-versions pins. A local checkout has mise for that.
 #
-#   setup  The cloud environment's setup script, fetched from main. The session
-#          it runs for may be another repo's, so it reads .tool-versions from
-#          GitHub rather than a checkout that may not exist.
-#   hook   The SessionStart hook in .claude/settings.json. It reads the
-#          checkout's .tool-versions, so a bump applies at the next session
-#          instead of when the environment cache next rebuilds.
-#
-# Each step is skipped when its tool is already in place, so a hook in a
-# session whose cache is current touches no network.
+# The SessionStart hook in .claude/settings.json runs it against the checkout,
+# so a bump to .tool-versions applies at the next session. Each step is skipped
+# when its tool is already in place, so a second run touches no network.
 set -euo pipefail
 
-bin=/root/.cargo/bin
-fetch() { curl -fsSL --retry 3 --retry-all-errors "$1"; }
+[[ ${CLAUDE_CODE_REMOTE:-} == true ]] || exit 0
 
-case ${1:-} in
-  setup)
-    repo=/home/user/proxenos
-    tool_versions=$(fetch https://raw.githubusercontent.com/husniadil/proxenos/main/.tool-versions)
-    ;;
-  hook)
-    [[ ${CLAUDE_CODE_REMOTE:-} == true ]] || exit 0
-    repo=$CLAUDE_PROJECT_DIR
-    tool_versions=$(<"$repo/.tool-versions")
-    ;;
-  *)
-    echo "usage: cloud-tooling.sh setup|hook" >&2
-    exit 64
-    ;;
-esac
+bin=/root/.cargo/bin
+repo=$CLAUDE_PROJECT_DIR
+tool_versions=$(<"$repo/.tool-versions")
+fetch() { curl -fsSL --retry 3 --retry-all-errors "$1"; }
 
 rust=$(awk '$1 == "rust" { print $2 }' <<<"$tool_versions")
 just=$(awk '$1 == "just" { print $2 }' <<<"$tool_versions")
@@ -48,7 +30,7 @@ if [[ ! -x $bin/cargo-insta ]]; then
     | tar xJ -C "$bin" --strip-components=1 cargo-insta-x86_64-unknown-linux-musl/cargo-insta
 fi
 
-# A path override, so other repos in a shared environment keep the default.
+# A path override, so anything else in the session keeps the image's default.
 if [[ $("$bin/rustup" toolchain list) != *"$rust-"* ]]; then
   "$bin/rustup" toolchain install "$rust" --profile minimal --component rustfmt,clippy --no-self-update
 fi
