@@ -13,6 +13,19 @@ The toolchain is pinned in `.tool-versions` and installed with mise.
 just setup     # mise install, rustfmt and clippy, cargo-nextest, cargo-insta
 ```
 
+A Claude Code cloud session has no mise, so `.claude/cloud-tooling.sh`
+installs the same tools at the same pins. Give the cloud environment this
+setup script:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/husniadil/proxenos/main/.claude/cloud-tooling.sh | bash -s setup
+```
+
+The SessionStart hook in `.claude/settings.json` runs the same script against
+the checkout, so a bump to `.tool-versions` reaches the next session instead of
+waiting for the environment cache to rebuild. Outside a cloud session the hook
+does nothing.
+
 ## The gate
 
 ```sh
