@@ -4,6 +4,14 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.35.2]
+
+- **`claude-sonnet-5-5` and `claude-haiku-5-5` join the curated Anthropic
+  menu**, each with its `[1m]` long-context sibling, so `models` and a tier set
+  from a relay account can name them, and `exec --model` upgrades either to its
+  long-context variant on the relay path. `claude-sonnet-5` and
+  `claude-haiku-4-5` stay on the menu.
+
 ## [0.35.1]
 
 - **An account's quota windows come in one order.** `usage` lists the windows
