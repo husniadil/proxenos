@@ -250,11 +250,34 @@ them for its retry banner on a quota 429.
 **Settled live: nothing beyond `proxy-behavior.md` §9.2.** A setup-token bearer
 relayed as `Authorization: Bearer` is accepted, streaming included, without
 `oauth-2025-04-20`; that beta belongs to the usage endpoint. The endpoint does
-require the client's own identity shape — its beta list, `x-app`, its system
-prompt — which the client always sends and the relay forwards. The client posts
+require the client's own identity in its system prompt, which the client always
+sends and the relay forwards (the next question). The client posts
 `/v1/messages?beta=true`, and the query string is relayed as sent.
 **Falsified:** the hypothesis that Messages needs the OAuth beta header, which
-was tested rather than implemented.
+was tested rather than implemented. Also that the client's beta list and `x-app`
+are part of the identity the endpoint checks: a turn carrying neither is answered
+once its system prompt names the client, and a turn carrying both is refused
+without that.
+
+#### Which models need the client's identity in the system prompt?
+
+**Settled live, on one subscription credential.** A relayed turn whose system
+prompt does not carry the client's identity line is answered
+`429 rate_limit_error` on `claude-haiku-5-5`, `claude-sonnet-5-5`,
+`claude-opus-5-5`, `claude-fable-5-1`, `claude-sonnet-5`, `claude-opus-5`,
+`claude-opus-4-8`, `claude-sonnet-4-5` and `claude-opus-4-5`.
+`claude-haiku-4-5-20251001` is the one model measured that answers without it.
+With the line, the six 5.x models and `claude-opus-4-8` all answer.
+`claude-sonnet-4-5` and `claude-opus-4-5` were not measured with it.
+
+On `claude-haiku-5-5`, any of the client's own identity blocks clears it: the
+CLI line, the Agent SDK line, or the billing-header block the client sends first.
+An arbitrary system prompt does not, as a string or as a block. The refusal reads
+as a rate limit, so it sends whoever reads it to check quota that is not the
+problem. Measured with `doctor --live --probe relay` and the body varied, which is
+why the live relay probe sends the CLI line (`doctor.rs` `live_relay_request`).
+**Falsified:** that the requirement belongs to `claude-haiku-5-5` alone, which
+was the first model it was found on.
 
 #### How is a subscription credential for the relay obtained?
 
