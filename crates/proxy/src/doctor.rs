@@ -768,14 +768,17 @@ pub fn answer_marker(probe: &probe::Probe) -> Option<String> {
 ///
 /// The system prompt is the client's own identity line, because a client always
 /// sends one and the endpoint checks for it. Measured: a subscription grant's
-/// turn on `claude-haiku-5-5` without it is answered with `rate_limit_error`,
+/// turn without it is answered with `rate_limit_error` on every current model,
 /// with an arbitrary system prompt as well, and the same turn carrying the
-/// line comes back.
+/// line comes back (`roadmap.md` §L).
+///
+/// `max_tokens` leaves room for thinking, which is on by default for the model
+/// named and counts toward the limit.
 fn live_relay_request(model: &str, marker: &str) -> Value {
     serde_json::json!({
         "stream": true,
         "model": model,
-        "max_tokens": 64,
+        "max_tokens": 1024,
         "system": [{
             "type": "text",
             "text": "You are Claude Code, Anthropic's official CLI for Claude.",
@@ -1118,6 +1121,22 @@ mod tests {
             request["messages"][0]["content"]
                 .as_str()
                 .is_some_and(|content| content.contains("K7Q2ZX")),
+            "{request}"
+        );
+    }
+
+    /// Adaptive thinking is on by default for the model the live turn names,
+    /// and its thinking counts toward `max_tokens`. A limit sized for the code
+    /// alone can stop after a thinking block, before the marker is written, and
+    /// the row would then blame the relay for the probe's own budget.
+    #[test]
+    fn the_live_relay_turn_leaves_room_for_thinking() {
+        let request = live_relay_request(LIVE_RELAY_MODEL, "K7Q2ZX");
+
+        assert!(
+            request["max_tokens"]
+                .as_u64()
+                .is_some_and(|limit| limit >= 1024),
             "{request}"
         );
     }

@@ -4,6 +4,13 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **The live relay probe leaves room for thinking.** Its `max_tokens` is 1024
+  rather than 64. Thinking is on by default for the model it names and counts
+  toward the limit, so a turn could stop after a thinking block, before the
+  marker, and fail the row for the probe's own budget.
+
 ## [0.35.3]
 
 - **The live relay probe runs on `claude-haiku-5-5`.** Its turn now carries the

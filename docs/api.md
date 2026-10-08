@@ -609,10 +609,11 @@ A body round-tripped through the proxy's own types fails the marker check. Live,
 the outbound bytes leave on a socket this process cannot read, and checking them
 against a stand-in would report a pass for a half nothing looked at.
 
-A subscription grant's turn on `claude-haiku-5-5` is answered with
-`rate_limit_error` when its system prompt does not carry the client's identity,
-and an arbitrary system prompt does not help (measured). A client always sends
-that line, so the probe sends it too.
+A subscription grant's turn is answered with `rate_limit_error` when its system
+prompt does not carry the client's identity, on every model measured but Haiku
+4.5, and an arbitrary system prompt does not help (`roadmap.md` §L). A client
+always sends that line, so the probe sends it too. Thinking counts toward
+`max_tokens`, so the limit leaves room for it.
 
 ### The coverage line
 
