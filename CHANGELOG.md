@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.35.4]
 
 - **The live relay probe leaves room for thinking.** Its `max_tokens` is 1024
   rather than 64. Thinking is on by default for the model it names and counts
