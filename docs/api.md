@@ -595,7 +595,8 @@ Runs in both modes. Replayed, it drives the relay branch against a recording
 whose marker sits inside a field the proxy does not model, and a stand-in backend
 records the bytes sent, so both halves are checked. Live, it sends a turn to the
 second provider's real endpoint and checks the answer half only, and the row says
-so.
+so. The live turn names `claude-haiku-5-5` and carries the client's identity line
+as its system prompt.
 
 The live account is read from the store, not from the selection: exactly one
 account on the second provider is used; several need `--relay-account`; none
@@ -607,6 +608,11 @@ nor changes the selection.
 A body round-tripped through the proxy's own types fails the marker check. Live,
 the outbound bytes leave on a socket this process cannot read, and checking them
 against a stand-in would report a pass for a half nothing looked at.
+
+A subscription grant's turn on `claude-haiku-5-5` is answered with
+`rate_limit_error` when its system prompt does not carry the client's identity,
+and an arbitrary system prompt does not help (measured). A client always sends
+that line, so the probe sends it too.
 
 ### The coverage line
 

@@ -4,6 +4,14 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.35.3]
+
+- **The live relay probe runs on `claude-haiku-5-5`.** Its turn now carries the
+  client's identity line as the system prompt. Without it, the second provider
+  answers a subscription grant's turn on that model with `rate_limit_error`, so
+  `doctor --live --probe relay` failed on an account that serves the model to the
+  client (measured). An arbitrary system prompt is refused the same way.
+
 ## [0.35.2]
 
 - **`claude-sonnet-5-5` and `claude-haiku-5-5` join the curated Anthropic

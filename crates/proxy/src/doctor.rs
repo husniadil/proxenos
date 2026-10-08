@@ -744,7 +744,7 @@ fn run_environment(probe: &probe::Probe) -> Outcome {
 /// provider's own and has to be one it will answer. The corpus's id is a
 /// placeholder that only a stand-in backend accepts, which is why the live arm
 /// does not reuse it.
-pub const LIVE_RELAY_MODEL: &str = "claude-haiku-4-5-20251001";
+pub const LIVE_RELAY_MODEL: &str = "claude-haiku-5-5";
 
 /// The marker a probe requires the client to receive.
 ///
@@ -765,11 +765,21 @@ pub fn answer_marker(probe: &probe::Probe) -> Option<String> {
 /// backend refuses them, so the live arm asks the one question it can answer —
 /// that a turn routed onto this path reaches the second provider and comes back
 /// — and the marker is what makes the reply evidence rather than plausibility.
+///
+/// The system prompt is the client's own identity line, because a client always
+/// sends one and the endpoint checks for it. Measured: a subscription grant's
+/// turn on `claude-haiku-5-5` without it is answered with `rate_limit_error`,
+/// with an arbitrary system prompt as well, and the same turn carrying the
+/// line comes back.
 fn live_relay_request(model: &str, marker: &str) -> Value {
     serde_json::json!({
         "stream": true,
         "model": model,
         "max_tokens": 64,
+        "system": [{
+            "type": "text",
+            "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+        }],
         "messages": [{
             "role": "user",
             "content": format!("Reply with exactly this code and nothing else: {marker}"),
@@ -1082,5 +1092,33 @@ async fn run_relay_replay(probe: &probe::Probe, fixture: &Fixture) -> Outcome {
         rationale: probe.rationale,
         status: probe::evaluate(probe, &sent, &frames_of(&body)),
         note: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A test cannot reach the second provider, so it holds the shape that was
+    /// measured to clear it: without the client's identity as the system prompt,
+    /// a subscription grant's turn on `claude-haiku-5-5` is answered with
+    /// `rate_limit_error`, and an arbitrary system prompt does not help.
+    #[test]
+    fn the_live_relay_turn_names_the_client_in_its_system_prompt() {
+        let request = live_relay_request(LIVE_RELAY_MODEL, "K7Q2ZX");
+
+        assert_eq!(
+            request["system"],
+            serde_json::json!([{
+                "type": "text",
+                "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+            }])
+        );
+        assert!(
+            request["messages"][0]["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("K7Q2ZX")),
+            "{request}"
+        );
     }
 }
