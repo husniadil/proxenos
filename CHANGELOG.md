@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
-## [Unreleased]
+## [0.35.6]
 
 - **A Claude profile on macOS with no `USER` is read from the item filed under
   `unknown`.** That is the account the client itself files under without
