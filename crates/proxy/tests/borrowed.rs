@@ -421,6 +421,63 @@ fn the_service_digest_is_taken_over_the_value_verbatim() {
     );
 }
 
+// The item's account is the client's own rule, read out of its binary: every
+// read and write passes `-a` with `USER`, else the OS user name, and
+// `claude-code-user` where neither gives a name of letters, digits, `.`, `_`
+// and `-`. A read without `-a` returns whichever item under the service the
+// keychain finds first, and a second item under the bare service, holding
+// only an MCP server's token, was found first on a real machine (§8.4).
+
+/// `USER` decides when it is set, and the OS is not asked.
+#[test]
+fn the_keychain_account_is_the_user_variable() {
+    assert_eq!(
+        borrowed::claude_account(Some("husni"), || Some("someone-else".to_owned())),
+        "husni"
+    );
+    assert_eq!(
+        borrowed::claude_account(Some("a.b_c-1"), || None),
+        "a.b_c-1"
+    );
+}
+
+/// Unset and empty read alike, as the client's `||` reads them: the OS user
+/// name decides.
+#[test]
+fn an_unset_or_empty_user_variable_falls_to_the_os_user_name() {
+    assert_eq!(
+        borrowed::claude_account(None, || Some("husni".to_owned())),
+        "husni"
+    );
+    assert_eq!(
+        borrowed::claude_account(Some(""), || Some("husni".to_owned())),
+        "husni"
+    );
+}
+
+/// A name the client would not file an item under is replaced the way the
+/// client replaces it, and so is no name at all. Guessing another would read
+/// an item the client never writes.
+#[test]
+fn a_name_the_client_would_not_file_under_becomes_its_fallback() {
+    for user in ["first last", "husni\u{FFFD}", "hüsni", "a/b"] {
+        assert_eq!(
+            borrowed::claude_account(Some(user), || Some("husni".to_owned())),
+            "claude-code-user",
+            "USER={user:?}"
+        );
+    }
+    assert_eq!(borrowed::claude_account(None, || None), "claude-code-user");
+    assert_eq!(
+        borrowed::claude_account(None, || Some(String::new())),
+        "claude-code-user"
+    );
+    assert_eq!(
+        borrowed::claude_account(None, || Some("first last".to_owned())),
+        "claude-code-user"
+    );
+}
+
 /// On macOS the grant is a keychain item with the file beside it, and the
 /// default profile is the unset-variable one. The file is the same one Linux
 /// reads: a daemon that cannot reach the keychain still has somewhere to look.

@@ -4,6 +4,16 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **A Claude profile on macOS is read from the keychain item the client signed
+  in to.** The item is read with `-a`, naming the account by the client's own
+  rule (`USER`, else the OS user name, else `claude-code-user`). Without it,
+  `security` answered with whichever item under the service it found first, and
+  a second item under the same service, holding only an MCP server's token,
+  made a signed-in profile read as `unreadable` however often it signed in
+  again.
+
 ## [0.35.4]
 
 - **The live relay probe leaves room for thinking.** Its `max_tokens` is 1024

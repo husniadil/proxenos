@@ -2447,6 +2447,22 @@ The item's ACL trusts that binary. A process reading through Security.framework
 is a different application and is prompted, and one client run reads the item
 sixteen times.
 
+#### Claude on macOS: the item is the one filed under the client's account
+
+The item is read with `-a`, naming the account the client files it under:
+`USER`, else the OS user name, and `claude-code-user` where neither gives a
+non-empty name of ASCII letters, digits, `.`, `_` and `-`.
+
+##### Why
+
+The service does not name one item. Any account can hold an item under it, and
+`security` without `-a` answers with whichever it finds first. On one machine
+that was a second item under the bare service, filed under the account
+`unknown`, which the client's rule never produces, and holding only an MCP
+server's token. The profile the client was signed into then read as holding no
+grant, and signing in again changed nothing. The client reads and writes with
+`-a` every time, by this rule.
+
 #### Claude on macOS: the file is read when the keychain says nothing
 
 The keychain item is tried first, then `.credentials.json` in the profile
@@ -2478,7 +2494,10 @@ own making. Refusing at startup would refuse a valid configuration.
 
 The keychain rules (item names, the digest over the verbatim value, the sixteen
 reads, the blanked item) were observed on macOS against signed-in profiles, and
-their tests run there. The Linux location comes from the client, not from a
+their tests run there. The account rule was read out of the client's binary,
+and the stray item read first was observed on one machine; the suite proves the
+rule, not the read, since that needs two items in the operator's own login
+keychain. The Linux location comes from the client, not from a
 machine: the parsing is exercised end to end, the location is unproven. On macOS
 the fall-through to the file is measured; that the client writes that file there
 is not.
