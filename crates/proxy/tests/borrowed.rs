@@ -421,61 +421,42 @@ fn the_service_digest_is_taken_over_the_value_verbatim() {
     );
 }
 
-// The item's account is the client's own rule, read out of its binary: every
-// read and write passes `-a` with `USER`, else the OS user name, and
-// `claude-code-user` where neither gives a name of letters, digits, `.`, `_`
-// and `-`. A read without `-a` returns whichever item under the service the
-// keychain finds first, and a second item under the bare service, holding
-// only an MCP server's token, was found first on a real machine (§8.4).
+// The item's account is the client's own rule: every read and write passes
+// `-a` with `USER || os.userInfo().username`, and `claude-code-user` where that
+// is not a name of letters, digits, `.`, `_` and `-`. The client runs on Bun,
+// whose `userInfo().username` is `USER` itself, or `unknown` with no `USER`
+// (Node asks the OS instead). Measured: a client launched under `env -i` filed
+// its item under `unknown`. A read without `-a` returns whichever item under
+// the service the keychain finds first, and that item, holding only an MCP
+// server's token, was found first on a real machine (§8.4).
 
-/// `USER` decides when it is set, and the OS is not asked.
+/// `USER` decides when it is set.
 #[test]
 fn the_keychain_account_is_the_user_variable() {
-    assert_eq!(
-        borrowed::claude_account(Some("husni"), || Some("someone-else".to_owned())),
-        "husni"
-    );
-    assert_eq!(
-        borrowed::claude_account(Some("a.b_c-1"), || None),
-        "a.b_c-1"
-    );
+    assert_eq!(borrowed::claude_account(Some("husni")), "husni");
+    assert_eq!(borrowed::claude_account(Some("a.b_c-1")), "a.b_c-1");
 }
 
-/// Unset and empty read alike, as the client's `||` reads them: the OS user
-/// name decides.
+/// With no `USER` the client files its item under `unknown`, not under the OS
+/// user name. Asking the OS would read the signed-in item a client in this
+/// environment never reads or refreshes.
 #[test]
-fn an_unset_or_empty_user_variable_falls_to_the_os_user_name() {
-    assert_eq!(
-        borrowed::claude_account(None, || Some("husni".to_owned())),
-        "husni"
-    );
-    assert_eq!(
-        borrowed::claude_account(Some(""), || Some("husni".to_owned())),
-        "husni"
-    );
+fn an_unset_user_variable_is_the_account_unknown() {
+    assert_eq!(borrowed::claude_account(None), "unknown");
 }
 
 /// A name the client would not file an item under is replaced the way the
-/// client replaces it, and so is no name at all. Guessing another would read
-/// an item the client never writes.
+/// client replaces it. An empty `USER` is one: the runtime answers it with the
+/// same empty string.
 #[test]
 fn a_name_the_client_would_not_file_under_becomes_its_fallback() {
-    for user in ["first last", "husni\u{FFFD}", "hüsni", "a/b"] {
+    for user in ["", "first last", "husni\u{FFFD}", "hüsni", "a/b"] {
         assert_eq!(
-            borrowed::claude_account(Some(user), || Some("husni".to_owned())),
+            borrowed::claude_account(Some(user)),
             "claude-code-user",
             "USER={user:?}"
         );
     }
-    assert_eq!(borrowed::claude_account(None, || None), "claude-code-user");
-    assert_eq!(
-        borrowed::claude_account(None, || Some(String::new())),
-        "claude-code-user"
-    );
-    assert_eq!(
-        borrowed::claude_account(None, || Some("first last".to_owned())),
-        "claude-code-user"
-    );
 }
 
 /// On macOS the grant is a keychain item with the file beside it, and the

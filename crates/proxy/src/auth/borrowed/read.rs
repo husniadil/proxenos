@@ -113,25 +113,14 @@ fn read_file(path: &Path) -> Result<Option<String>, ProxyError> {
     }
 }
 
-/// The account this process's client files its item under (§8.4). Neither
-/// input changes while the process lives, so it is worked out once.
+/// The account a client launched in this process's environment files its item
+/// under (§8.4). `USER` does not change while the process lives, so it is read
+/// once.
 fn claude_account() -> &'static str {
     static ACCOUNT: OnceLock<String> = OnceLock::new();
     ACCOUNT.get_or_init(|| {
         let user = std::env::var_os("USER").map(|user| user.to_string_lossy().into_owned());
-        super::claude_account(user.as_deref(), os_user_name)
-    })
-}
-
-/// The effective user's name, which is what the client asks the OS for when
-/// `USER` is unset. `id` rather than a libc binding, the way the keychain
-/// itself is read through `security`.
-fn os_user_name() -> Option<String> {
-    let output = std::process::Command::new("id").arg("-un").output().ok()?;
-    output.status.success().then(|| {
-        String::from_utf8_lossy(&output.stdout)
-            .trim_end()
-            .to_owned()
+        super::claude_account(user.as_deref())
     })
 }
 

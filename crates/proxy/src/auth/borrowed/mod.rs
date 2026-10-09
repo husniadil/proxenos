@@ -192,26 +192,32 @@ pub fn claude_service(config_dir: Option<&str>) -> String {
 /// it accepts.
 pub const CLAUDE_FALLBACK_ACCOUNT: &str = "claude-code-user";
 
+/// The account the client files its keychain item under when `USER` is not
+/// set at all.
+pub const CLAUDE_UNSET_ACCOUNT: &str = "unknown";
+
 /// The account a Claude profile's keychain item is filed under, by the
-/// client's own rule: `user` (the `USER` variable), else `os_user` (the OS
-/// user name, asked only then), and the fallback where neither gives a
+/// client's own rule as its runtime answers it: `user` (the `USER` variable),
+/// `unknown` where it is not set, and the fallback where that is not a
 /// non-empty name of ASCII letters, digits, `.`, `_` and `-`.
+///
+/// The client asks for `USER || os.userInfo().username`, and on its runtime
+/// the second is `USER` again, or `unknown` without it. The OS is never asked,
+/// so neither is it here (§8.4).
 ///
 /// The service alone does not name one item. Several accounts can hold an
 /// item under it, and `security` without `-a` answers with whichever it finds
-/// first, which on a real machine was an item holding no grant (§8.4). The client reads and writes with `-a` every time, so this is the
-/// item it signed in to.
-pub fn claude_account(user: Option<&str>, os_user: impl FnOnce() -> Option<String>) -> String {
-    let name = match user.filter(|user| !user.is_empty()) {
-        Some(user) => user.to_owned(),
-        None => os_user().unwrap_or_default(),
-    };
+/// first, which on a real machine was an item holding no grant (§8.4). The
+/// client reads and writes with `-a` every time, so this is the item it signed
+/// in to.
+pub fn claude_account(user: Option<&str>) -> String {
+    let name = user.unwrap_or(CLAUDE_UNSET_ACCOUNT);
     let accepted = !name.is_empty()
         && name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'));
     if accepted {
-        name
+        name.to_owned()
     } else {
         CLAUDE_FALLBACK_ACCOUNT.to_owned()
     }

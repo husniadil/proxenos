@@ -4,6 +4,15 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **A Claude profile on macOS with no `USER` is read from the item filed under
+  `unknown`.** That is the account the client itself files under without
+  `USER`, since its runtime answers `os.userInfo().username` from `USER` alone.
+  0.35.5 asked the OS for the name instead, which read an item such a client
+  never reads or refreshes. An empty `USER` reads `claude-code-user`, as it does
+  for the client.
+
 ## [0.35.5]
 
 - **A Claude profile on macOS is read from the keychain item the client signed
