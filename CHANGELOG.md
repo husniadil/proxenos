@@ -4,6 +4,17 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.35.7]
+
+- **The catalog follows a grant that becomes another account.** When the
+  program that owns a borrowed profile signs it in as somebody else, the daemon
+  fetches the model list again as the account now serving within 15 seconds,
+  and puts the tier mapping back in force against it, marking a tier the new
+  list lacks rather than refusing the mapping. Before, the list stayed the
+  previous account's until a restart, and `status` reported `catalog_stale`. A
+  fetch that fails is asked again after five minutes. A switch, a removal and a
+  follow now happen one at a time.
+
 ## [0.35.6]
 
 - **A Claude profile on macOS with no `USER` is read from the item filed under
