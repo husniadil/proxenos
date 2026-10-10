@@ -1438,8 +1438,9 @@ or withdrawn later is not noticed until something makes the daemon ask again.
 #### A catalog is one account's menu, and one provider's
 
 The list is attributed to the account it was fetched for. It is fetched again
-when the daemon changes which account serves: selecting another, or removing
-the one serving. A `models` question about another stored account (`api.md` §3)
+when the account serving turns changes: selecting another, removing the one
+serving, or the grant serving turns becoming another account (below). A
+`models` question about another stored account (`api.md` §3)
 fetches that account's list to answer with and puts nothing in force. Both
 catalog endpoints are the translating provider's, so an Anthropic account's
 credential is never sent to either; its menu is the relay's (§9.1).
@@ -1457,12 +1458,37 @@ are relayed is measured against no list here at all (§9.1).
 Fetch failure is not evidence that a model went away, and replacing a real list
 with the fallback would withdraw models the account has.
 
+#### A grant that becomes another account is followed
+
+Every 15 seconds the daemon compares the account the grant serving turns
+belongs to with the account the list was fetched for. Where they differ, it
+fetches the list again as the account now serving and puts the mapping back in
+force against it, marking a tier the new list lacks (§7.1) rather than refusing
+the mapping. A fetch that fails is asked again after five minutes. An account
+that relays has no list here (§9.1) and is not followed. One move of the
+serving account happens at a time: a switch, a removal, and a follow each wait
+for the one before.
+
+##### Why
+
+A borrowed grant becomes another account without this daemon being asked: the
+owning program signs in as somebody else and the profile keeps its name
+(§8.4). The list then described an account that no longer served, until a
+restart, and the mapping was judged against a menu that was not this
+account's. Nobody asked for the move, so a refusal would reach nobody: the
+mapping is applied the way `config.reload` applies it. The lock exists because
+a switch that is refused puts the previous account back, catalog included,
+and a follow landing between the refusal and the restore would leave the
+previous account serving on the mapping of the one it refused.
+
 #### A list that is not this account's says so
 
-A grant can arrive with nothing to refetch on: a login over the control socket
-completes in the background, and a login in the CLI with no daemon running has
-no socket to hand over on. The list stays the previous account's, and every
-answer built from it says so (`api.md` §3).
+A grant can arrive with nothing to refetch on yet: a login over the control
+socket completes in the background, a login in the CLI with no daemon running
+has no socket to hand over on, and the owning program signs a profile in as
+somebody else. Until the follow above lands, and for as long as its fetch
+fails, the list stays the previous account's, and every answer built from it
+says so (`api.md` §3).
 
 #### Each entry contributes an id, visibility, efforts, and a window
 
@@ -1941,11 +1967,12 @@ no source. The person holding that message needs the key that undoes it.
 
 | File | What it holds |
 |---|---|
-| `crates/proxy/src/catalog.rs` | `Catalog`: parse, fallback, `effective_window`, `substitute_unavailable_defaults`, `validate`, `mark_missing`; `CatalogSource` refetch |
+| `crates/proxy/src/catalog.rs` | `Catalog`: parse, fallback, `effective_window`, `substitute_unavailable_defaults`, `validate`, `mark_missing`; `CatalogSource` refetch and `hold`, one move at a time |
 | `crates/proxy/src/config.rs` | `[tiers]`, `DEFAULT_TIERS`, `[accounts.<name>]`, `cross_account_tiers`, `ClientConfig`, `model_settings`, `check_effort_conflicts` |
 | `crates/proxy/src/policy.rs` | `Snapshot`, `Policy::snapshot_for`: the mapping a turn resolves against |
 | `crates/proxy/src/upstream/relay.rs` | `validated_models`, `validated_tiers`: which tiers the catalog may judge |
-| `crates/proxy/src/control/handler.rs` | `environment_for`, `tiers.set`, `accounts.select`, `config.reload` |
+| `crates/proxy/src/control/handler.rs` | `environment_for`, `tiers.set`, `accounts.select`, `config.reload`, `follow_serving_account` |
+| `crates/proxy/src/commands/daemon.rs` | The loop that follows the grant serving turns, every `FOLLOW` or `FOLLOW_RETRY` |
 | `crates/proxy/src/ingress.rs` | The marked-tier refusal and the window guard |
 | `crates/proxy/src/launch.rs` | `exec`'s `--settings` collision rule and the `[1m]` argument upgrade |
 | `crates/proxy/tests/catalog.rs` | Catalog parsing and visibility |
@@ -2777,7 +2804,8 @@ the account.
 
 The identity is recorded when the profile is chosen. A later read finding a
 different one says so on the serving row and in the launch line. An unreadable
-profile is never marked.
+profile is never marked. The catalog follows the account the grant now holds
+(§7.0); the mark stays, since it is about who pays.
 
 ##### Why
 

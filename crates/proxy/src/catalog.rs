@@ -594,6 +594,13 @@ pub struct CatalogSource {
     key: String,
     client_version: String,
     default_percent: f64,
+    /// Held across every move of the account serving turns that refetches
+    /// this list: a switch, a removal that hands over, and the grant serving
+    /// turns becoming another account. A switch that is refused puts the
+    /// previous account back, catalog included, and a follow landing between
+    /// the refusal and the restore would leave the mapping of an account that
+    /// is no longer serving.
+    moves: tokio::sync::Mutex<()>,
 }
 
 impl CatalogSource {
@@ -610,7 +617,13 @@ impl CatalogSource {
             key: key.into(),
             client_version: client_version.into(),
             default_percent,
+            moves: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// One move of the account serving turns at a time (see `moves`).
+    pub async fn hold(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.moves.lock().await
     }
 
     /// A catalog that never changes, for callers with nothing to refetch from.

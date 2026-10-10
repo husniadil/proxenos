@@ -1945,6 +1945,8 @@ async fn select_account(state: &ControlState, params: Option<&Value>) -> Result<
         }));
     }
 
+    // Until the switch has landed or been put back (`CatalogSource::hold`).
+    let _moving = state.catalog.hold().await;
     state.credentials.select(name)?;
 
     // The catalog first, because the mapping is validated against it and it is
@@ -2220,6 +2222,54 @@ async fn refresh_catalog(state: &ControlState) -> bool {
     state.catalog.refresh(&authorization).await
 }
 
+/// How often the daemon looks for the grant serving turns having become
+/// another account (`follow_serving_account`).
+pub const FOLLOW: std::time::Duration = std::time::Duration::from_secs(15);
+/// How long it waits after a refetch for that account failed before asking
+/// again, so a backend that is down is not asked four times a minute.
+pub const FOLLOW_RETRY: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Fetch the catalog again where the grant serving turns now belongs to
+/// another account than the list in force was fetched for (§7.0).
+///
+/// A borrowed grant becomes another account without this daemon being asked:
+/// the owning program signs in as somebody else and the profile keeps its
+/// name (§8.4). The list is then the previous account's menu, so it is asked
+/// for again as the account now serving, and the mapping is put back in force
+/// against it the way `config.reload` does. A tier the new menu lacks is
+/// marked rather than the mapping refused, since nobody asked for this move
+/// and a refusal would have nobody to tell.
+///
+/// `None` where there is nothing to follow: the list describes the account
+/// serving, or makes no claim about one, or the account relays and has no list
+/// here (§9.1). Otherwise whether the refetch landed; a failed one keeps the
+/// list in force, which goes on saying it is stale.
+pub async fn follow_serving_account(state: &ControlState) -> Option<bool> {
+    let _moving = state.catalog.hold().await;
+    let stored = state.credentials.accounts().ok()?;
+    let held = state.catalog.current();
+    let serving = serving_account(&stored);
+    if serving_account_relays(&stored) || !held.is_stale_for(serving.as_deref()) {
+        return None;
+    }
+    if !refresh_catalog(state).await {
+        return Some(false);
+    }
+    let name = serving_name(state);
+    if let Err(error) =
+        put_mapping_in_force(state, &configuration(state), name.as_deref(), Absent::Mark)
+    {
+        tracing::warn!(%error, "the tier mapping could not be put back in force");
+    }
+    tracing::info!(
+        account = name.as_deref().unwrap_or("-"),
+        from = held.fetched_for.as_deref().unwrap_or("-"),
+        to = serving.as_deref().unwrap_or("-"),
+        "the grant serving turns became another account; model catalog fetched again"
+    );
+    Some(true)
+}
+
 /// The credential of the account serving turns, resolved the same way every
 /// upstream path resolves it.
 ///
@@ -2245,6 +2295,8 @@ async fn remove_account(state: &ControlState, params: Option<&Value>) -> Result<
         .and_then(|params| params.get("account"))
         .and_then(Value::as_str);
 
+    // A removal that hands over is a switch (`CatalogSource::hold`).
+    let _moving = state.catalog.hold().await;
     let serving = state
         .credentials
         .accounts()?

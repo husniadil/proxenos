@@ -658,6 +658,21 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
             }
         });
     }
+    // The grant serving turns, followed to whichever account it now belongs
+    // to (§7.0): a borrowed profile signed in as somebody else leaves the list
+    // describing the previous account until something fetches it again.
+    {
+        let state = control_state.clone();
+        tokio::spawn(async move {
+            loop {
+                let pause = match control::handler::follow_serving_account(&state).await {
+                    Some(false) => control::handler::FOLLOW_RETRY,
+                    _ => control::handler::FOLLOW,
+                };
+                tokio::time::sleep(pause).await;
+            }
+        });
+    }
     // One state, two transports. Cloned rather than rebuilt: every field is an
     // `Arc`, so the socket and the HTTP endpoint read and move exactly the same
     // things and no method can behave differently over one than the other.

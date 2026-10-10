@@ -17,6 +17,7 @@ use proxenos::catalog::CatalogSource;
 use proxenos::config::ResolvedTier;
 use proxenos::control;
 use proxenos::control::handler::ControlState;
+use proxenos::control::handler::follow_serving_account;
 use proxenos::control::protocol::METHODS;
 use serde_json::Value;
 use serde_json::json;
@@ -101,6 +102,10 @@ struct Harness {
     /// The same conversations the ingress serves, so a test can assert a
     /// switch reached them rather than only reached the store.
     sessions: Arc<proxenos::session::SessionStore>,
+    /// The state behind the socket, where a test calls what no method
+    /// exposes: the daemon's own loop that follows the grant serving turns.
+    /// Held by the harness whose catalog can be fetched again.
+    control: Option<ControlState>,
     _dir: tempfile::TempDir,
 }
 
@@ -193,6 +198,7 @@ impl Harness {
             config,
             shutdown,
             sessions,
+            control: None,
             _dir: dir,
         }
     }
@@ -325,6 +331,7 @@ impl Harness {
             sessions: Arc::clone(&self.sessions),
             config_path: Some(self.config_file.clone()),
         };
+        let held = Some(state.clone());
         let socket = path.clone();
         tokio::spawn(async move {
             let _ = control::serve(&socket, state).await;
@@ -335,7 +342,11 @@ impl Harness {
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        Self { path, ..self }
+        Self {
+            path,
+            control: held,
+            ..self
+        }
     }
 
     /// A harness whose catalog and single mapped model are the caller's, for
@@ -3161,6 +3172,102 @@ async fn selecting_an_account_refetches_the_catalog_as_that_account() {
         catalogs.accounts(),
         vec!["acct_two".to_owned(), "acct_one".to_owned()],
         "the refetch has to be made as the account now serving"
+    );
+}
+
+/// A grant that becomes another account has its catalog fetched again.
+///
+/// The program that owns a borrowed profile signs it in as somebody else, and
+/// nothing asks this daemon to switch: the name stays, the account changes.
+/// The list in force still describes the account before, so the daemon's own
+/// loop asks for it again as the one now serving. The mapping goes back in
+/// force against it with a tier the new menu lacks marked, the way a reload
+/// marks it, since nobody asked for the move and a refusal would reach nobody.
+#[tokio::test]
+async fn a_grant_that_becomes_another_account_has_its_catalog_fetched_again() {
+    let catalogs = CatalogServer::start().await;
+    let harness = Harness::start()
+        .await
+        .with_configuration(mapping_per_account(&["acct_two"]))
+        .await;
+    harness
+        .store
+        .add(&grant("acct_two", "a-two"), None)
+        .unwrap();
+    harness.store.select("acct_two").unwrap();
+    let harness = harness.with_catalog_source(&catalogs.url).await;
+    let state = harness.control.clone().expect("a state that can refetch");
+
+    assert_eq!(
+        follow_serving_account(&state).await,
+        None,
+        "the list describes the account serving; there is nothing to follow"
+    );
+
+    // The owning program signs the profile in as another account.
+    harness.store.save(&grant("acct_three", "a-three")).unwrap();
+    assert_eq!(
+        harness.call("status").await.unwrap()["catalog_stale"],
+        json!(true)
+    );
+
+    assert_eq!(follow_serving_account(&state).await, Some(true));
+
+    let models = harness.call("models").await.unwrap();
+    assert_eq!(
+        models["models"][0]["id"],
+        json!("model-for-acct_three"),
+        "the list still describes the account the grant used to be"
+    );
+    let status = harness.call("status").await.unwrap();
+    assert_eq!(status["catalog_stale"], json!(false));
+    assert_eq!(status["catalog_account"], json!("acct_three"));
+    assert_eq!(
+        status["missing_tiers"].as_array().map(Vec::len),
+        Some(4),
+        "a tier the new menu lacks is marked, not refused: {status}"
+    );
+    assert_eq!(
+        catalogs.accounts(),
+        vec!["acct_two".to_owned(), "acct_three".to_owned()],
+        "the refetch has to be made as the account the grant now is"
+    );
+    assert_eq!(
+        follow_serving_account(&state).await,
+        None,
+        "followed once, the next look finds nothing to do"
+    );
+}
+
+/// A refetch that fails after a grant became another account keeps the list in
+/// force, and the list goes on saying whose it is.
+#[tokio::test]
+async fn a_failed_follow_keeps_the_list_and_says_it_is_stale() {
+    let catalogs = CatalogServer::start().await;
+    let harness = Harness::start()
+        .await
+        .with_configuration(mapping_per_account(&["acct_two"]))
+        .await;
+    harness
+        .store
+        .add(&grant("acct_two", "a-two"), None)
+        .unwrap();
+    harness.store.select("acct_two").unwrap();
+    let harness = harness.with_catalog_source(&catalogs.url).await;
+    let state = harness.control.clone().expect("a state that can refetch");
+    let tiers_before = harness.call("status").await.unwrap()["tiers"].clone();
+
+    harness.store.save(&grant("acct_three", "a-three")).unwrap();
+    catalogs.refuse();
+
+    assert_eq!(follow_serving_account(&state).await, Some(false));
+
+    let status = harness.call("status").await.unwrap();
+    assert_eq!(status["catalog_stale"], json!(true));
+    assert_eq!(status["catalog_account"], json!("acct_two"));
+    assert_eq!(
+        status["tiers"], tiers_before,
+        "a fetch that failed moved the mapping"
     );
 }
 
