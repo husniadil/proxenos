@@ -1575,7 +1575,7 @@ No parameters.
 |---|---|
 | `port`, `base_url` | the daemon's port and loopback URL |
 | `auth.connected` | there is a credential to spend, of either kind |
-| `auth.dead` | the credential cannot be spent as it stands: unreadable, or lapsed and waiting on the program that owns the profile (`proxy-behavior.md` §8.4) |
+| `auth.dead` | the grant cannot be spent as it stands: unreadable, or lapsed and waiting on the program that owns the profile (`proxy-behavior.md` §8.4). Always false for a key, whose refusal is `auth.refused` |
 | `auth.refused` | the backend's own words where it turned the credential away; null otherwise |
 | `auth.account` | what this daemon calls the serving account; what selects it |
 | `auth.account_id` | what the backend calls it |

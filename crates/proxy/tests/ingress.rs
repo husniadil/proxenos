@@ -2410,6 +2410,91 @@ async fn effort_is_capped_by_what_the_model_supports() {
     );
 }
 
+/// §2.7 — the model's ceiling caps and is never a default. A request that
+/// names no effort, under no operator ceiling, leaves the field out and gets
+/// the backend's default.
+///
+/// The model's highest listed effort used to stand in for the operator's
+/// ceiling, so every such request went out at that maximum, which a model can
+/// list and still refuse.
+#[tokio::test]
+async fn a_request_naming_no_effort_is_not_sent_at_the_model_maximum() {
+    let catalog = proxenos::catalog::Catalog::parse(
+        r#"{"models":[{
+            "slug": "modest-model",
+            "context_window": 272000,
+            "supported_reasoning_levels": [
+                { "effort": "low" },
+                { "effort": "medium" },
+                { "effort": "high" }
+            ]
+        }]}"#,
+        95.0,
+    )
+    .unwrap();
+
+    let upstream = ReplayServer::start(Behavior::Events(vec![
+        json!({ "type": "response.created", "response": { "id": "resp_1" } }),
+        completed(),
+    ]))
+    .await;
+
+    let state = AppState {
+        policy: Arc::new(proxenos::policy::Policy::new(
+            proxenos::policy::Snapshot::routing_only(
+                vec![ModelMapping {
+                    requested: "sonnet".to_owned(),
+                    upstream: "modest-model".to_owned(),
+                    account: None,
+                    missing: None,
+                }],
+                None,
+            ),
+        )),
+        catalog: Arc::new(proxenos::catalog::CatalogSource::fixed(catalog)),
+        transport: Arc::new(HttpTransport::new(upstream.url.clone())),
+        conduits: None,
+        recorder: None,
+        capture: Arc::new(proxenos::recorder::Switches::default()),
+        usage: Arc::new(proxenos::usage::UsageStore::default()),
+        refusals: Arc::new(proxenos::auth::refusals::Refusals::default()),
+        instructions: Arc::new(proxenos::config::InstructionsConfig {
+            identity: false,
+            append: None,
+            working_budget: false,
+        }),
+        sessions: Arc::new(proxenos::session::SessionStore::new()),
+        relay: None,
+    };
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router(state)).await;
+    });
+
+    let _ = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .json(&json!({
+            "model": "sonnet",
+            "max_tokens": 32,
+            "messages": [{ "role": "user", "content": "hello" }],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let sent = upstream.requests();
+    assert!(
+        sent[0]["reasoning"]["effort"].is_null(),
+        "no effort was asked for and no ceiling set, so none should be sent: {}",
+        sent[0]["reasoning"]
+    );
+}
+
 /// A model whose efforts the catalog never listed caps nothing. Unknown is not
 /// a limit, and inventing one would refuse effort the model may well support.
 #[tokio::test]

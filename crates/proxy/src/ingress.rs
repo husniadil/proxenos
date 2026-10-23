@@ -762,10 +762,15 @@ async fn messages(
         .and_then(|model| catalog.get(model))
         .and_then(crate::catalog::Model::highest_effort);
 
+    // The ceiling also applies to a request that names no effort, so only the
+    // operator's may stand alone. The model's caps theirs, and a request's own
+    // effort is held to the model by `supported_efforts`. Standing alone it sent
+    // every such request at the model's maximum, where with neither the field
+    // is left out and the backend's default applies.
     let effort_ceiling = match (policy.effort_ceiling(), model_ceiling) {
         (Some(operator), Some(model)) => Some(operator.min(model)),
         (Some(operator), None) => Some(operator),
-        (None, model) => model,
+        (None, _) => None,
     };
 
     // Derived from the model that will answer, not the tier that was asked

@@ -371,8 +371,9 @@ and the lower wins:
 - the **model's**: the highest effort the catalog lists for it.
 
 The ceiling caps and never raises. A request asking for less keeps its own
-choice. With no request effort, the ceiling applies. With neither, the field is
-omitted and the backend's default applies. A model whose efforts the catalog
+choice. With no request effort, the operator's ceiling applies, capped by the
+model's. The model's alone is never a default: with neither a request effort
+nor an operator ceiling, the field is omitted and the backend's default applies. A model whose efforts the catalog
 never listed caps nothing: unknown is not a limit.
 
 ##### Why
