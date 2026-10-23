@@ -1603,22 +1603,51 @@ fn write_config(
 /// It can hold `listen.token` inline, and a token anybody on the machine can
 /// read opens the reachable door to all of them. A file left looser is
 /// tightened as it is written.
+///
+/// It is written beside and renamed over the file: every turn reads the
+/// configuration, and a write in place left a window in which a turn read it
+/// half-written. The temporary carries this process id, so two writers never
+/// share one. A file that is a link is written where the link points, so the
+/// rename replaces that file and the link stays. A link whose target is not
+/// there yet is followed one step, so the file is made where it points, and a
+/// link into a directory that does not exist fails as writing through it did.
 fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    let is_link = std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink());
+    let path = if is_link {
+        match std::fs::canonicalize(path) {
+            Ok(target) => target,
+            Err(_) => {
+                let target = std::fs::read_link(path)?;
+                path.parent()
+                    .map_or_else(|| target.clone(), |parent| parent.join(&target))
+            }
+        }
+    } else {
+        path.to_path_buf()
+    };
+    let path = path.as_path();
+    let mut pending = path.to_path_buf().into_os_string();
+    pending.push(format!(".{}.pending", std::process::id()));
+    let pending = std::path::PathBuf::from(pending);
+
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         options.mode(0o600);
-        let mut file = options.open(path)?;
+        let mut file = options.open(&pending)?;
         file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        std::io::Write::write_all(&mut file, contents.as_bytes())
+        std::io::Write::write_all(&mut file, contents.as_bytes())?;
     }
     #[cfg(not(unix))]
     {
-        let mut file = options.open(path)?;
-        std::io::Write::write_all(&mut file, contents.as_bytes())
+        let mut file = options.open(&pending)?;
+        std::io::Write::write_all(&mut file, contents.as_bytes())?;
     }
+    std::fs::rename(&pending, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&pending);
+    })
 }
 
 /// `effort.set` — raise, lower, or remove the operator's ceiling on reasoning

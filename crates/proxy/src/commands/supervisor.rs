@@ -147,8 +147,9 @@ async fn launchd(args: cli::SupervisorArgs, unit: &proxenos::supervisor::Unit) -
                 after.as_ref().map(|a| a.version.as_str()),
             );
 
-            std::fs::write(&plist, supervisor::render(unit))
-                .with_context(|| format!("could not write {}", plist.display()))?;
+            // Through a rename, as the systemd unit is (`write_unit`): launchd
+            // reading a half-written plist is the same window.
+            write_unit(&plist, &supervisor::render(unit))?;
 
             let output = launchctl(&["bootstrap", &domain, &plist.to_string_lossy()])
                 .context("could not run launchctl")?;

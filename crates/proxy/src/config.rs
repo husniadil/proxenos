@@ -1420,6 +1420,15 @@ fn non_empty(value: &str, key: &str) -> Result<String, ProxyError> {
              authentication."
         )));
     }
+    // The auth-token value separates its parts with whitespace (api §1), so
+    // a token holding any could never be presented whole: the daemon would
+    // come up and refuse every caller. Refused here instead, by name.
+    if trimmed.chars().any(char::is_whitespace) {
+        return Err(ProxyError::invalid_request(format!(
+            "`{key}` holds whitespace, which the auth-token value splits on, so no client \
+             could present it. Write a token without spaces."
+        )));
+    }
     Ok(trimmed.to_owned())
 }
 

@@ -7736,3 +7736,31 @@ async fn the_configuration_file_is_written_owner_only() {
             .contains("low")
     );
 }
+
+/// A configuration file that is a link stays one.
+///
+/// The write is renamed over the file, so it goes where the link points:
+/// renamed over the link itself, it would put a copy in the link's place and
+/// the file it named would never see the change.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_linked_configuration_file_is_written_through_its_link() {
+    let harness = Harness::start().await;
+    let target = harness.config_file.with_extension("target.toml");
+    std::fs::write(&target, "").unwrap();
+    let _ = std::fs::remove_file(&harness.config_file);
+    std::os::unix::fs::symlink(&target, &harness.config_file).unwrap();
+
+    harness
+        .call_with("effort.set", json!({ "effort": "high", "persist": true }))
+        .await
+        .unwrap();
+    assert!(
+        std::fs::symlink_metadata(&harness.config_file)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the link was replaced"
+    );
+    assert!(std::fs::read_to_string(&target).unwrap().contains("high"));
+}

@@ -6,6 +6,21 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **A configuration write is never read half-done.** The daemon wrote its
+  configuration file in place, and a turn that read it during the write saw
+  part of it. The file is now written beside itself and renamed over, at
+  0600 as before. A file that is a link is written where the link points, so
+  the link stays.
+
+- **A launchd plist is written the way a systemd unit is.** `supervisor
+  install` wrote the plist in place, and launchd could read it half-written.
+  It now goes through the same rename.
+
+- **A token holding whitespace is refused at startup.** The auth-token value
+  splits on whitespace, so a `listen.token` with a space in it could never be
+  presented, and the daemon came up refusing every caller. It is now refused
+  by name, before anything binds.
+
 ## [0.35.10]
 
 - **A deferred tool the request forces is sent.** A `tool_choice` naming a
