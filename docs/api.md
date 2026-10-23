@@ -93,8 +93,9 @@ both the token and the launch tag travel in it.
 | `proxenos-token:<secret> proxenos-account:<name>` | both, whitespace-separated, in either order |
 
 A value with no `proxenos-token:` part is read whole: the tag prefix is
-stripped and the rest is the account name. Only a value that announces a token
-is split into parts.
+stripped and the rest is the account name. A value that announces a token is
+read as two parts: the token is one word, and the account name runs from its
+tag to the token's part or to the end of the value, spaces included.
 
 The tag is a name, and the credential it resolves to never leaves the daemon.
 The token is a secret: it never appears in argv, a log line, or what `status`,
@@ -102,8 +103,9 @@ The token is a secret: it never appears in argv, a log line, or what `status`,
 
 #### Why
 
-An account name may hold a space. Splitting a value that was never multi-part
-would silently truncate it.
+An account name may hold a space. Splitting a value on whitespace would
+silently truncate it: beside a token, `work laptop` was read as `work`, and a
+turn was made as that other account or refused as naming none.
 
 ### Relay or translate
 

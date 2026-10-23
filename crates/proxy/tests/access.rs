@@ -647,6 +647,25 @@ fn a_value_with_a_token_is_read_as_parts() {
     assert_eq!(reversed.account.as_deref(), Some("work"));
 }
 
+/// An account name may hold a space, beside a token as well as without one:
+/// read word by word, `work laptop` was taken as `work`, and a turn was made
+/// as that other account or refused as naming none.
+#[test]
+fn an_account_with_a_space_is_read_whole_beside_a_token() {
+    use proxenos::ingress::{auth_token_value, parse_tags};
+
+    let launched = parse_tags(&auth_token_value(Some("secret"), Some("work laptop")));
+    assert_eq!(launched.token.as_deref(), Some("secret"));
+    assert_eq!(launched.account.as_deref(), Some("work laptop"));
+
+    let reversed = parse_tags("proxenos-account:work  laptop proxenos-token:secret");
+    assert_eq!(reversed.token.as_deref(), Some("secret"));
+    assert_eq!(reversed.account.as_deref(), Some("work  laptop"));
+
+    let tokened = parse_tags("Bearer proxenos-token:secret");
+    assert_eq!(tokened.account, None);
+}
+
 /// One place builds the value, so the launcher and the parser cannot disagree
 /// about the separator.
 #[test]

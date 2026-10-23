@@ -473,13 +473,27 @@ pub fn parse_tags(value: &str) -> Tags {
         };
     }
 
+    // The token is one word. The account runs from its tag to the token's
+    // part or to the end, in whichever order the two came: split on
+    // whitespace, a name holding a space kept its first word, and the turn was
+    // made as another account or refused as naming none.
     let mut tags = Tags::default();
     for part in value.split_whitespace() {
         if let Some(token) = part.strip_prefix(TOKEN_TAG) {
             tags.token = Some(token.to_owned());
-        } else if let Some(account) = part.strip_prefix(ACCOUNT_TAG) {
-            tags.account = Some(account.to_owned());
         }
+    }
+    let account_at = if value.starts_with(ACCOUNT_TAG) {
+        Some(0)
+    } else {
+        value
+            .find(&format!(" {ACCOUNT_TAG}"))
+            .map(|at| at.saturating_add(1))
+    };
+    if let Some(after) = account_at.and_then(|at| value.get(at.saturating_add(ACCOUNT_TAG.len())..))
+    {
+        let end = after.find(&format!(" {TOKEN_TAG}")).unwrap_or(after.len());
+        tags.account = after.get(..end).map(str::to_owned);
     }
     tags
 }
