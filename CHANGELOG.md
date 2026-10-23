@@ -6,6 +6,12 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **An account name with a space survives beside a token.** In client mode
+  `exec --account "work laptop"` sends the token and the account in one value,
+  and the daemon read the account word by word, as `work`. A turn was then made
+  as another account, or refused as naming none. The account now runs from its
+  tag to the token's part or to the end.
+
 - **The CLI refuses a control socket another user's daemon answers.** On Linux
   the socket defaults to `/tmp/proxenos.sock`, and the first daemon to bind that
   name owns it. The CLI now checks the uid of the process on the other end and
