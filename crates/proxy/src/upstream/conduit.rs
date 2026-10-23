@@ -216,28 +216,44 @@ impl Conduit {
         // that sent successfully is not yet a socket that works. Handing back
         // an empty stream would render as a turn where the model said nothing
         // — a silent failure standing exactly where the fallback belongs.
-        let first = match connection.next_event().await {
-            Some(Err(error)) => return Err(failed(error)),
-            // The backend answers a socket past its age limit, and a delta
-            // naming a response it no longer holds, with an `error` event on a
-            // socket it leaves open. Either is a stale connection, not an
-            // answer: parked again, every later turn would find it and fail.
-            Some(Ok(event)) if stale_connection(&event) => {
-                return Err(failed(ProxyError::overloaded(format!(
-                    "the websocket can no longer serve this conversation: {event}"
-                ))));
+        //
+        // The backend may open with events of its own (a quota snapshot, the
+        // response's metadata) before it speaks to the outcome
+        // (proxy-behavior.md §5), so those are read past, up to the same
+        // count ingress peeks, before the first event that decides.
+        let mut opening = Vec::new();
+        loop {
+            match connection.next_event().await {
+                Some(Err(error)) => return Err(failed(error)),
+                // The backend answers a socket past its age limit, and a delta
+                // naming a response it no longer holds, with an `error` event
+                // on a socket it leaves open. Either is a stale connection, not
+                // an answer: parked again, every later turn would find it and
+                // fail.
+                Some(Ok(event)) if stale_connection(&event) => {
+                    return Err(failed(ProxyError::overloaded(format!(
+                        "the websocket can no longer serve this conversation: {event}"
+                    ))));
+                }
+                Some(Ok(event)) => {
+                    let preamble = is_preamble(&event);
+                    opening.push(Ok(event));
+                    if !preamble || opening.len() >= OPENING_PEEK {
+                        break;
+                    }
+                }
+                None if opening.is_empty() => {
+                    return Err(failed(ProxyError::overloaded(
+                        "the websocket closed before sending anything".to_owned(),
+                    )));
+                }
+                None => break,
             }
-            Some(first) => first,
-            None => {
-                return Err(failed(ProxyError::overloaded(
-                    "the websocket closed before sending anything".to_owned(),
-                )));
-            }
-        };
+        }
 
         Ok(super::pool::pump(
             connection,
-            first,
+            opening,
             Arc::clone(&self.connection),
         ))
     }
@@ -284,22 +300,48 @@ impl Conduit {
     }
 }
 
-/// Whether a first event says the connection itself cannot carry the turn.
-fn stale_connection(event: &str) -> bool {
-    let code = serde_json::from_str::<serde_json::Value>(event)
+/// How many events are read past the backend's own opening events before a
+/// socket is judged: the count ingress peeks for the same reason.
+const OPENING_PEEK: usize = 4;
+
+/// Whether an event is one of the backend's own, ahead of the response.
+fn is_preamble(event: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(event)
         .ok()
         .and_then(|event| {
-            (event.get("type").and_then(serde_json::Value::as_str) == Some("error"))
-                .then(|| {
-                    event
-                        .pointer("/error/code")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                })
-                .flatten()
-        });
+            event
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .map(|kind| kind.starts_with("codex."))
+        })
+        .unwrap_or(false)
+}
+
+/// Whether an opening event says the connection itself cannot carry the turn.
+///
+/// By its code where it names one, and by the message the one refusal seen
+/// live carries (`400 Invalid previous_response_id`), which is all it was
+/// recorded by. Taken for a stale socket, a refusal of anything else costs
+/// one full send on a fresh connection; taken for an answer, a stale one is
+/// parked and refuses every later delta.
+fn stale_connection(event: &str) -> bool {
+    let Some(event) = serde_json::from_str::<serde_json::Value>(event).ok() else {
+        return false;
+    };
+    if event.get("type").and_then(serde_json::Value::as_str) != Some("error") {
+        return false;
+    }
+    let code = event
+        .pointer("/error/code")
+        .and_then(serde_json::Value::as_str);
+    let message = event
+        .pointer("/error/message")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
     matches!(
-        code.as_deref(),
+        code,
         Some("websocket_connection_limit_reached" | "previous_response_not_found")
-    )
+    ) || message
+        .to_ascii_lowercase()
+        .contains("previous_response_id")
 }

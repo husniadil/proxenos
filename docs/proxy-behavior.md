@@ -721,16 +721,23 @@ succeeds, and says nothing.
 
 A failure on a connection carried over from an earlier turn is retried once on
 a new connection as a full send. Only a failure on a fresh connection latches
-the session to HTTP (§4.2). A first event of type `error` whose code is
-`websocket_connection_limit_reached` or `previous_response_not_found` is such a
-failure, although the socket stays open: it says the connection cannot carry
-the turn, not what the model answered.
+the session to HTTP (§4.2). An opening event of type `error` whose code is
+`websocket_connection_limit_reached` or `previous_response_not_found`, or whose
+message names `previous_response_id`, is such a failure, although the socket
+stays open: it says the connection cannot carry the turn, not what the model
+answered. The backend's own `codex.*` events are read past first, up to four
+events, since it may open with a quota snapshot before it speaks to the
+outcome. A turn that ends in any other `error` event drops its socket rather
+than parking it, so the next turn sends in full on a fresh one.
 
 ##### Why
 
 A socket the backend closed while idle is not evidence that WebSocket does not
 work here. The retry is full because `previous_response_id` names a response
-the closed socket held and the new one has never seen.
+the closed socket held and the new one has never seen. The one refusal seen
+live for such a delta, `400 Invalid previous_response_id`, was recorded by its
+message alone, so the message is matched as well as the codes. A refusal the
+match misses was parked with the socket, and every later delta repeated it.
 
 #### Prewarm exists and is not used
 

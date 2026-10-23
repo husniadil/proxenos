@@ -150,6 +150,14 @@ pub fn ends_turn(payload: &str) -> bool {
         })
 }
 
+/// Whether a turn's terminal event is the backend's refusal rather than a
+/// response's end.
+fn refused(payload: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(payload)
+        .ok()
+        .is_some_and(|event| event.get("type").and_then(serde_json::Value::as_str) == Some("error"))
+}
+
 /// Pump one turn's events out of a connection, then hand the connection back.
 ///
 /// The connection is returned to the pool only when the turn ended cleanly. One
@@ -158,31 +166,39 @@ pub fn ends_turn(payload: &str) -> bool {
 /// abandoned, and that failure is silent.
 pub fn pump(
     mut connection: PooledConnection,
-    first: Result<String, ProxyError>,
+    opening: Vec<Result<String, ProxyError>>,
     slot: std::sync::Arc<tokio::sync::Mutex<Option<PooledConnection>>>,
 ) -> EventStream {
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
 
-    let first_ends_turn = first
-        .as_ref()
-        .map(|payload| ends_turn(payload))
-        .unwrap_or(false);
-    let first_failed = first.is_err();
-    if let Ok(payload) = &first
-        && let Some(id) = response_id(payload)
-    {
-        connection.seen_response_id = Some(id);
+    // The events read before the connection was handed over, delivered first.
+    let mut opening_failed = false;
+    let mut opening_end = None;
+    for event in opening {
+        match &event {
+            Ok(payload) => {
+                if let Some(id) = response_id(payload) {
+                    connection.seen_response_id = Some(id);
+                }
+                if ends_turn(payload) {
+                    opening_end = Some(refused(payload));
+                }
+            }
+            Err(_) => opening_failed = true,
+        }
+        let _ = sender.send(event);
     }
-    let _ = sender.send(first);
 
     tokio::spawn(async move {
         let mut healthy = false;
 
-        if first_failed {
+        if opening_failed {
             return;
         }
-        if first_ends_turn {
-            park(slot, connection).await;
+        if let Some(was_refused) = opening_end {
+            if !was_refused {
+                park(slot, connection).await;
+            }
             return;
         }
 
@@ -201,6 +217,7 @@ pub fn pump(
                 Ok(payload) => ends_turn(payload),
                 Err(_) => false,
             };
+            let was_refused = event.as_ref().is_ok_and(|payload| refused(payload));
             let failed = event.is_err();
             if let Ok(payload) = &event
                 && let Some(id) = response_id(payload)
@@ -219,6 +236,14 @@ pub fn pump(
                 return;
             }
             if finished {
+                if was_refused {
+                    // An `error` event ends the turn on a socket the backend
+                    // leaves open, and nothing says what the socket still
+                    // holds. Parked, a refusal that is about the socket would
+                    // repeat on every later delta (§4.3), so it is dropped and
+                    // the next turn sends in full on a fresh one.
+                    return;
+                }
                 healthy = true;
                 break;
             }
