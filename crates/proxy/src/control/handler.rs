@@ -2278,6 +2278,14 @@ pub async fn follow_serving_account(state: &ControlState) -> Option<bool> {
     if serving_account_relays(&stored) || !held.is_stale_for(serving.as_deref()) {
         return None;
     }
+    // The grant is another account now, which hands over the way
+    // `accounts.select` does (§4.1): a pooled socket belongs to the account
+    // that opened it, and a conversation left bound to one went on as the old
+    // account over it, spending its quota under the new one's name. Cleared
+    // whether or not the catalog answers, so a failed refetch, which is tried
+    // again, never leaves a socket carrying turns as the account before.
+    state.usage.forget_unattributed();
+    state.sessions.clear();
     if !refresh_catalog(state).await {
         return Some(false);
     }

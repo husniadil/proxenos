@@ -3204,6 +3204,14 @@ async fn a_grant_that_becomes_another_account_has_its_catalog_fetched_again() {
         "the list describes the account serving; there is nothing to follow"
     );
 
+    // A conversation bound while the grant was acct_two.
+    let input = vec![proxenos_core::responses::InputItem::Message {
+        role: proxenos_core::responses::ItemRole::User,
+        content: Vec::new(),
+    }];
+    let _session = harness.sessions.resolve(&input);
+    assert_eq!(harness.sessions.len(), 1);
+
     // The owning program signs the profile in as another account.
     harness.store.save(&grant("acct_three", "a-three")).unwrap();
     assert_eq!(
@@ -3212,6 +3220,10 @@ async fn a_grant_that_becomes_another_account_has_its_catalog_fetched_again() {
     );
 
     assert_eq!(follow_serving_account(&state).await, Some(true));
+    assert!(
+        harness.sessions.is_empty(),
+        "a conversation bound to the account the grant used to be survived the move"
+    );
 
     let models = harness.call("models").await.unwrap();
     assert_eq!(
