@@ -6,6 +6,8 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.35.10]
+
 - **A deferred tool the request forces is sent.** A `tool_choice` naming a
   `defer_loading` tool not yet discovered became a function choice for a
   function that was withheld, and the backend refused the request. The forced
