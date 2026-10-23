@@ -6,6 +6,8 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.35.9]
+
 - **A daemon serving a key no longer reports `auth.dead`.** `status` asked the
   grant reader whether the serving credential could be spent, and the reader
   finds no grant behind a key, so every key daemon read as dead and a front-end
