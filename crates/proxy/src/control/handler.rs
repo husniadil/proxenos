@@ -440,8 +440,11 @@ fn status(state: &ControlState) -> Value {
                 // it fails, and nothing else here would say so — `connected`
                 // stays true because the credential is still there and still
                 // readable. A front-end that could not tell would show a
-                // healthy provider while every dispatch failed.
-                "dead": state.tokens.as_ref().is_some_and(|tokens| tokens.is_dead()),
+                // healthy provider while every dispatch failed. Asked only of a
+                // grant: the reader finds no grant behind a key and would call
+                // every key dead, and a key the backend refuses is `refused`.
+                "dead": account.kind == "grant"
+                    && state.tokens.as_ref().is_some_and(|tokens| tokens.is_dead()),
                 // What this daemon calls the account, and what the backend
                 // calls it. The first is what selects it; the second is what
                 // appears on a request.

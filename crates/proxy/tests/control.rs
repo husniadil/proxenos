@@ -3767,6 +3767,31 @@ async fn status_reports_a_key_account_as_connected() {
     assert!(!rendered.contains("not connected"), "{rendered}");
 }
 
+/// A daemon serving a key, with the grant reader the daemon really holds, is
+/// not dead.
+///
+/// The reader asks the store for a grant, and a key is none, so `dead` read
+/// true for every key daemon and a front-end showed a working provider as
+/// unusable. The test above passes no reader, which is why it never saw it.
+#[tokio::test]
+async fn status_does_not_report_a_key_account_as_dead() {
+    let harness = Harness::start().await;
+    harness
+        .store
+        .add_key("billing", "key-secret", Provider::Codex)
+        .unwrap();
+    let tokens = Arc::new(proxenos::auth::grants::Grants::new(
+        Arc::clone(&harness.store) as Arc<dyn CredentialStore>,
+        Arc::new(proxenos::auth::grants::SystemClock),
+    ));
+
+    let harness = harness.with_tokens(Arc::clone(&tokens)).await;
+    let status = harness.call("status").await.unwrap();
+
+    assert_eq!(status["auth"]["kind"], json!("key"));
+    assert_eq!(status["auth"]["dead"], json!(false));
+}
+
 /// A missing plan names no source. `grant` is where the fallback reads it
 /// from, and an account holding a key has none — attributing a null to it says
 /// something was asked that never was.

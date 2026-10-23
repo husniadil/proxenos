@@ -4,6 +4,14 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [Unreleased]
+
+- **A daemon serving a key no longer reports `auth.dead`.** `status` asked the
+  grant reader whether the serving credential could be spent, and the reader
+  finds no grant behind a key, so every key daemon read as dead and a front-end
+  showed a working provider as unusable. `dead` is now asked of a grant only. A
+  key the backend turns away is reported in `auth.refused`, as before.
+
 ## [0.35.8]
 
 - **The daemon no longer trusts the compromised eMudhra roots.** webpki-roots
