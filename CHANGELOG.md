@@ -4,6 +4,15 @@ All notable changes to this project are recorded here. This project follows
 [semantic versioning](https://semver.org). The semver-bound surfaces are listed
 in [`docs/api.md`](docs/api.md) §6.
 
+## [0.35.8]
+
+- **The daemon no longer trusts the compromised eMudhra roots.** webpki-roots
+  1.0.10 drops emSign ECC Root CA - G3 and AAA Certificate Services, and
+  rustls-webpki 0.103.16 is the patched verifier. Before, an upstream connection
+  accepted a certificate issued by one of the eight eMudhra intermediates whose
+  private keys anyone can recover from the certificate
+  (https://emudhra.we-have-a-problem.com/).
+
 ## [0.35.7]
 
 - **The catalog follows a grant that becomes another account.** When the
