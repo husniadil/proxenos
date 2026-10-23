@@ -252,6 +252,10 @@ enum WsBehavior {
     /// backend sends on a socket past its connection-age limit, and keep the
     /// socket open. Every other frame gets the full replay.
     LimitSecondTurn,
+    /// Answer the second generate frame ever received with a quota snapshot
+    /// and then the refusal recorded live for a delta the socket cannot
+    /// continue, by its message alone, and keep the socket open.
+    StaleAfterPreambleSecondTurn,
     /// Answer every generate frame with all but the last event, then close
     /// the socket cleanly — a connection cut before the turn completed.
     CloseMidTurn,
@@ -348,6 +352,29 @@ impl WsServer {
                                     limit.to_string().into(),
                                 ))
                                 .await;
+                            continue;
+                        }
+                        if matches!(behavior, WsBehavior::StaleAfterPreambleSecondTurn) && turn == 1
+                        {
+                            let preamble = json!({
+                                "type": "codex.rate_limits",
+                                "rate_limits": { "primary": { "used_percent": 12.0 } }
+                            });
+                            let stale = json!({
+                                "type": "error",
+                                "status": 400,
+                                "error": {
+                                    "type": "invalid_request_error",
+                                    "message": "Invalid previous_response_id: resp_gone"
+                                }
+                            });
+                            for frame in [preamble, stale] {
+                                let _ = socket
+                                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                                        frame.to_string().into(),
+                                    ))
+                                    .await;
+                            }
                             continue;
                         }
                         let silent = matches!(behavior, WsBehavior::Silent)
@@ -1276,6 +1303,34 @@ async fn a_socket_past_its_age_limit_retries_as_a_full_send() {
 
     assert!(!conduit.is_latched_to_http());
     assert_eq!(ws.connections(), 2, "the limited socket was not replaced");
+    assert_eq!(sends[1], Sent::Full, "the retry was recorded as a delta");
+
+    let http_addr = start_http().await;
+    let (http_state, _) = drive(&http_only(http_addr), 3).await;
+    assert_eq!(state, http_state);
+}
+
+/// The refusal seen live for a delta a socket cannot continue carries only
+/// its message, and may follow the backend's own opening events. Read past
+/// those and by that message, it is a stale socket like the age limit: the
+/// turn is retried once, in full, on a fresh connection. Missed, the socket
+/// was parked and refused every later delta.
+#[tokio::test]
+async fn a_stale_refusal_after_a_preamble_retries_as_a_full_send() {
+    let ws = WsServer::start(stream_events(), WsBehavior::StaleAfterPreambleSecondTurn).await;
+    let addr = start_http().await;
+    let conduit = Conduit::new(
+        Arc::new(HttpTransport::new(format!("http://{addr}/responses"))),
+        Some(Arc::new(
+            WebSocketTransport::new(ws.url.clone()).with_compression(false),
+        )),
+        "test-session".to_owned(),
+    );
+
+    let (state, sends) = drive(&conduit, 3).await;
+
+    assert!(!conduit.is_latched_to_http());
+    assert_eq!(ws.connections(), 2, "the stale socket was not replaced");
     assert_eq!(sends[1], Sent::Full, "the retry was recorded as a delta");
 
     let http_addr = start_http().await;

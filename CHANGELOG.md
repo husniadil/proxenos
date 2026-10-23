@@ -6,6 +6,14 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **A socket that refuses a delta is not kept.** Only a first event with one of
+  two codes was read as a stale socket, and the refusal seen live,
+  `400 Invalid previous_response_id`, carries a message and no known code. It
+  is now matched by that message as well, after any `codex.*` events the
+  backend opens with. A turn that ends in any other `error` event drops its
+  socket instead of parking it, so a missed case costs one full send instead
+  of failing every later turn.
+
 - **A grant that becomes another account hands over.** When the program that
   owns a borrowed profile signs it in as someone else, the daemon fetched the
   catalog again but kept the conversations bound to the account before, and
