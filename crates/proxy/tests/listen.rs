@@ -92,6 +92,22 @@ fn a_token_file_is_read_and_trimmed() {
     assert_eq!(listen.token.as_deref(), Some("the-secret"));
 }
 
+/// A token holding whitespace could never be presented, since the
+/// auth-token value splits its parts on it. Refused by name at startup rather
+/// than refusing every caller once the daemon is up.
+#[test]
+fn a_token_holding_whitespace_is_refused() {
+    let error = with_listen(ListenConfig {
+        address: Some(REACHABLE.to_owned()),
+        token: Some("two words".to_owned()),
+        ..ListenConfig::default()
+    })
+    .resolve_listen()
+    .expect_err("a token with a space can never be presented");
+
+    assert!(error.to_string().contains("listen.token"), "{error}");
+}
+
 /// A secret anybody on the machine can read is not a secret, and the failure
 /// is otherwise silent: the daemon comes up and the token works.
 #[cfg(unix)]
