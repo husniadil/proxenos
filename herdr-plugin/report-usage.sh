@@ -55,26 +55,35 @@ if [ -n "$base_url" ]; then
     # A tagged launch spends its tag, whoever is serving.
     tag=$(proxenos inspect "$pid" --json 2>/dev/null | jq -r '.account // empty')
     if [ -n "$tag" ]; then
-        selector=".accounts[] | select(.account == \"$tag\")"
+        account=$tag
+        selector='.accounts[] | select(.account == $account)'
     else
+        account=
         selector='.accounts[] | select(.serving)'
     fi
 else
     # A direct pane on a custom profile spends a credential this daemon does
     # not meter. No figure beats a wrong one.
     [ -z "$config_dir" ] || clear_tokens
+    # A client's daemon is on another machine, and its keychain account is
+    # that machine's login, not the one this pane spends.
+    [ -z "${PROXENOS_DAEMON:-}" ] || clear_tokens
     # The keychain-sourced anthropic account is the default profile's own
     # credential — the same grant the pane spends. Provider alone is not
     # enough: a second anthropic account would make provider ambiguous.
     keychain=$(proxenos accounts --json 2>/dev/null |
         jq -r '[.accounts[] | select(.provider == "anthropic" and ((.source // "") | test("keychain"; "i")))] | if length == 1 then .[0].name else empty end')
     [ -n "$keychain" ] || clear_tokens
-    selector=".accounts[] | select(.account == \"$keychain\")"
+    account=$keychain
+    selector='.accounts[] | select(.account == $account)'
 fi
 
 # Up to three windows as aligned bars: label right-padded to five, ten cells,
 # percent right-aligned to three. Values stay under herdr's 80-char cap.
-lines=$(proxenos usage --json 2>/dev/null | jq -r "
+# The account goes in as a jq variable, never into the program's text: a
+# name is the operator's to choose, and a quote in one would rewrite the
+# filter.
+lines=$(proxenos usage --json 2>/dev/null | jq -r --arg account "$account" "
     [$selector] | if length == 0 then empty else .[0] end | .windows[]? |
     [(if .window_minutes == null then (.label // \"?\" | ascii_downcase)
       elif .window_minutes >= 1440 then \"\(.window_minutes / 1440 | floor)d\"
@@ -100,8 +109,11 @@ line() { printf '%s\n' "$lines" | sed -n "${1}p"; }
 # updates it — but it asks the providers, so it runs from this one place and
 # at most once an hour across every reporter and watcher. The daemon holds
 # every account to the same hour whoever asks.
-state_dir="${HERDR_PLUGIN_STATE_DIR:-${TMPDIR:-/tmp}/proxenos-plugin}"
-mkdir -p "$state_dir" 2>/dev/null || exit 0
+# The fallback carries the uid, since /tmp is every user's, and the
+# directory is used only when it is a real one this user owns.
+state_dir="${HERDR_PLUGIN_STATE_DIR:-${TMPDIR:-/tmp}/proxenos-plugin-$(id -u)}"
+mkdir -p -m 700 "$state_dir" 2>/dev/null || exit 0
+[ -d "$state_dir" ] && [ ! -L "$state_dir" ] && [ -O "$state_dir" ] || exit 0
 stamp="$state_dir/refresh.stamp"
 now=$(date +%s)
 last=$(cat "$stamp" 2>/dev/null || echo 0)

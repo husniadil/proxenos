@@ -1591,11 +1591,34 @@ fn write_config(
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    std::fs::write(path, written).map_err(|error| {
+    write_private(path, &written).map_err(|error| {
         ProxyError::invalid_request(format!("could not write {}: {error}", path.display()))
     })?;
 
     Ok(true)
+}
+
+/// Write the configuration file readable by its owner alone.
+///
+/// It can hold `listen.token` inline, and a token anybody on the machine can
+/// read opens the reachable door to all of them. A file left looser is
+/// tightened as it is written.
+fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(0o600);
+        let mut file = options.open(path)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        std::io::Write::write_all(&mut file, contents.as_bytes())
+    }
+    #[cfg(not(unix))]
+    {
+        let mut file = options.open(path)?;
+        std::io::Write::write_all(&mut file, contents.as_bytes())
+    }
 }
 
 /// `effort.set` — raise, lower, or remove the operator's ceiling on reasoning
@@ -1903,7 +1926,7 @@ fn move_account_section(state: &ControlState, from: &str, to: &str) -> Result<bo
         return Ok(false);
     };
 
-    std::fs::write(path, moved).map(|()| true).map_err(|error| {
+    write_private(path, &moved).map(|()| true).map_err(|error| {
         ProxyError::invalid_request(format!(
             "could not write {}: {error}. The account was not renamed, because its \
                  tier mapping is filed under the old name and would have been left behind.",

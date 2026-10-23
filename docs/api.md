@@ -1505,6 +1505,8 @@ Windows. The same vocabulary is served over HTTP at `POST /control` (below).
 `$PROXENOS_HOME/proxenos.sock` when that variable is set, else
 `$TMPDIR/proxenos.sock`, with `/tmp` where no temporary directory is named. The
 daemon's bind and every CLI call use one derivation. The socket is created `0600`.
+A CLI refuses a socket whose daemon runs as another user: `/tmp` is every user's,
+and the first daemon to bind the name there owns it.
 
 #### Why
 
@@ -2331,7 +2333,9 @@ grant, so it is one account.
 anything upstream: it gates this daemon, is minted by the operator, and decides
 whether the daemon answers at all, so it has to be readable first. A token file can
 be `0600`, rotated without editing configuration, and excluded from backups. A
-readable token file works while every account on the machine has it. Two stated
+readable token file works while every account on the machine has it. A daemon
+writes the configuration file `0600` too, tightening a looser one, since it can
+hold `listen.token` inline. Two stated
 tokens leave no way to tell which the daemon took. A wildcard covers
 `127.0.0.1`, so the two doors cannot both be bound, and the result is
 platform-dependent: measured on macOS 15, the BSDs bind both and hand loopback to

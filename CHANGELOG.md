@@ -6,6 +6,17 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **The CLI refuses a control socket another user's daemon answers.** On Linux
+  the socket defaults to `/tmp/proxenos.sock`, and the first daemon to bind that
+  name owns it. The CLI now checks the uid of the process on the other end and
+  refuses one that is not its own, naming `PROXENOS_HOME` and `TMPDIR`.
+- **A daemon writes `config.toml` owner-only.** It was created `0644`, and it can
+  hold `listen.token` inline. Every write now leaves the file `0600`.
+- **The herdr plugin keeps its state in a directory of its own.** The fallback
+  under `TMPDIR` carries the uid and is used only when this user owns it. An
+  account name reaches `jq` as a variable rather than as part of the program,
+  and a client's daemon is no longer asked for this machine's keychain account.
+
 ## [0.35.9]
 
 - **A daemon serving a key no longer reports `auth.dead`.** `status` asked the

@@ -436,6 +436,35 @@ pub async fn answer(state: &ControlState, line: &str) -> Response {
     }
 }
 
+/// Refuse a control socket another user's process answers.
+///
+/// On Linux the default path is in `/tmp`, which every user shares, so the
+/// first daemon to bind `proxenos.sock` there owns the name. A CLI that spoke
+/// to another user's would hand it a login's account selection and take its
+/// answers as this daemon's. The peer's uid is compared with this process's
+/// own, which the standard library does not expose, so it is read off a
+/// socket pair, whose peer is this process.
+#[cfg(unix)]
+fn ensure_served_by_self(path: &Path, stream: &tokio::net::UnixStream) -> Result<(), ProxyError> {
+    let unreadable = |error: std::io::Error| {
+        ProxyError::invalid_request(format!(
+            "could not tell who serves the control socket at {}: {error}",
+            path.display()
+        ))
+    };
+    let peer = stream.peer_cred().map_err(unreadable)?.uid();
+    let (own, _other) = tokio::net::UnixStream::pair().map_err(unreadable)?;
+    let own = own.peer_cred().map_err(unreadable)?.uid();
+    if peer != own {
+        return Err(ProxyError::invalid_request(format!(
+            "the control socket at {} is served by another user (uid {peer}), so it is not \
+             used. Set PROXENOS_HOME or TMPDIR to a directory of your own.",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 /// Send one request to a running daemon and return its result.
 #[cfg(unix)]
 pub async fn call(
@@ -451,6 +480,7 @@ pub async fn call(
             path.display()
         ))
     })?;
+    ensure_served_by_self(path, &stream)?;
 
     let (reader, mut writer) = stream.into_split();
     let mut body = serde_json::to_string(&Request::new(1, method, params)).unwrap_or_default();
