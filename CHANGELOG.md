@@ -6,6 +6,8 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.35.11]
+
 - **A configuration write is never read half-done.** The daemon wrote its
   configuration file in place, and a turn that read it during the write saw
   part of it. The file is now written beside itself and renamed over, at
