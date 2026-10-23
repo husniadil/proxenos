@@ -948,6 +948,32 @@ fn a_discovered_tool_is_forwarded_despite_still_being_marked_deferred() {
     assert_eq!(out["tools"][0]["name"], json!("Slack"));
 }
 
+/// §2.5 — a deferred tool the choice forces is forwarded, discovered or not.
+/// Withheld, the choice named a function the backend was never given, and the
+/// request was refused upstream where the client could neither see nor fix it.
+#[test]
+fn a_deferred_tool_the_choice_forces_is_forwarded() {
+    let out = translate(json!({
+        "model": "gpt-5.5",
+        "messages": [{ "role": "user", "content": "hello" }],
+        "tools": [
+            { "name": "Read", "input_schema": { "type": "object" } },
+            { "name": "Slack", "input_schema": { "type": "object" }, "defer_loading": true },
+            { "name": "Jira", "input_schema": { "type": "object" }, "defer_loading": true },
+        ],
+        "tool_choice": { "type": "tool", "name": "Slack" },
+    }));
+
+    let names: Vec<&str> = out["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert_eq!(names, vec!["Read", "Slack"]);
+    assert_eq!(out["tool_choice"]["name"], json!("Slack"));
+}
+
 /// §2.7 — an operator's effort ceiling applies to traffic that expresses no
 /// preference of its own, which is most of it. The client cannot choose this:
 /// it does not know whose quota it is spending.

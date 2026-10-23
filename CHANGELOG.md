@@ -6,6 +6,13 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.35.10]
+
+- **A deferred tool the request forces is sent.** A `tool_choice` naming a
+  `defer_loading` tool not yet discovered became a function choice for a
+  function that was withheld, and the backend refused the request. The forced
+  tool now goes upstream with the others.
+
 - **A socket that refuses a delta is not kept.** Only a first event with one of
   two codes was read as a stale socket, and the refusal seen live,
   `400 Invalid previous_response_id`, carries a message and no known code. It

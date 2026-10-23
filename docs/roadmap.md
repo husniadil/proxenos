@@ -227,6 +227,16 @@ to watch compaction happen has not been observed.
 reported their calls against it while main turns used sonnet's. An unmapped
 haiku breaks both in a way that looks unrelated to tier mapping.
 
+#### Does the backend take a function choice naming the hosted search tool?
+
+**Open.** `tool_choice {type: "tool", name: "web_search"}` translates to a
+function choice named `web_search`, while the tool itself goes upstream as the
+hosted search tool rather than a function. The recorded `web-search` fixture
+carries no `tool_choice`, and `WebSearch` works live through the haiku tier
+(above), so either the client does not force the choice or the backend takes it.
+Settle it with one `record surface` of a `WebSearch` call: read whether the
+request forces the choice, and if it does, what the backend answered.
+
 #### Do connectors and claude.ai-hosted MCP servers stay out of a proxied session?
 
 **Settled live: yes, and neither setting is what keeps them out.** Auth

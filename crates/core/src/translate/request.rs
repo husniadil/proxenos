@@ -108,7 +108,7 @@ pub fn translate_request(
             .iter()
             .flat_map(translate_message)
             .collect(),
-        tools: translate_tools(&request.tools, options),
+        tools: translate_tools(&request.tools, request.tool_choice.as_ref(), options),
         tool_choice: request.tool_choice.as_ref().map(translate_tool_choice),
         reasoning: Reasoning {
             effort: effort_for(request, options),
@@ -221,10 +221,21 @@ pub fn discovered_tool_names(request: &MessagesRequest) -> BTreeSet<String> {
         .collect()
 }
 
-fn translate_tools(tools: &[Tool], options: &TranslateOptions) -> Vec<ToolSpec> {
+fn translate_tools(
+    tools: &[Tool],
+    choice: Option<&ToolChoice>,
+    options: &TranslateOptions,
+) -> Vec<ToolSpec> {
+    // A tool the choice forces is sent whatever its discovery: withheld, the
+    // choice named a function the backend was never given, and the request
+    // was refused upstream where the client could neither see nor fix it.
+    let forced = match choice {
+        Some(ToolChoice::Tool { name }) => Some(name.as_str()),
+        _ => None,
+    };
     tools
         .iter()
-        .filter(|tool| forward_tool(tool, options))
+        .filter(|tool| forced == Some(tool.name.as_str()) || forward_tool(tool, options))
         .map(translate_tool)
         .collect()
 }
