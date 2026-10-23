@@ -7692,3 +7692,35 @@ async fn a_status_line_from_an_unknown_profile_records_nothing() {
         .unwrap();
     assert_eq!(answer["recorded"], json!(false), "{answer}");
 }
+
+/// The configuration file a daemon writes is its owner's alone.
+///
+/// It can hold `listen.token` inline, and a token anybody on the machine can
+/// read opens the reachable door to all of them. A file that was looser is
+/// tightened by the write.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_configuration_file_is_written_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let harness = Harness::start().await;
+    harness
+        .call_with("effort.set", json!({ "effort": "high", "persist": true }))
+        .await
+        .unwrap();
+    let mode =
+        |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&harness.config_file), 0o600, "a new file");
+
+    std::fs::set_permissions(&harness.config_file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    harness
+        .call_with("effort.set", json!({ "effort": "low", "persist": true }))
+        .await
+        .unwrap();
+    assert_eq!(mode(&harness.config_file), 0o600, "a file that was 0644");
+    assert!(
+        std::fs::read_to_string(&harness.config_file)
+            .unwrap()
+            .contains("low")
+    );
+}
