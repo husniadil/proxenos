@@ -6,6 +6,12 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **A grant that becomes another account hands over.** When the program that
+  owns a borrowed profile signs it in as someone else, the daemon fetched the
+  catalog again but kept the conversations bound to the account before, and
+  their pooled sockets went on carrying turns as it. They are now dropped, as
+  `accounts.select` drops them, and each pays a full upload on its next turn.
+
 - **An account name with a space survives beside a token.** In client mode
   `exec --account "work laptop"` sends the token and the account in one value,
   and the daemon read the account word by word, as `work`. A turn was then made
