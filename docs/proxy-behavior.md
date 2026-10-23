@@ -287,7 +287,9 @@ where the tool list still has to be visible.
 #### An undiscovered deferred tool is withheld
 
 A tool marked `defer_loading: true` is not sent upstream until it has been
-discovered.
+discovered, unless the request's `tool_choice` names it. A forced choice of a
+withheld tool names a function the backend was never given, and the request is
+refused where the client can neither see nor fix it.
 
 #### The backend's own deferral is not used
 
