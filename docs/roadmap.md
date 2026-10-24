@@ -6,7 +6,7 @@ not repeat it.
 
 ## Where this stands
 
-The current release is **v0.36.0**. Shipped, at the level of capability:
+The current release is **v0.36.1**. Shipped, at the level of capability:
 
 - **Two providers behind one Messages surface.** Codex through the translate
   path (Messages ⇄ Responses), Anthropic through the relay path, which forwards
@@ -66,8 +66,9 @@ from the upstream's protocol definitions and says so.
 
 Settling these falsified rules that no offline test could catch — the empty
 delta, the reasoning mismatch, the compressed WebSocket frame, the response's
-expiry field, the non-streaming request answered with a stream. Each was fixed
-by amending the spec in the same commit as the code.
+expiry field, the non-streaming request answered with a stream, the
+validator's `\Z` and `[\b]`, a document by URL. Each was fixed by amending the
+spec in the same commit as the code.
 
 New questions belong here as they are found.
 
@@ -207,11 +208,13 @@ holds an unguessable code.
 
 #### Which patterns does the schema validator refuse beyond the ones measured?
 
-**Open.** §2.4's allow-list was written against the refusals observed, and
-some patterns it keeps may still be refused: a variable-width lookbehind, an
-escape such as `\b` inside a class, a repetition count past the validator's
-own limit. A false accept fails the whole turn. Settle by sending one tool per
-candidate pattern and reading which the backend refuses.
+**Settled live, for fifteen candidates.** One tool per pattern, each kept by
+§2.4's allow-list. Refused, as `"…" is not a "regex"`: `[\b]` and `\Z`. Taken:
+variable-width and unbounded lookbehind, both ways (`(?<=ab|c)x`, `(?<=a+)b`,
+`(?<!foo|ba)r`), `\b` and `\B` outside a class, `\A`, counts of `{1001}`,
+`{1,100000}` and `{0,65536}`, `(a+)+$`, a lazy `{2}?`, `$^`, and `[^\]]`.
+**Falsified:** that the allow-list's escapes were all taken. `\Z` everywhere
+and a word boundary inside a class are now dropped.
 
 #### What does the backend send for a prewarm frame?
 
@@ -222,10 +225,12 @@ its answer. Settle before prewarm is used: send one and read what comes back.
 
 #### Does the backend take a document by URL?
 
-**Open.** A URL-sourced `document` block is sent as `input_file.file_data`
-holding the URL, which is a data field. Whether the backend refuses it, reads
-it, or would take it as `file_url` is unmeasured. The client is not seen to
-send one.
+**Settled live: not as sent.** A URL-sourced `document` block goes as
+`input_file.file_data` holding the URL, and the backend refuses it:
+`input_file file_data normalization error: … must be a data URL`. The same PDF
+as base64 was read, its random code returned. Whether it would take the URL as
+`file_url` is still unmeasured, so the turn keeps failing with that refusal.
+The client is not seen to send one.
 
 #### Which refusals of a WebSocket upgrade mean the socket cannot be used?
 

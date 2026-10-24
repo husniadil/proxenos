@@ -163,9 +163,11 @@ thinking) produces no item.
 #### Sources become URLs
 
 Base64 image and document sources encode as data URLs. `image_url` is that URL
-directly, not an object wrapping one. URL sources pass through unchanged and
-are not prefetched; they resolve only if the backend can reach them. A source
-of an unrecognized type is dropped.
+directly, not an object wrapping one. A URL source passes through unchanged and
+is not prefetched. An image URL resolves only if the backend can reach it. A
+document URL goes as `input_file.file_data`, which the backend refuses because
+that field must hold a data URL, so the turn fails with the backend's 400. A
+source of an unrecognized type is dropped.
 
 An `input_file` is named from its media type, because nothing in a `document`
 block carries the original name: `attachment.pdf` (PDF or no media type),
@@ -250,9 +252,11 @@ its subschema.
 
 The validator's dialect is narrower than the one the client's schemas are
 written against: no Unicode property escapes (`\p{Cc}`), no braced code points
-(`\u{1F600}`), no control escapes (`\cA`), no `(?<name>` group, and no class
-range whose endpoint is an escape. Lookahead, lookbehind, non-capturing groups,
-and plain escapes it takes.
+(`\u{1F600}`), no control escapes (`\cA`), no `(?<name>` group, no class
+range whose endpoint is an escape, no `\Z`, and no `\b` inside a class.
+Lookahead, lookbehind of any width, non-capturing groups, `\A`, `\b` outside a
+class, counts up to 100,000, and plain escapes it takes. `\B` inside a class
+is dropped with `\b` there, by the allow-list rule below.
 
 ##### Why
 

@@ -378,6 +378,12 @@ fn a_schema_without_properties_gains_an_empty_one() {
 #[case::escaped_punctuation(r"^\$\d+\.\d\d$")]
 #[case::lazy_quantifier(r"^a+?b*?c??d{2,3}?$")]
 #[case::quantified_group(r"^(ab)+[cd]{2,}\w?$")]
+#[case::variable_width_lookbehind(r"(?<=ab|c)x")]
+#[case::unbounded_lookbehind(r"(?<=a+)b")]
+#[case::negative_lookbehind(r"(?<!foo|ba)r")]
+#[case::word_boundary(r"\bword\b")]
+#[case::start_of_input(r"\Aa")]
+#[case::large_count(r"^a{1,100000}$")]
 fn a_pattern_the_validator_accepts_survives(#[case] pattern: &str) {
     let out = translate(tool_with_schema(json!({
         "type": "object",
@@ -413,6 +419,9 @@ fn a_pattern_the_validator_accepts_survives(#[case] pattern: &str) {
 #[case::stacked_quantifier("a**")]
 #[case::reversed_count("a{3,2}")]
 #[case::count_with_no_minimum("a{,5}")]
+#[case::end_of_input_z(r"^a\Z")]
+#[case::word_boundary_in_class(r"^[\b]$")]
+#[case::non_word_boundary_in_class(r"^[a\B]$")]
 fn a_pattern_the_validator_refuses_is_dropped(#[case] pattern: &str) {
     let out = translate(tool_with_schema(json!({
         "type": "object",
