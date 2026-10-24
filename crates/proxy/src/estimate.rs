@@ -35,6 +35,9 @@ pub trait Estimator: Send + Sync {
 
 /// The structural size of a request, in characters and items.
 ///
+/// A character here is a UTF-8 byte (§6.2): `str::len`, not a count of code
+/// points.
+///
 /// Both estimators measure the same thing and differ only in how they turn it
 /// into tokens, which is what makes comparing them meaningful.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

@@ -1339,8 +1339,15 @@ estimate rather than adding to it.
 Characters divided by 3.6, rounded up, plus 4 tokens per item. The items are
 the system prompt, each message, and each tool that is sent; a withheld deferred
 tool (§2.5) counts nothing. Characters are text, tool names, call inputs, and
-tool descriptions and schemas. An image or document counts as 3,000 characters
-rather than its base64 length.
+tool descriptions and schemas, counted as UTF-8 bytes. An image or document
+counts as 3,000 characters rather than its base64 length.
+
+##### Why
+
+The measurements in §6.3 were taken on bytes, and calibration absorbs the
+difference between the two either way. Counting code points instead would
+change every estimate in a script whose characters take more than one byte,
+against a fit no measurement has checked.
 
 ### 6.3 Calibration
 
