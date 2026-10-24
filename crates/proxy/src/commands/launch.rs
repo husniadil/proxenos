@@ -160,11 +160,7 @@ pub(crate) async fn exec(args: cli::ExecArgs) -> Result<()> {
 
     // Compact rather than pretty: this goes on a command line, and a document
     // full of newlines is one that a person reading `ps` has to reassemble.
-    let policy = result
-        .get("settings")
-        .filter(|policy| !policy.is_null())
-        .map(serde_json::to_string)
-        .transpose()?;
+    let policy = proxenos::launch::policy_of(result.get("settings"));
 
     // A plain `--model` id is upgraded to its long-context variant where the
     // serving account offers one. Eligibility comes from the curated list and

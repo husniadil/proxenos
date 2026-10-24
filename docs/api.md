@@ -977,7 +977,8 @@ model.
 The `env` method's `settings` field is an empty object where there is no policy.
 Absence means a daemon that predates client policy. `settings` and `exec` refuse
 against such a daemon; `env` continues with a comment saying the policy is
-missing.
+missing. An empty object gives `exec` nothing to deliver, so it passes no
+`--settings`, and a caller's own is forwarded.
 
 #### Why
 

@@ -110,6 +110,23 @@ pub fn upgrade_model_argument(
 ///
 /// The check is a token match, not a parse: this forwards the client's grammar
 /// rather than interpreting it, and detecting one flag needs no more than that.
+/// The policy document a launch carries, compact for a command line, from the
+/// `settings` the daemon's `env` answered with.
+///
+/// `None` for an empty object as well as for null: the daemon answers "no
+/// policy" with `{}` (absence is a daemon too old to have one), and handing
+/// the client an empty document would be inventing a policy, and would refuse
+/// a caller's own `--settings` for colliding with nothing.
+#[must_use]
+pub fn policy_of(settings: Option<&serde_json::Value>) -> Option<String> {
+    let settings = settings?;
+    match settings {
+        serde_json::Value::Null => None,
+        serde_json::Value::Object(document) if document.is_empty() => None,
+        document => Some(document.to_string()),
+    }
+}
+
 pub fn plan(command: &[String], policy: Option<&str>) -> Result<Launch, ProxyError> {
     let Some((program, forwarded)) = command.split_first() else {
         return Err(ProxyError::invalid_request(
