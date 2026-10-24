@@ -1054,6 +1054,19 @@ already has into one with no tally and no baseline. A message left open hangs
 the client on a turn the backend abandoned, which is indistinguishable from a
 model still thinking.
 
+#### A quiet stream is kept alive with pings
+
+Once `message_start` is written, an event stream that has written nothing for
+15 seconds (`KEEP_ALIVE`) writes a `ping`, and again for each further 15
+seconds. Nothing is written before `message_start`. A non-streaming answer has
+nothing to keep alive.
+
+##### Why
+
+A model reasoning before it writes can leave the response silent for minutes,
+and an intermediary or the client reads silence as a dead connection. The real
+surface writes `ping` frames, after `message_start` (`fixtures/surface/`).
+
 #### A refusal before the response starts is a status
 
 The first four upstream events are read before anything is written. An `error`
@@ -1192,7 +1205,7 @@ status and an error body.
 | `crates/core/src/translate/response.rs` | `ResponseTranslator`, search reconstruction, `classify`, `translate_usage` |
 | `crates/core/src/anthropic/stream.rs` | Outbound frame types |
 | `crates/core/src/anthropic/aggregate.rs` | `aggregate`, the non-streaming fold |
-| `crates/proxy/src/ingress.rs` | `peek_preamble`, `upstream_refusal`, `frame_stream`, `json_response`, empty-stream capture |
+| `crates/proxy/src/ingress.rs` | `peek_preamble`, `upstream_refusal`, `frame_stream`, `keep_alive`, `json_response`, empty-stream capture |
 | `crates/proxy/src/upstream/http.rs`, `crates/proxy/src/upstream/pool.rs` | A turn's events ended at its terminal event, and a cut before it reported (`one_turn`, `pump`) |
 | `crates/proxy/src/surface.rs` | The surface vocabulary comparison |
 | `crates/core/tests/response_translation.rs`, `crates/core/tests/response_snapshots.rs` | Frame sequences |
