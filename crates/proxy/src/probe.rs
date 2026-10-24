@@ -37,6 +37,10 @@ pub enum Check {
     /// and absent are both failures, and they fail differently from a wrong
     /// value: a zero here renders.
     PositiveInFrame { frame_type: String, pointer: String },
+    /// Every search result must be on this domain or under it, and there must
+    /// be one. The URLs come from the search tool's citations, which the model
+    /// does not write, so it cannot supply one that satisfies this.
+    ResultsWithin { domain: String },
 }
 
 impl Check {
@@ -173,6 +177,28 @@ pub fn all() -> Vec<Probe> {
             replay_only: vec![Check::ClientReceives {
                 marker: "https://example.invalid/sse-spec".to_owned(),
             }],
+        },
+        Probe {
+            name: "web-search-filters",
+            surface: Surface::Messages,
+            capability: Capability::WebSearch,
+            fixture: "web-search-filters",
+            rationale: "Without the filter a search the client held to some domains \
+                        runs on all of them, and the answer cites sources the client \
+                        excluded.",
+            checks: vec![
+                Check::RequestContains {
+                    pointer: "/tools/0/filters/allowed_domains/0".to_owned(),
+                    marker: "en.wikipedia.org".to_owned(),
+                },
+                Check::BlockNonEmpty {
+                    block_type: "web_search_tool_result".to_owned(),
+                },
+                Check::ResultsWithin {
+                    domain: "en.wikipedia.org".to_owned(),
+                },
+            ],
+            replay_only: Vec::new(),
         },
         Probe {
             name: "web-fetch",
@@ -523,6 +549,43 @@ fn check_all<'a>(
                             .is_some_and(|content| !content.is_empty())
                 }) {
                     return Status::Failed(format!("no `{block_type}` block carried any content"));
+                }
+            }
+            Check::ResultsWithin { domain } => {
+                let hosts: Vec<String> = client_frames
+                    .iter()
+                    .filter(|frame| {
+                        frame.pointer("/content_block/type").and_then(Value::as_str)
+                            == Some("web_search_tool_result")
+                    })
+                    .filter_map(|frame| frame.pointer("/content_block/content")?.as_array())
+                    .flatten()
+                    .filter_map(|result| result.get("url")?.as_str())
+                    .map(|url| {
+                        url::Url::parse(url)
+                            .ok()
+                            .and_then(|url| url.host_str().map(str::to_owned))
+                            .unwrap_or_else(|| url.to_owned())
+                    })
+                    .collect();
+                if hosts.is_empty() {
+                    return Status::Failed(
+                        "no search result came back to judge the filter by".to_owned(),
+                    );
+                }
+                let suffix = format!(".{domain}");
+                let off: Vec<&String> = hosts
+                    .iter()
+                    .filter(|host| *host != domain && !host.ends_with(&suffix))
+                    .collect();
+                if !off.is_empty() {
+                    return Status::Failed(format!(
+                        "results came back off {domain}: {}",
+                        off.iter()
+                            .map(|host| host.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
                 }
             }
         }

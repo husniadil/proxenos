@@ -541,7 +541,7 @@ fn web_search_maps_to_the_native_tool(#[case] tool_type: &str) {
 
 /// §2.6 — the domains a search was restricted to travel as the hosted tool's
 /// filter. Without it a search the client restricted runs everywhere, and the
-/// answer cites sources the client excluded. Derived, not confirmed: roadmap §L.
+/// answer cites sources the client excluded. Settled live: roadmap §L.
 #[test]
 fn allowed_domains_become_the_search_filter() {
     let out = translate(json!({

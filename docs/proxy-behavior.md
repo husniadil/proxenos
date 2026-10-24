@@ -355,10 +355,11 @@ left to a default, because a default of false produces the same empty search.
 
 #### A search's allowed domains become the tool's filter
 
-**Derived, not confirmed** (roadmap §L). The client's `allowed_domains` goes as
+**Settled live** (roadmap §L). The client's `allowed_domains` goes as
 `filters.allowed_domains`, the field the Responses search tool documents. An
 empty list sends no filter. `blocked_domains` and `max_uses` send nothing,
-since the tool documents no field for either.
+since the tool documents no field for either. The `web-search-filters` probe
+(§10.3) holds it.
 
 ##### Why
 
@@ -3240,7 +3241,9 @@ recording was written to pass tests only the recording.
 
 #### A capability test turns on content the model could not infer
 
-Random codes, verbatim strings.
+Random codes, verbatim strings. A search result's URL counts too: the search
+tool supplies it, and the model writes none of them, so a probe may turn on the
+host every result came back from.
 
 ##### Why
 

@@ -57,6 +57,10 @@ const EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../../fixtures/web-fetch.json"),
     ),
     (
+        "web-search-filters",
+        include_str!("../../../fixtures/web-search-filters.json"),
+    ),
+    (
         "web-search",
         include_str!("../../../fixtures/web-search.json"),
     ),
