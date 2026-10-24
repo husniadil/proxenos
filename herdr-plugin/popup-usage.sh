@@ -1,8 +1,8 @@
 #!/bin/sh
 # The usage dashboard: every account the daemon holds, bars and resets per
 # window, rendered from `proxenos usage --json` and redrawn every 30 seconds.
-# `r` asks the providers for fresh figures (`usage --refresh`); `q` or Esc
-# quits. Keys are read raw (one character, no Enter) where stty allows it.
+# `r` asks the providers for fresh figures (`usage --refresh`, which the
+# daemon holds to one ask an hour per account); `q` or Esc quits. Keys are read raw (one character, no Enter) where stty allows it.
 set -u
 
 command -v jq >/dev/null 2>&1 || { echo "proxenos usage: jq is required" >&2; exit 1; }

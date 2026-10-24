@@ -25,6 +25,16 @@ const SPEAKING: [&str; 9] = [
     "herdr-plugin/popup-usage.sh",
 ];
 
+/// The herdr plugin's scripts, which run `proxenos` as the person. A verb or
+/// flag one of them runs that the CLI no longer takes fails silently there:
+/// every call discards its errors so a pane is never interrupted.
+const RUNNING: [&str; 4] = [
+    "herdr-plugin/report-usage.sh",
+    "herdr-plugin/popup-usage.sh",
+    "herdr-plugin/watch-usage.sh",
+    "herdr-plugin/open-pane.sh",
+];
+
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -131,11 +141,53 @@ fn commands_in(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Every `proxenos …` a shell script runs: one that opens a line or a `$(`,
+/// cut where the shell takes over (a redirection, a pipe, the substitution's
+/// end). A shell variable stands for a value the script fills in, so it is
+/// checked as a stand-in.
+fn commands_run_in(script: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for line in script.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        let starts = trimmed
+            .match_indices("proxenos ")
+            .filter(|(at, _)| *at == 0 || trimmed[..*at].ends_with("$("))
+            .map(|(at, _)| at);
+        for at in starts {
+            let rest = &trimmed[at..];
+            let end = [" 2>", " >", " |", ")"]
+                .iter()
+                .filter_map(|stop| rest.find(stop))
+                .min()
+                .unwrap_or(rest.len());
+            let command: Vec<&str> = rest[..end]
+                .split_whitespace()
+                .map(|word| {
+                    if word.trim_matches('"').starts_with('$') {
+                        "1"
+                    } else {
+                        word
+                    }
+                })
+                .collect();
+            found.push(command.join(" "));
+        }
+    }
+    found
+}
+
 /// What the CLI refuses among one document's commands, and how many it read.
 fn refusals_in(doc: &str, text: &str) -> (Vec<String>, usize) {
+    refusals_of(doc, commands_in(text))
+}
+
+/// What the CLI refuses among the given command lines, and how many there were.
+fn refusals_of(doc: &str, commands: Vec<String>) -> (Vec<String>, usize) {
     let verbs = Cli::command();
     let mut refused = Vec::new();
-    let commands = commands_in(text);
     let read = commands.len();
 
     {
@@ -181,6 +233,41 @@ fn every_command_the_documents_print_is_one_the_cli_takes() {
     // A reader that finds nothing passes every document. The documents quote
     // about ninety commands; far fewer means the reader broke.
     assert!(read_in_all > 60, "only {read_in_all} commands were read");
+}
+
+#[test]
+fn every_command_the_plugin_scripts_run_is_one_the_cli_takes() {
+    let mut refused = Vec::new();
+    let mut read_in_all = 0;
+    for script in RUNNING {
+        let (found, read_here) = refusals_of(script, commands_run_in(&read(script)));
+        refused.extend(found);
+        read_in_all += read_here;
+    }
+
+    assert!(refused.is_empty(), "\n{}", refused.join("\n"));
+    // The scripts run about seven commands between them.
+    assert!(read_in_all >= 5, "only {read_in_all} commands were read");
+}
+
+/// A script's command is read from where the shell runs it, and a flag that
+/// is gone is reported.
+#[test]
+fn a_command_a_script_runs_that_the_cli_refuses_is_reported() {
+    let script = "# proxenos stauts in a comment is not run\n\
+                  tag=$(proxenos inspect \"$pid\" --json 2>/dev/null | jq .)\n\
+                  echo \"proxenos usage: jq is required\"\n\
+                  \x20   proxenos usage --refersh >/dev/null 2>&1\n";
+
+    let commands = commands_run_in(script);
+    assert_eq!(
+        commands,
+        ["proxenos inspect 1 --json", "proxenos usage --refersh"]
+    );
+    let (refused, read) = refusals_of("drifted.sh", commands);
+
+    assert_eq!(read, 2);
+    assert_eq!(refused.len(), 1, "{refused:#?}");
 }
 
 /// The check fails on what it exists to catch: a verb that is gone, a flag

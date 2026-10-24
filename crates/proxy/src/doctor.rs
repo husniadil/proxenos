@@ -768,9 +768,9 @@ pub fn answer_marker(probe: &probe::Probe) -> Option<String> {
 ///
 /// The system prompt is the client's own identity line, because a client always
 /// sends one and the endpoint checks for it. Measured: a subscription grant's
-/// turn without it is answered with `rate_limit_error` on every current model,
-/// with an arbitrary system prompt as well, and the same turn carrying the
-/// line comes back (`roadmap.md` §L).
+/// turn without it is answered with `rate_limit_error` on every model measured
+/// but Haiku 4.5, with an arbitrary system prompt as well, and the same turn
+/// carrying the line comes back (`roadmap.md` §L).
 ///
 /// `max_tokens` leaves room for thinking, which is on by default for the model
 /// named and counts toward the limit.

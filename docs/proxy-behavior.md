@@ -2328,6 +2328,12 @@ the provider said is reported as said.
 `usage.refresh` asks once per account, each on its own credential. Which account
 serves turns is neither read nor changed.
 
+##### Why
+
+Riding a turn only ever fills in the account that made the turn. A spare
+account's headroom is what decides whether to switch to it, and requiring a
+switch to learn it is the question answering itself.
+
 #### Asking is the fallback, once an hour per account
 
 An account's quota endpoint is asked at most once an hour, counted from the
@@ -2344,12 +2350,6 @@ a refused ask left the figure stale, which asked again, which kept it refused.
 The endpoint is shared with that provider's own clients on the same account, so
 a refusal earned here is felt there too. Counting from an answer would ask a
 refusing endpoint again at once.
-
-##### Why
-
-Riding a turn only ever fills in the account that made the turn. A spare
-account's headroom is what decides whether to switch to it, and requiring a
-switch to learn it is the question answering itself.
 
 #### Only where a figure is possible, and each failure is one account's
 

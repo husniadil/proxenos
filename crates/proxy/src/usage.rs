@@ -420,31 +420,6 @@ impl Snapshot {
         })
     }
 
-    /// What a profile body states about the account: its plan, and what the
-    /// subscription behind it is doing.
-    ///
-    /// The quota body states neither. The profile endpoint beside it states
-    /// the plan as `organization.organization_type` — and for a max org the
-    /// multiplier rides separately in `rate_limit_tier`
-    /// (`default_claude_max_20x`) — and the subscription as
-    /// `organization.subscription_status`. An organization type this does not
-    /// recognize yields no plan rather than a guessed one; the status is
-    /// passed through as stated, because a canceled account is reported to
-    /// keep serving quota that looks untouched while every turn is refused,
-    /// and this proxy has measured only the word that means nothing is wrong.
-    ///
-    /// `None` where there is no organization to read at all.
-    /// This snapshot, plus the named windows a previous one carried that this
-    /// one does not.
-    ///
-    /// The headers on a served turn state the 5h, 7d and overage windows; the
-    /// usage endpoint states the 5h, 7d and each model's own. Neither names
-    /// the other's, so a snapshot that replaced the whole set made "Fable"
-    /// and "overage" take turns on a meter. A named window the newer source
-    /// did not restate is kept from the older one until it resets — a window
-    /// measured by duration is never carried, since every source states
-    /// those, and a reset window is dropped rather than shown at a figure
-    /// the reset erased.
     /// The windows in the one order every reader gets them in (`api.md` §3):
     /// the account's own by length, shortest first, then the named ones in
     /// the order they came.
@@ -458,6 +433,17 @@ impl Snapshot {
             .sort_by_key(|window| (window.window_minutes.is_none(), window.window_minutes));
     }
 
+    /// This snapshot, plus the named windows a previous one carried that this
+    /// one does not.
+    ///
+    /// The headers on a served turn state the 5h, 7d and overage windows; the
+    /// usage endpoint states the 5h, 7d and each model's own. Neither names
+    /// the other's, so a snapshot that replaced the whole set made "Fable"
+    /// and "overage" take turns on a meter. A named window the newer source
+    /// did not restate is kept from the older one until it resets — a window
+    /// measured by duration is never carried, since every source states
+    /// those, and a reset window is dropped rather than shown at a figure
+    /// the reset erased.
     #[must_use]
     pub fn carrying(&self, previous: &Self, now: u64) -> Self {
         let mut merged = self.clone();
@@ -482,6 +468,20 @@ impl Snapshot {
         merged
     }
 
+    /// What a profile body states about the account: its plan, and what the
+    /// subscription behind it is doing.
+    ///
+    /// The quota body states neither. The profile endpoint beside it states
+    /// the plan as `organization.organization_type` — and for a max org the
+    /// multiplier rides separately in `rate_limit_tier`
+    /// (`default_claude_max_20x`) — and the subscription as
+    /// `organization.subscription_status`. An organization type this does not
+    /// recognize yields no plan rather than a guessed one; the status is
+    /// passed through as stated, because a canceled account is reported to
+    /// keep serving quota that looks untouched while every turn is refused,
+    /// and this proxy has measured only the word that means nothing is wrong.
+    ///
+    /// `None` where there is no organization to read at all.
     pub fn anthropic_profile(payload: &str) -> Option<Profile> {
         let body: Value = serde_json::from_str(payload).ok()?;
         let organization = body.get("organization")?;
