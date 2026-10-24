@@ -60,12 +60,14 @@ impl Model {
     }
 }
 
+/// Either key may carry the list. A body with neither is not a catalog, and
+/// is refused rather than read as one with no models in it.
 #[derive(Debug, Deserialize)]
 struct CatalogResponse {
     #[serde(default)]
-    data: Vec<CatalogEntry>,
+    data: Option<Vec<CatalogEntry>>,
     #[serde(default)]
-    models: Vec<CatalogEntry>,
+    models: Option<Vec<CatalogEntry>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -269,10 +271,17 @@ impl Catalog {
             )
         })?;
 
-        let entries = if response.data.is_empty() {
-            response.models
-        } else {
-            response.data
+        let entries = match (response.data, response.models) {
+            (Some(data), _) if !data.is_empty() => data,
+            (_, Some(models)) => models,
+            (Some(data), None) => data,
+            (None, None) => {
+                return Err(ProxyError::upstream(
+                    axum::http::StatusCode::BAD_GATEWAY,
+                    "unreadable model catalog: the body names neither `data` nor `models`"
+                        .to_owned(),
+                ));
+            }
         };
 
         let models = entries

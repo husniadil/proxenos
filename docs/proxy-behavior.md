@@ -1597,13 +1597,16 @@ catalog.
 #### An authoritative empty catalog names the client version
 
 A catalog that came back with no models refuses validation with a sentence
-pointing at `upstream.client_version`.
+pointing at `upstream.client_version`. Empty means a `data` or `models` list
+that is present and holds nothing: a body naming neither is unreadable, a
+failed fetch like any other.
 
 ##### Why
 
 The backend answers a client version older than every model's minimum with an
 empty list rather than an error, which reads exactly like an account with no
-models.
+models. A body with no list at all says nothing about the account, and read as
+an empty catalog it marked every checked tier missing.
 
 ### 7.1 Tier mapping
 
