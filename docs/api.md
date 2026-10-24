@@ -303,6 +303,9 @@ holding a grant is written into `[profiles]`.
 
 - `--path DIR` says where. Absent, the profile goes under
   `<config dir>/profiles/<NAME>`.
+- What the daemon refuses to start on is refused before anything runs: a
+  `--path` that is relative or starts with `~`, and a directory another
+  declaration of the same provider already names (§4).
 - A directory already signed in is adopted: no client runs, and the entry is
   written.
 - Where there is no terminal to answer the login's prompts, the command is
