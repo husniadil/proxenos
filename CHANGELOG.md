@@ -6,6 +6,26 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.36.0]
+
+- **On Windows, each `PROXENOS_HOME` has a control pipe of its own.** Every
+  daemon named its pipe after the socket's file name, so two homes on one
+  machine met at one pipe and the second daemon could not create it. A socket
+  outside the temporary directory is now the pipe `proxenos-` followed by 16 hex
+  digits of its path's SHA-256, then `.sock`. The temporary directory's pipe
+  keeps `proxenos.sock`. This renames a socket name under `api.md` §6's
+  before-1.0 rule: a CLI of this release cannot reach a daemon of an older one
+  started under `PROXENOS_HOME` on Windows, so restart that daemon.
+
+- **A credential failure is documented as the 401 it is.** `api.md` §1.1 listed
+  `overloaded_error` 529 for credentials transiently unavailable, which nothing
+  returned. The row is gone, and §1.1 says why every credential failure is
+  terminal.
+
+- **A turn upstream reported no usage for is documented.** Its `message_delta`,
+  and a non-streaming body, carry the `message_start` estimate. That was
+  already the behavior, and `proxy-behavior.md` §6.2 now says so.
+
 ## [0.35.12]
 
 - **A cut HTTP stream is an error, as a cut socket is.** Over HTTP a body that
