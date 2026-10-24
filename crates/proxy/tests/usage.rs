@@ -1076,16 +1076,17 @@ fn an_unreadable_tally_reads_as_an_empty_one() {
 }
 
 /// `PROXENOS_HOME` can point two daemons at one directory, and neither sees the
-/// other's turns. The merge takes whichever count is higher per account, so a
-/// daemon that has been running longer does not have its total replaced by a
-/// younger one's.
+/// other's turns. Each write adds what this daemon counted since its last one
+/// to what the file holds, so both daemons' turns are in the tally. Taking the
+/// higher of two totals instead lost every turn of the daemon with the lower
+/// one.
 ///
 /// This is the sequential case, and it is all this test claims: the second
 /// store reads the first one's file before it writes. The interleaved case —
 /// a write landing between another write's read and its replacement — is
 /// `a_write_that_lost_a_race_starts_over_against_the_newer_file`.
 #[test]
-fn a_second_daemons_write_keeps_the_higher_count() {
+fn a_second_daemons_turns_are_added_to_the_first_daemons() {
     let dir = tempfile::tempdir().expect("temporary directory");
     let path = dir.path().join("spend.json");
 
@@ -1094,8 +1095,11 @@ fn a_second_daemons_write_keeps_the_higher_count() {
 
     one.record_spend(None, 500, 0);
     two.record_spend(None, 10, 0);
+    one.record_spend(None, 7, 0);
 
-    assert_eq!(store_tallying("main", &path).spent_for("main").total(), 500);
+    assert_eq!(store_tallying("main", &path).spent_for("main").total(), 517);
+    // And each daemon reports the tally as the file has it after its write.
+    assert_eq!(one.spent_for("main").total(), 517);
 }
 
 /// Nothing in the tally is a credential (CLAUDE.md #7): an account name and
@@ -1208,8 +1212,8 @@ fn a_write_that_lost_a_race_starts_over_against_the_newer_file() {
     let landed = store_tallying("main", &path);
     assert_eq!(
         landed.spent_for("main").total(),
-        9_000,
-        "the other daemon's count must survive this write"
+        9_001,
+        "the other daemon's count must survive this write, with this one's turn"
     );
 }
 
@@ -2114,4 +2118,30 @@ fn the_hour_an_ask_spends_is_kept_across_a_restart() {
         restarted.claim_ask("claude", now + proxenos::usage::ASK_EVERY_SECS),
         Ok(())
     );
+}
+
+/// Turns finishing together in one daemon each add their own count once: a
+/// write adds only what is unwritten, and one write runs at a time.
+#[test]
+fn turns_finishing_together_are_each_counted_once() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("spend.json");
+    let store = std::sync::Arc::new(store_tallying("main", &path));
+
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            let store = std::sync::Arc::clone(&store);
+            std::thread::spawn(move || {
+                for _ in 0..25 {
+                    store.record_spend(None, 3, 1);
+                }
+            })
+        })
+        .collect();
+    for thread in threads {
+        thread.join().expect("a writer");
+    }
+
+    assert_eq!(store.spent_for("main").total(), 800);
+    assert_eq!(store_tallying("main", &path).spent_for("main").total(), 800);
 }

@@ -1272,9 +1272,10 @@ that is not true.
 `PROXENOS_HOME` can point two daemons at one directory, and neither sees the
 other's turns.
 
-- The **tally** merge takes the higher count per account. Before replacing,
-  the file is re-read; if it changed, the attempt starts over. After five
-  attempts the last one writes what it has.
+- The **tally** merge adds what this daemon counted since its last write to
+  what the file holds, per account. Before replacing, the file is re-read; if
+  it changed, the attempt starts over. After five attempts the last one writes
+  what it has. A write that fails keeps its count for the next one.
 - A **snapshot** write reads once, keeps the **later** record per account, and
   replaces. `usage --refresh` replaces a record the same way a turn does.
 
@@ -1282,8 +1283,10 @@ No lock is taken.
 
 ##### Why
 
-A tally accumulates, so the higher count is closer to the truth; a snapshot
-replaces, so the later measurement describes the account now. The comparison
+A tally accumulates, and each daemon's turns are its own, so each adds what it
+counted; taking the higher of two totals kept one daemon's turns and dropped
+every turn of the other. A snapshot replaces, so the later measurement
+describes the account now. The comparison
 and the rename are two operations and a write landing between them is lost:
 that costs a smaller floor, never a corrupted file or a count that moved
 backwards. A lost credential write is a whole account, which is why the
