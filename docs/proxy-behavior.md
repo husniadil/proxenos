@@ -547,6 +547,9 @@ it would fork a conversation, and lose its calibration, on any change to it.
 
 A server-assigned `id` is ignored. A tool call's `arguments` string is compared
 as a parsed JSON value where it parses, and as literal text where it does not.
+Within it, an integral number written as a float (`2.0`) is the integer (`2`),
+up to 2^53, past which numbers are compared as written. A message's adjacent
+text parts of one kind are compared joined.
 
 ##### Why
 
@@ -556,6 +559,10 @@ the client replays the object it parsed in its own serializer's order. Compared
 as text, every turn after the model wrote a file forked the conversation and
 uploaded the whole history again (measured live). Arguments that do not parse
 have no canonical form, and inventing one would make two different calls equal.
+Serializers differ on `2.0` too, and past 2^53 a double holds two integers as
+one, so equal as doubles is not equal there. The backend may return one message
+as several text parts; the client is shown them as one block and replays one
+part holding the same text.
 
 #### A shared prefix may match; a partial prefix may not
 
