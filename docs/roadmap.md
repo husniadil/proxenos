@@ -207,11 +207,13 @@ holds an unguessable code.
 
 #### Which patterns does the schema validator refuse beyond the ones measured?
 
-**Open.** §2.4's allow-list was written against the refusals observed, and
-some patterns it keeps may still be refused: a variable-width lookbehind, an
-escape such as `\b` inside a class, a repetition count past the validator's
-own limit. A false accept fails the whole turn. Settle by sending one tool per
-candidate pattern and reading which the backend refuses.
+**Settled live, for fifteen candidates.** One tool per pattern, each kept by
+§2.4's allow-list. Refused, as `"…" is not a "regex"`: `[\b]` and `\Z`. Taken:
+variable-width and unbounded lookbehind, both ways (`(?<=ab|c)x`, `(?<=a+)b`,
+`(?<!foo|ba)r`), `\b` and `\B` outside a class, `\A`, counts of `{1001}`,
+`{1,100000}` and `{0,65536}`, `(a+)+$`, a lazy `{2}?`, `$^`, and `[^\]]`.
+**Falsified:** that the allow-list's escapes were all taken. `\Z` everywhere
+and a word boundary inside a class are now dropped.
 
 #### What does the backend send for a prewarm frame?
 

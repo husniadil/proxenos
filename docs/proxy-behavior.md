@@ -250,9 +250,11 @@ its subschema.
 
 The validator's dialect is narrower than the one the client's schemas are
 written against: no Unicode property escapes (`\p{Cc}`), no braced code points
-(`\u{1F600}`), no control escapes (`\cA`), no `(?<name>` group, and no class
-range whose endpoint is an escape. Lookahead, lookbehind, non-capturing groups,
-and plain escapes it takes.
+(`\u{1F600}`), no control escapes (`\cA`), no `(?<name>` group, no class
+range whose endpoint is an escape, no `\Z`, and no `\b` inside a class.
+Lookahead, lookbehind of any width, non-capturing groups, `\A`, `\b` outside a
+class, counts up to 100,000, and plain escapes it takes. `\B` inside a class
+is dropped with `\b` there, by the allow-list rule below.
 
 ##### Why
 

@@ -168,26 +168,14 @@ fn supported(pattern: &str) -> bool {
 }
 
 /// What may follow a backslash. Letters are an allow-list; a digit is a group
-/// reference the validator resolves and may not find.
+/// reference the validator resolves and may not find. `\A` is taken and `\Z`
+/// refused, as measured live.
 fn escape(c: Option<char>) -> bool {
     match c {
         Some(c) if c.is_ascii_alphanumeric() => {
             matches!(
                 c,
-                'd' | 'D'
-                    | 'w'
-                    | 'W'
-                    | 's'
-                    | 'S'
-                    | 'b'
-                    | 'B'
-                    | 'A'
-                    | 'Z'
-                    | 'n'
-                    | 'r'
-                    | 't'
-                    | 'f'
-                    | 'v'
+                'd' | 'D' | 'w' | 'W' | 's' | 'S' | 'b' | 'B' | 'A' | 'n' | 'r' | 't' | 'f' | 'v'
             )
         }
         Some(c) => c.is_ascii_punctuation(),
@@ -209,7 +197,10 @@ fn class(chars: &mut std::iter::Peekable<std::str::Chars>) -> bool {
             // An empty class is an error upstream, not an unmatchable class.
             Some(']') => return members > 0,
             Some('\\') => {
-                if !escape(chars.next()) {
+                // A word boundary is an assertion, never a member: the
+                // validator refuses `[\b]`, measured live.
+                let escaped = chars.next();
+                if matches!(escaped, Some('b' | 'B')) || !escape(escaped) {
                     return false;
                 }
                 previous_was_escape = true;
