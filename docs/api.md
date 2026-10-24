@@ -180,7 +180,6 @@ Every failure returns an Anthropic-shaped body:
 | Upstream 401 or 403 | `authentication_error` | 401 |
 | Upstream rejection, any other status | `api_error` | upstream status |
 | Credentials invalid or absent | `authentication_error` | 401 |
-| Credentials transiently unavailable | `overloaded_error` | 529 |
 | Missing or wrong token on the remote door | `authentication_error` | 401 |
 | Launch tag naming no stored account | `authentication_error` | 401 |
 | Pinned tier naming an account not stored, or holding a credential the endpoint does not take | `invalid_request_error` | 400 |
@@ -194,6 +193,11 @@ Every failure returns an Anthropic-shaped body:
 
 The proxy builds no retry loop of its own. Claude Code's backoff drives the
 retryable types.
+
+Every credential failure is terminal. No account serving, no grant, a borrowed
+grant past its expiry, and a keychain item or file that cannot be read each wait
+on a person, to sign in, run the program that owns the profile, or repair the
+store, so each is a 401.
 
 ### Mid-stream failures
 
