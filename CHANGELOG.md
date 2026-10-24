@@ -6,6 +6,19 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.36.1]
+
+- **A tool pattern with `\Z`, or `\b` inside a class, no longer fails the
+  turn.** Both passed the pattern allow-list, and the backend's validator
+  refuses each as not a regex, so a tool carrying either rejected the whole
+  request. Measured live: `\Z` is now dropped everywhere, and `\b` or `\B`
+  inside a class. Thirteen other patterns the allow-list keeps, lookbehind of
+  any width and counts up to 100,000 among them, were taken.
+
+- **A document by URL is documented as refused.** The backend takes
+  `input_file.file_data` only as a data URL, so a URL-sourced document fails
+  the turn with that refusal. `proxy-behavior.md` §2.2 and roadmap §L say so.
+
 ## [0.36.0]
 
 - **On Windows, each `PROXENOS_HOME` has a control pipe of its own.** Every
