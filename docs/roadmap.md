@@ -66,8 +66,9 @@ from the upstream's protocol definitions and says so.
 
 Settling these falsified rules that no offline test could catch — the empty
 delta, the reasoning mismatch, the compressed WebSocket frame, the response's
-expiry field, the non-streaming request answered with a stream. Each was fixed
-by amending the spec in the same commit as the code.
+expiry field, the non-streaming request answered with a stream, the
+validator's `\Z` and `[\b]`, a document by URL. Each was fixed by amending the
+spec in the same commit as the code.
 
 New questions belong here as they are found.
 
@@ -224,10 +225,12 @@ its answer. Settle before prewarm is used: send one and read what comes back.
 
 #### Does the backend take a document by URL?
 
-**Open.** A URL-sourced `document` block is sent as `input_file.file_data`
-holding the URL, which is a data field. Whether the backend refuses it, reads
-it, or would take it as `file_url` is unmeasured. The client is not seen to
-send one.
+**Settled live: not as sent.** A URL-sourced `document` block goes as
+`input_file.file_data` holding the URL, and the backend refuses it:
+`input_file file_data normalization error: … must be a data URL`. The same PDF
+as base64 was read, its random code returned. Whether it would take the URL as
+`file_url` is still unmeasured, so the turn keeps failing with that refusal.
+The client is not seen to send one.
 
 #### Which refusals of a WebSocket upgrade mean the socket cannot be used?
 
