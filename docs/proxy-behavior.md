@@ -241,7 +241,8 @@ non-compliant schema is a request rejection, not a stricter model.
 
 Every `pattern` the backend's schema validator would refuse is removed, in the
 tool schema and in every subschema below it (`properties`, `patternProperties`,
-`$defs`, `definitions`, `dependentSchemas`, `items`, `prefixItems`,
+`$defs`, `definitions`, `dependentSchemas`, the schema form of draft-07's
+`dependencies`, `items`, `prefixItems`,
 `additionalItems`, `additionalProperties`, `unevaluated*`, `propertyNames`,
 `contains`, `not`, `if`/`then`/`else`, `allOf`/`anyOf`/`oneOf`). The keys of
 `patternProperties` are patterns too, and an unsupported key is dropped with
