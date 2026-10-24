@@ -1525,3 +1525,102 @@ async fn an_unterminated_final_event_over_http_is_delivered() {
     assert_eq!(events.len(), 2, "{events:?}");
     assert!(events[1].contains("response.completed"), "{events:?}");
 }
+
+/// An HTTP replay server whose body is these chunks, in order: a payload is
+/// written as one SSE event, and `None` fails the body there, as a connection
+/// cut mid-response does.
+async fn start_http_body(chunks: Vec<Option<Value>>) -> std::net::SocketAddr {
+    let app = axum::Router::new().route(
+        "/responses",
+        axum::routing::post(move || {
+            let chunks = chunks.clone();
+            async move {
+                // Each chunk a moment after the last, so what precedes a cut
+                // has reached the client before the connection fails.
+                let body = futures::stream::iter(chunks).then(|chunk| async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    match chunk {
+                        Some(event) => Ok(bytes::Bytes::from(format!("data: {event}\n\n"))),
+                        None => Err(std::io::Error::other("cut")),
+                    }
+                });
+                (
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    axum::body::Body::from_stream(body),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    addr
+}
+
+async fn http_turn(addr: std::net::SocketAddr) -> Vec<Result<String, proxenos::error::ProxyError>> {
+    let (events, _) = http_only(addr)
+        .send(
+            &request(items(json!([message("turn 0")]))),
+            &Baseline::new(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("the turn should start");
+    events.collect().await
+}
+
+/// An HTTP body that ends before the turn's terminal event is a cut, as a
+/// socket closed mid-turn is. Ending quietly let the translator close the
+/// message as a finished `end_turn` on HTTP while the same cut over a socket
+/// was an `overloaded_error` (§5.1).
+#[tokio::test]
+async fn an_http_body_that_ends_before_the_turn_completed_ends_with_an_error() {
+    let addr = start_http_body(vec![
+        Some(json!({ "type": "response.created", "response": { "id": "resp_1" } })),
+        Some(json!({ "type": "response.output_text.delta", "delta": "partial" })),
+    ])
+    .await;
+
+    let events = http_turn(addr).await;
+
+    let error = events
+        .last()
+        .expect("some events")
+        .as_ref()
+        .expect_err("the cut was reported as a clean end");
+    assert_eq!(
+        error.kind,
+        proxenos_core::anthropic::ErrorKind::OverloadedError
+    );
+}
+
+/// Once the terminal event is read, the turn is over. A body failing after it
+/// turned a finished turn into a failed one: an error after the client was
+/// told the message stopped, and no tally and no baseline for the turn.
+#[tokio::test]
+async fn an_http_body_failing_after_the_terminal_event_leaves_the_turn_finished() {
+    let addr = start_http_body(vec![
+        Some(json!({ "type": "response.created", "response": { "id": "resp_1" } })),
+        Some(json!({ "type": "response.output_text.delta", "delta": "whole" })),
+        Some(json!({ "type": "response.completed", "response": { "id": "resp_1" } })),
+        None,
+    ])
+    .await;
+
+    let events = http_turn(addr).await;
+
+    assert!(
+        events.iter().all(Result::is_ok),
+        "an error followed the terminal event: {events:?}"
+    );
+    assert!(
+        events
+            .last()
+            .and_then(|event| event.as_ref().ok())
+            .is_some_and(|payload| payload.contains("response.completed"))
+    );
+}

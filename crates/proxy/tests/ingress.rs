@@ -3111,9 +3111,10 @@ async fn a_non_streaming_failure_is_an_error_body() {
         )
         .await;
 
-    // A stream that simply ends without completing still describes a turn: the
-    // fold closes what is open rather than failing. What must never happen is
-    // an event stream reaching a caller that asked for JSON.
+    // A stream that ends without completing is a cut (§5.1), and the fold
+    // turns its error frame back into a status. What must never happen is an
+    // event stream reaching a caller that asked for JSON.
+    assert_eq!(response.status().as_u16(), 529);
     assert_eq!(
         response
             .headers()

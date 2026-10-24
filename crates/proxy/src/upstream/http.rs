@@ -193,11 +193,44 @@ impl Transport for HttpTransport {
                     stream::iter(payloads)
                 })
                 .flatten(),
-            )
-            .boxed();
+            );
 
-        Ok(events)
+        Ok(one_turn(events))
     }
+}
+
+/// A turn's events, ended at its terminal event, and failed where the body
+/// ends before one.
+///
+/// Past the terminal event nothing is read: a body error there would turn a
+/// finished turn into a failed one, after the client was told it ended. A body
+/// that ends with no terminal event is a cut, not an answer, and is reported
+/// as the WebSocket's cut is, so it never closes as a finished turn (§5.1).
+fn one_turn(
+    events: impl futures::Stream<Item = Result<String, ProxyError>> + Send + 'static,
+) -> EventStream {
+    stream::unfold(
+        (Box::pin(events), false),
+        |(mut events, ended)| async move {
+            if ended {
+                return None;
+            }
+            match events.next().await {
+                Some(Ok(payload)) => {
+                    let terminal = super::pool::ends_turn(&payload);
+                    Some((Ok(payload), (events, terminal)))
+                }
+                Some(Err(error)) => Some((Err(error), (events, true))),
+                None => Some((
+                    Err(ProxyError::overloaded(
+                        "the upstream stream ended before the turn completed".to_owned(),
+                    )),
+                    (events, true),
+                )),
+            }
+        },
+    )
+    .boxed()
 }
 
 /// Upstream bodies can be large. Enough to diagnose, not enough to fill a log.

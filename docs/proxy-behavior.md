@@ -997,15 +997,26 @@ receiving the arguments twice leaves it parsing the same JSON twice.
 `tool_use` when the turn produced any function call, `max_tokens` on an
 incomplete response, `end_turn` otherwise.
 
-#### A stream that ends without completing is closed
+#### A stream that ends without completing is a transport failure
 
-If the upstream stream ends after `message_start` without a terminal event, the
-open block is closed and `message_delta` and `message_stop` are emitted.
+On either transport, an upstream stream that ends before the turn's terminal
+event (`response.completed`, `response.incomplete`, `response.failed`, or
+`error`) ends in an `overloaded_error` (below), and the baseline does not
+advance (§4.3). Past the terminal event nothing more is read, so a transport
+failure after it leaves the turn finished.
+
+Where a stream of events ends with no transport to report the cut, the open
+block is closed and `message_delta` and `message_stop` are emitted.
 
 ##### Why
 
-A message left open hangs the client on a turn the backend abandoned, which is
-indistinguishable from a model still thinking.
+A truncated answer closed as `end_turn` reads as a finished one, and the client
+neither retries nor says anything; as a retryable error it is retried. The same
+cut was an error over a socket and a finished turn over HTTP. A failure after
+the terminal event would arrive after `message_stop`, and turn a turn the client
+already has into one with no tally and no baseline. A message left open hangs
+the client on a turn the backend abandoned, which is indistinguishable from a
+model still thinking.
 
 #### A refusal before the response starts is a status
 
@@ -1030,8 +1041,8 @@ frame, typed from its code: `server_is_overloaded` and `slow_down` →
 `insufficient_quota` → `rate_limit_error`; `context_length_exceeded`,
 `invalid_prompt`, and `bio_policy` → `invalid_request_error`; anything else →
 `api_error`. A transport failure mid-stream is an `overloaded_error` frame; a
-WebSocket closed before the turn's terminal event is one, and does not advance
-the baseline (§4.3).
+WebSocket closed, or an HTTP body ended, before the turn's terminal event is
+one, and does not advance the baseline (§4.3).
 
 ##### Why
 
@@ -1146,6 +1157,7 @@ status and an error body.
 | `crates/core/src/anthropic/stream.rs` | Outbound frame types |
 | `crates/core/src/anthropic/aggregate.rs` | `aggregate`, the non-streaming fold |
 | `crates/proxy/src/ingress.rs` | `peek_preamble`, `upstream_refusal`, `frame_stream`, `json_response`, empty-stream capture |
+| `crates/proxy/src/upstream/http.rs`, `crates/proxy/src/upstream/pool.rs` | A turn's events ended at its terminal event, and a cut before it reported (`one_turn`, `pump`) |
 | `crates/proxy/src/surface.rs` | The surface vocabulary comparison |
 | `crates/core/tests/response_translation.rs`, `crates/core/tests/response_snapshots.rs` | Frame sequences |
 | `crates/core/tests/sse_framing.rs` | SSE framing |
