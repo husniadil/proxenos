@@ -987,10 +987,17 @@ A function call announced without a name waits for its completed item, which
 then opens the block. A completed call whose arguments were streamed does not
 repeat them.
 
+A call announced, or completed, while another call's block is open waits for
+that block to close, holding the argument fragments that arrive for it
+meanwhile. Calls that waited open in the order they were announced.
+
 ##### Why
 
 An Anthropic client cannot patch a block header after it is emitted, and
-receiving the arguments twice leaves it parsing the same JSON twice.
+receiving the arguments twice leaves it parsing the same JSON twice. Only one
+block is open at a time, and a closed block cannot be written to again:
+opening the second call closed the first, whose later fragments then had
+nowhere to go, and it reached the client with input `{}` or cut-off JSON.
 
 #### The stop reason
 

@@ -476,6 +476,96 @@ fn interleaved_function_calls_are_each_emitted_once() {
     assert_eq!(ids, ["call_a", "call_b"]);
 }
 
+/// The input each `tool_use` block carries once its deltas are joined, in
+/// block order.
+fn tool_inputs(frames: &[Value]) -> Vec<(String, String)> {
+    let mut blocks: Vec<(u64, String, String)> = Vec::new();
+    for frame in frames {
+        match frame["type"].as_str() {
+            Some("content_block_start") if frame["content_block"]["type"] == "tool_use" => {
+                blocks.push((
+                    frame["index"].as_u64().unwrap(),
+                    frame["content_block"]["id"].as_str().unwrap().to_owned(),
+                    String::new(),
+                ));
+            }
+            Some("content_block_delta") if frame["delta"]["type"] == "input_json_delta" => {
+                let index = frame["index"].as_u64().unwrap();
+                let block = blocks
+                    .iter_mut()
+                    .find(|(at, _, _)| *at == index)
+                    .expect("a delta for an open tool_use block");
+                block
+                    .2
+                    .push_str(frame["delta"]["partial_json"].as_str().unwrap());
+            }
+            _ => {}
+        }
+    }
+    blocks
+        .into_iter()
+        .map(|(_, id, input)| (id, input))
+        .collect()
+}
+
+/// Two calls announced before either's arguments stream. The second's start
+/// closed the first's block, the first's argument deltas then found no block
+/// open for them, and its completion found it already emitted, so the first
+/// call reached the client with input `{}`. The second call now waits for the
+/// first to finish, and each carries its own arguments once.
+#[test]
+fn a_call_announced_while_another_streams_waits_its_turn() {
+    let call = |id: &str, path: &str| json!({ "type": "function_call", "id": format!("fc_{id}"), "call_id": format!("call_{id}"), "name": "Read", "arguments": format!("{{\"file_path\":\"{path}\"}}") });
+    let frames = run(&[
+        json!({ "type": "response.created", "response": { "id": "resp_1" } }),
+        json!({ "type": "response.output_item.added", "item": call("a", "/tmp/a") }),
+        json!({ "type": "response.output_item.added", "item": call("b", "/tmp/b") }),
+        json!({ "type": "response.function_call_arguments.delta", "item_id": "fc_a", "delta": "{\"file_path\":" }),
+        json!({ "type": "response.function_call_arguments.delta", "item_id": "fc_b", "delta": "{\"file_path\":\"/tmp/b\"}" }),
+        json!({ "type": "response.function_call_arguments.delta", "item_id": "fc_a", "delta": "\"/tmp/a\"}" }),
+        json!({ "type": "response.output_item.done", "item": call("b", "/tmp/b") }),
+        json!({ "type": "response.output_item.done", "item": call("a", "/tmp/a") }),
+        json!({ "type": "response.completed", "response": { "id": "resp_1" } }),
+    ]);
+
+    assert_eq!(
+        tool_inputs(&frames),
+        [
+            ("call_a".to_owned(), r#"{"file_path":"/tmp/a"}"#.to_owned()),
+            ("call_b".to_owned(), r#"{"file_path":"/tmp/b"}"#.to_owned()),
+        ]
+    );
+    let stops = shape(&frames)
+        .iter()
+        .filter(|kind| **kind == "content_block_stop")
+        .count();
+    assert_eq!(stops, 2, "{frames:#?}");
+}
+
+/// A call completed with no `added` event while another call's block is open
+/// waits for that block too, rather than closing it early.
+#[test]
+fn a_call_completed_while_another_streams_waits_its_turn() {
+    let call = |id: &str, path: &str| json!({ "type": "function_call", "id": format!("fc_{id}"), "call_id": format!("call_{id}"), "name": "Read", "arguments": format!("{{\"file_path\":\"{path}\"}}") });
+    let frames = run(&[
+        json!({ "type": "response.created", "response": { "id": "resp_1" } }),
+        json!({ "type": "response.output_item.added", "item": call("a", "/tmp/a") }),
+        json!({ "type": "response.function_call_arguments.delta", "item_id": "fc_a", "delta": "{\"file_path\":" }),
+        json!({ "type": "response.output_item.done", "item": call("b", "/tmp/b") }),
+        json!({ "type": "response.function_call_arguments.delta", "item_id": "fc_a", "delta": "\"/tmp/a\"}" }),
+        json!({ "type": "response.output_item.done", "item": call("a", "/tmp/a") }),
+        json!({ "type": "response.completed", "response": { "id": "resp_1" } }),
+    ]);
+
+    assert_eq!(
+        tool_inputs(&frames),
+        [
+            ("call_a".to_owned(), r#"{"file_path":"/tmp/a"}"#.to_owned()),
+            ("call_b".to_owned(), r#"{"file_path":"/tmp/b"}"#.to_owned()),
+        ]
+    );
+}
+
 /// A `usage` that is present but null is not a usage block. Read as one, every
 /// count became zero at the end of the turn, and the context meter collapsed.
 #[test]

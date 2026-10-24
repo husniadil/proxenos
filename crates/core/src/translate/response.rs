@@ -65,6 +65,11 @@ pub struct ResponseTranslator {
     /// Calls already given a block. An item completing after another call's
     /// start closed its block is not opened a second time.
     emitted_calls: std::collections::BTreeSet<String>,
+    /// Calls announced, or completed, while another call's block was open.
+    /// Each waits for the block before it to close, holding the arguments
+    /// that arrived meanwhile, because only one block may be open and a
+    /// closed block cannot be written to again (§5.1).
+    pending: Vec<PendingCall>,
     stop_reason: StopReason,
     usage: Usage,
     /// §5.2 — the searches this turn ran, and the sources it drew on. Both are
@@ -76,6 +81,17 @@ pub struct ResponseTranslator {
     /// §3.3 — reasoning items the server returned, for the session to re-inject
     /// on the next request.
     reasoning: Vec<crate::responses::InputItem>,
+}
+
+#[derive(Debug)]
+struct PendingCall {
+    item_id: String,
+    call_id: String,
+    name: String,
+    /// Argument fragments streamed while it waited, in order.
+    streamed: String,
+    /// The full arguments its completed item carried, once it completed.
+    completed: Option<String>,
 }
 
 #[derive(Debug)]
@@ -98,6 +114,7 @@ impl ResponseTranslator {
             next_index: 0,
             saw_tool_call: false,
             emitted_calls: std::collections::BTreeSet::new(),
+            pending: Vec::new(),
             stop_reason: StopReason::EndTurn,
             searches: Vec::new(),
             sources: Vec::new(),
@@ -227,6 +244,7 @@ impl ResponseTranslator {
         }
         self.finished = true;
         self.close_block(frames);
+        self.drain_pending(true, frames);
         self.emit_searches(frames);
 
         if self.saw_tool_call && self.stop_reason == StopReason::EndTurn {
@@ -260,13 +278,40 @@ impl ResponseTranslator {
         };
 
         self.start_message(frames);
-        self.open_tool_use(item, name, frames);
+        let call_id = call_id_of(item);
+        if self.emitted_calls.contains(&call_id) || self.is_pending(&call_id) {
+            return;
+        }
+        if self.another_call_open(&call_id) {
+            self.pending.push(PendingCall {
+                item_id: item_id_of(item),
+                call_id,
+                name,
+                streamed: String::new(),
+                completed: None,
+            });
+            return;
+        }
+        self.open_tool_use(item_id_of(item), call_id, name, frames);
     }
 
     fn arguments_delta(&mut self, event: &Value, frames: &mut Vec<Frame>) {
         let Some(partial_json) = text_field(event, "delta") else {
             return;
         };
+        let target = text_field(event, "item_id").or_else(|| text_field(event, "call_id"));
+
+        // A fragment for a call still waiting is held for it.
+        if let Some(target) = &target
+            && let Some(waiting) = self
+                .pending
+                .iter_mut()
+                .find(|call| &call.item_id == target || &call.call_id == target)
+        {
+            waiting.streamed.push_str(&partial_json);
+            return;
+        }
+
         let OpenBlock::ToolUse {
             item_id, call_id, ..
         } = &self.open
@@ -275,7 +320,6 @@ impl ResponseTranslator {
         };
 
         // Only forward fragments belonging to the block that is open.
-        let target = text_field(event, "item_id").or_else(|| text_field(event, "call_id"));
         if target.is_some_and(|target| &target != item_id && &target != call_id) {
             return;
         }
@@ -336,7 +380,25 @@ impl ResponseTranslator {
             if self.emitted_calls.contains(&call_id) {
                 return;
             }
-            self.open_tool_use(item, name, frames);
+            let arguments = text_field(item, "arguments").unwrap_or_default();
+            if let Some(waiting) = self.pending.iter_mut().find(|call| call.call_id == call_id) {
+                waiting.completed = Some(arguments);
+                if !matches!(self.open, OpenBlock::ToolUse { .. }) {
+                    self.drain_pending(false, frames);
+                }
+                return;
+            }
+            if self.another_call_open(&call_id) {
+                self.pending.push(PendingCall {
+                    item_id: item_id_of(item),
+                    call_id,
+                    name,
+                    streamed: String::new(),
+                    completed: Some(arguments),
+                });
+                return;
+            }
+            self.open_tool_use(item_id_of(item), call_id, name, frames);
         }
 
         // The completed item repeats the full arguments. Forward them only if
@@ -361,11 +423,60 @@ impl ResponseTranslator {
         }
 
         self.close_block(frames);
+        self.drain_pending(false, frames);
     }
 
-    fn open_tool_use(&mut self, item: &Value, name: String, frames: &mut Vec<Frame>) {
+    fn is_pending(&self, call_id: &str) -> bool {
+        self.pending.iter().any(|call| call.call_id == call_id)
+    }
+
+    /// Whether a block for a different call is open now.
+    fn another_call_open(&self, call_id: &str) -> bool {
+        matches!(&self.open, OpenBlock::ToolUse { call_id: open, .. } if open != call_id)
+    }
+
+    /// Open the calls that waited, in the order they were announced, now that
+    /// no call's block is open. Each gets what it streamed meanwhile, or its
+    /// completed arguments where nothing streamed. One that has completed is
+    /// closed and the next opened; one still streaming is left open for what
+    /// follows. `closing` closes even that one, since the message is ending.
+    fn drain_pending(&mut self, closing: bool, frames: &mut Vec<Frame>) {
+        while !matches!(self.open, OpenBlock::ToolUse { .. }) && !self.pending.is_empty() {
+            let waiting = self.pending.remove(0);
+            self.open_tool_use(waiting.item_id, waiting.call_id, waiting.name, frames);
+            let arguments = if waiting.streamed.is_empty() {
+                waiting.completed.clone().unwrap_or_default()
+            } else {
+                waiting.streamed
+            };
+            if !arguments.is_empty() {
+                if let OpenBlock::ToolUse {
+                    streamed_arguments, ..
+                } = &mut self.open
+                {
+                    *streamed_arguments = true;
+                }
+                self.push_delta(
+                    Delta::InputJsonDelta {
+                        partial_json: arguments,
+                    },
+                    frames,
+                );
+            }
+            if waiting.completed.is_some() || closing {
+                self.close_block(frames);
+            }
+        }
+    }
+
+    fn open_tool_use(
+        &mut self,
+        item_id: String,
+        call_id: String,
+        name: String,
+        frames: &mut Vec<Frame>,
+    ) {
         self.close_block(frames);
-        let call_id = call_id_of(item);
         self.saw_tool_call = true;
         self.emitted_calls.insert(call_id.clone());
 
@@ -378,7 +489,7 @@ impl ResponseTranslator {
             },
         });
         self.open = OpenBlock::ToolUse {
-            item_id: text_field(item, "id").unwrap_or_else(|| call_id.clone()),
+            item_id,
             call_id,
             streamed_arguments: false,
         };
@@ -616,6 +727,12 @@ fn number(value: &Value, field: &str) -> u64 {
 
 fn text_field(value: &Value, field: &str) -> Option<String> {
     value.get(field).and_then(Value::as_str).map(str::to_owned)
+}
+
+/// The upstream item's own id, which argument deltas name, falling back to
+/// the call id.
+fn item_id_of(item: &Value) -> String {
+    text_field(item, "id").unwrap_or_else(|| call_id_of(item))
 }
 
 /// A call is identified by `call_id`, falling back to `id`. The two differ
