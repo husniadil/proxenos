@@ -1400,6 +1400,28 @@ every turn. The estimate is never below one.
 `message_delta` carries cumulative final usage, so the true value replaces the
 estimate rather than adding to it.
 
+#### A completed turn with no usage keeps the estimate
+
+When the completed response carries no usage object (absent, or `null`),
+`message_delta` carries the `message_start` estimate: the estimated input and
+zero output. A non-streaming body, folded from those frames, carries the same.
+This reuses the `message_start` estimate, so §6.2 still has two points, and
+nothing records it as spent: the per-account tally adds nothing for such a turn
+(§6.1).
+
+##### Why
+
+The client reads `message_delta` usage as the turn's size. Zeros would collapse
+the context meter for a turn that did happen, which is the failure the
+`message_start` estimate exists to prevent. No figure was measured, so the
+estimate is what there is.
+
+##### Tried and dropped
+
+Reporting zeros, since no figure was measured. A `null` usage once read as a
+usage block did that, and the context meter collapsed at the end of every such
+turn.
+
 #### The raw estimate
 
 Characters divided by 3.6, rounded up, plus 4 tokens per item. The items are
@@ -1499,7 +1521,9 @@ visibly wrong, and it corrects on the next one.
 
 | File | What it holds |
 |---|---|
-| `crates/core/src/translate/response.rs` | `translate_usage`: the cached-token conversion |
+| `crates/core/src/translate/response.rs` | `translate_usage`: the cached-token conversion; the estimate kept when no usage arrives |
+| `crates/core/src/anthropic/aggregate.rs` | A non-streaming body's usage, taken from `message_delta` |
+| `crates/core/tests/response_translation.rs` | `a_null_usage_leaves_the_estimate_rather_than_zeroing_it` |
 | `crates/proxy/src/estimate.rs` | `CalibratedEstimator`, `Fit`, the raw estimate, the feature-gated tokenizer |
 | `crates/proxy/src/ingress.rs` | `count_tokens`, `calibrate`, `tally` |
 | `crates/proxy/src/usage.rs` | `UsageStore`: the tally, snapshot persistence, `restore`, `add_into`, `replace_file` |

@@ -179,7 +179,9 @@ impl From<BlockStart> for Open {
 ///
 /// The usage reported is the one `message_delta` carries, never the estimate in
 /// `message_start`: §6.1 makes the completed turn's figures authoritative, and
-/// a body that quoted the estimate would state a guess as a count.
+/// a body that quoted the estimate would state a guess as a count. A turn
+/// upstream reported no usage for carries the estimate in `message_delta`
+/// too, and so in the body (§6.2).
 pub fn aggregate(frames: &[Frame]) -> Result<MessageBody, ErrorBody> {
     let mut body: Option<MessageBody> = None;
     let mut open: Option<Open> = None;
