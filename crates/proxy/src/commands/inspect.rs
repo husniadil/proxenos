@@ -110,6 +110,11 @@ pub(crate) async fn statusline(args: cli::StatuslineArgs) -> Result<()> {
     let payload: serde_json::Value =
         serde_json::from_str(&input).unwrap_or(serde_json::Value::Null);
 
+    // One deadline for everything asked of a daemon here. A daemon that took
+    // the connection and never answered would otherwise hold the status line
+    // for good, which a missing daemon never does.
+    let deadline = tokio::time::Instant::now() + proxenos::statusline::DAEMON_WAIT;
+
     // §8.3 — a session on its own provider states its account's quota here,
     // for nothing, so it is handed to the daemon on this machine: the one
     // holding that profile, whichever daemon this process otherwise dials.
@@ -119,16 +124,21 @@ pub(crate) async fn statusline(args: cli::StatuslineArgs) -> Result<()> {
         let config_dir = std::env::var("CLAUDE_CONFIG_DIR")
             .ok()
             .filter(|dir| !dir.is_empty());
-        let _ = control::call(
-            &control::default_path(),
-            "usage.record",
-            Some(serde_json::json!({ "config_dir": config_dir, "rate_limits": limits })),
+        let _ = tokio::time::timeout_at(
+            deadline,
+            control::call(
+                &control::default_path(),
+                "usage.record",
+                Some(serde_json::json!({ "config_dir": config_dir, "rate_limits": limits })),
+            ),
         )
         .await;
     }
 
-    let usage = control::ask("usage", None)
+    let usage = tokio::time::timeout_at(deadline, control::ask("usage", None))
         .await
+        .ok()
+        .and_then(Result::ok)
         .unwrap_or(serde_json::Value::Null);
     let merged = proxenos::statusline::merge(payload, &usage);
 

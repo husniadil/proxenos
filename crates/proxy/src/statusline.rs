@@ -18,6 +18,11 @@
 
 use serde_json::Value;
 
+/// How long `statusline` waits on a daemon, for everything it asks, before it
+/// passes the payload through as it arrived. A local daemon answers in
+/// milliseconds; a status line that hangs is worse than one missing a figure.
+pub const DAEMON_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// The two windows the client's payload names, in minutes.
 const FIVE_HOURS: u64 = 5 * 60;
 const SEVEN_DAYS: u64 = 7 * 24 * 60;

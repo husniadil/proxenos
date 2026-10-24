@@ -797,7 +797,9 @@ this machine's daemon can file it under the right account.
 ### It never breaks the status line
 
 A daemon not running, a socket not answering, a payload that will not parse:
-each passes through unchanged.
+each passes through unchanged. Everything asked of a daemon shares one
+two-second deadline (`DAEMON_WAIT`), so a daemon that takes the connection and
+never answers costs that long and no longer.
 
 #### Why
 
@@ -821,7 +823,7 @@ every session that has it to prevent a case that may not be happening.
 
 | File | What it holds |
 |---|---|
-| `crates/proxy/src/statusline.rs` | The merge, the session check, and the payload's own quota |
+| `crates/proxy/src/statusline.rs` | The merge, the session check, the payload's own quota, and `DAEMON_WAIT` |
 | `crates/proxy/src/commands/inspect.rs` | The verb |
 
 ### 2.2 `env` and `settings`

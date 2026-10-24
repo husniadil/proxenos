@@ -282,3 +282,72 @@ fn a_payload_states_its_own_quota_only_where_the_client_put_one() {
         None
     );
 }
+
+/// A daemon that takes the connection and never answers is the case a missing
+/// daemon is not: the call would wait for good, and the status line with it.
+/// The wait is bounded, and the payload passes through as it arrived.
+#[cfg(unix)]
+#[test]
+fn a_daemon_that_never_answers_does_not_hold_the_status_line() {
+    use std::io::Write;
+
+    let home = tempfile::tempdir().unwrap();
+    let listener =
+        std::os::unix::net::UnixListener::bind(home.path().join("proxenos.sock")).unwrap();
+    let held = std::thread::spawn(move || {
+        let mut connections = Vec::new();
+        for stream in listener.incoming().take(2) {
+            connections.push(stream.unwrap());
+        }
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        drop(connections);
+    });
+
+    let input = payload().to_string();
+    let started = std::time::Instant::now();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .arg("statusline")
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
+        .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:8787")
+        .env("PROXENOS_HOME", home.path())
+        .env("HOME", home.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+
+    let mut stdout = child.stdout.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut printed = Vec::new();
+        std::io::Read::read_to_end(&mut stdout, &mut printed).unwrap();
+        printed
+    });
+
+    let mut status = None;
+    while started.elapsed() < std::time::Duration::from_secs(10) {
+        if let Some(exited) = child.try_wait().unwrap() {
+            status = Some(exited);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let Some(status) = status else {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("the status line waited on the daemon for good");
+    };
+    drop(held);
+
+    assert!(status.success());
+    let printed: serde_json::Value = serde_json::from_slice(&reader.join().unwrap()).unwrap();
+    assert_eq!(printed, payload());
+}
