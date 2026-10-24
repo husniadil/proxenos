@@ -524,6 +524,24 @@ This is the same predicate that governs incremental upload (§4.3), so session
 matching and delta computation share one definition rather than two that can
 disagree.
 
+#### A session is held to one model and one account
+
+A request matches only a session whose turns went to the same upstream model,
+as the same account (the launch tag, else the tier's pin, else whoever is
+serving), for the same model id the client named. Another model or account
+replaying the same conversation starts a session of its own. The instructions
+are not part of identity.
+
+##### Why
+
+The baseline holds the backend's encrypted reasoning, made by one model for one
+account, and it is put back into the next request (§3.3); a side call on another
+tier that replays the main conversation was handed the main model's reasoning,
+and its own items advanced the main session's baseline, so the main
+conversation's next turn matched nothing and sent in full. A changed system
+prompt already makes the next turn a full send (§4.3), and holding identity to
+it would fork a conversation, and lose its calibration, on any change to it.
+
 #### Items are compared by value, not by encoding
 
 A server-assigned `id` is ignored. A tool call's `arguments` string is compared
@@ -553,8 +571,8 @@ score would graft one conversation onto another.
 
 #### What a session holds
 
-Its input baseline (what was sent plus the output items the server added), the
-last request and response id, its transport binding (§4), its discovered tool
+Its scope (§3.1), its input baseline (what was sent plus the output items the
+server added), the last request and response id, its transport binding (§4), its discovered tool
 names (§2.5), its retained reasoning items (§3.3), its estimator fit (§6.3),
 and its id, which is both the `session_id` header and `prompt_cache_key`.
 
@@ -592,7 +610,9 @@ the baseline says it did, and the next delta skips them.
 
 #### Sizing never creates a session
 
-`count_tokens` looks a conversation up without creating or reordering one.
+`count_tokens` looks a conversation up without creating or reordering one, by
+the model id the client named, which is all of the scope a sizing request
+carries.
 
 ##### Why
 
@@ -654,7 +674,8 @@ client as model output.
 | File | What it holds |
 |---|---|
 | `crates/core/src/session.rs` | `extends`, `delta`, `reconcile`, value comparison of items, `Baseline` |
-| `crates/proxy/src/session.rs` | `Session`, `SessionStore`: capacity, idle expiry, longest match, seeding, read-only lookup |
+| `crates/proxy/src/session.rs` | `Session`, `Scope`, `SessionStore`: capacity, idle expiry, longest match, seeding, read-only lookup |
+| `crates/proxy/tests/sessions.rs` | The store's capacity, eviction, longest match, scope, and read-only lookup |
 | `crates/core/src/translate/response.rs` | `retained_reasoning`, collected from completed reasoning items |
 | `crates/proxy/src/ingress.rs` | Reconciling before the send, advancing the baseline when the stream ends |
 | `crates/proxy/src/control/handler.rs` | Clearing sessions on a select or a removal of the serving account |

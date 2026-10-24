@@ -399,7 +399,7 @@ async fn count_tokens(
     };
 
     let probe = translate_request(&request, &TranslateOptions::default());
-    let estimate = match state.sessions.lookup(&probe.input) {
+    let estimate = match state.sessions.lookup(&probe.input, &request.model) {
         Some(session) => session
             .estimator
             .estimate_sending(&request, &session.discovered()),
@@ -739,7 +739,16 @@ async fn messages(
     // Translated once with no session knowledge, purely to derive the item
     // sequence this conversation is identified by (§3.1).
     let probe = translate_request(&request, &TranslateOptions::default());
-    let session = state.sessions.resolve(&probe.input);
+    let session = state.sessions.resolve(
+        &probe.input,
+        &crate::session::Scope {
+            requested: request.model.clone(),
+            model: upstream_model
+                .clone()
+                .unwrap_or_else(|| request.model.clone()),
+            account: account.clone(),
+        },
+    );
     session.record_discovered(discovered_tool_names(&request));
 
     // §2.7 — the ceiling is the operator's, capped again by what this model

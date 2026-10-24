@@ -24,7 +24,29 @@ const CAPACITY: usize = 64;
 /// conversation has ended, so idleness is the only signal there is.
 const IDLE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
+/// What a conversation is held to besides its content: the model it is sent
+/// to and the account it is made as (§3.1).
+///
+/// The baseline holds the backend's encrypted reasoning, which one model made
+/// for one account, and a request for another model or as another account
+/// that replays the same conversation is a conversation of its own. The
+/// instructions are not part of it: a changed system prompt already makes the
+/// next turn a full send (§4.3), and holding identity to it would fork a
+/// conversation, and lose its calibration, on any change to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scope {
+    /// The model as the client named it, which sizing looks a conversation up
+    /// by.
+    pub requested: String,
+    /// The upstream model the turn is sent to.
+    pub model: String,
+    /// The account the turn is made as: the launch tag, else the tier's pin,
+    /// else `None` for whoever is serving.
+    pub account: Option<String>,
+}
+
 pub struct Session {
+    pub scope: Scope,
     pub baseline: Mutex<Baseline>,
     /// Whether a turn has ever completed on this conversation. Until one has,
     /// the baseline is provisional and may be replaced; afterwards it is what
@@ -55,8 +77,9 @@ pub struct Session {
 }
 
 impl Session {
-    fn new(cache_key: String) -> Self {
+    fn new(cache_key: String, scope: Scope) -> Self {
         Self {
+            scope,
             baseline: Mutex::new(Baseline::new()),
             confirmed: std::sync::atomic::AtomicBool::new(false),
             conduit: tokio::sync::OnceCell::new(),
@@ -222,9 +245,9 @@ impl SessionStore {
     /// A request matching several sessions takes the one with the longest
     /// baseline: that is the most specific continuation, and any shorter match
     /// is a prefix of it.
-    pub fn resolve(&self, input: &[InputItem]) -> Arc<Session> {
+    pub fn resolve(&self, input: &[InputItem], scope: &Scope) -> Arc<Session> {
         let Ok(mut sessions) = self.sessions.lock() else {
-            return Arc::new(Session::new(self.next_key()));
+            return Arc::new(Session::new(self.next_key(), scope.clone()));
         };
 
         // Forget what nobody is having. Done here rather than on a timer: the
@@ -233,7 +256,7 @@ impl SessionStore {
         sessions.retain(|session| session.idle_for() < IDLE);
 
         let session_key = self.next_key();
-        let matched = Self::best_match(&sessions, input);
+        let matched = Self::best_match(&sessions, input, |held| held == scope);
 
         if let Some(index) = matched {
             // Most recently used moves to the front, so eviction takes the
@@ -254,7 +277,7 @@ impl SessionStore {
             "new conversation"
         );
 
-        let session = Arc::new(Session::new(session_key));
+        let session = Arc::new(Session::new(session_key, scope.clone()));
         // Claimed under the lock: an empty baseline matches any input, so a
         // concurrent first request would otherwise join this conversation
         // before its turn got as far as seeding it (§3.2).
@@ -271,9 +294,12 @@ impl SessionStore {
     /// store: the entry would never advance, it would match every first turn
     /// that followed, and at capacity it would evict a conversation someone is
     /// actually having.
-    pub fn lookup(&self, input: &[InputItem]) -> Option<Arc<Session>> {
+    ///
+    /// Looked up by the model as the client named it, which is all a sizing
+    /// request carries of the scope.
+    pub fn lookup(&self, input: &[InputItem], requested: &str) -> Option<Arc<Session>> {
         let sessions = self.sessions.lock().ok()?;
-        Self::best_match(&sessions, input)
+        Self::best_match(&sessions, input, |held| held.requested == requested)
             .and_then(|index| sessions.get(index))
             .map(Arc::clone)
     }
@@ -287,10 +313,15 @@ impl SessionStore {
     /// item the client cannot replay, no replay extends it again, and every
     /// later turn silently starts a new session — losing its calibration, its
     /// discovered tools, and every delta with it.
-    fn best_match(sessions: &[Arc<Session>], input: &[InputItem]) -> Option<usize> {
+    fn best_match(
+        sessions: &[Arc<Session>],
+        input: &[InputItem],
+        in_scope: impl Fn(&Scope) -> bool,
+    ) -> Option<usize> {
         sessions
             .iter()
             .enumerate()
+            .filter(|(_, session)| in_scope(&session.scope))
             .filter(|(_, session)| {
                 session
                     .baseline

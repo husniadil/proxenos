@@ -2983,7 +2983,7 @@ async fn selecting_an_account_ends_conversations_bound_to_the_previous_one() {
         role: proxenos_core::responses::ItemRole::User,
         content: Vec::new(),
     }];
-    let _session = harness.sessions.resolve(&input);
+    let _session = harness.sessions.resolve(&input, &test_scope());
     assert_eq!(harness.sessions.len(), 1);
 
     harness
@@ -3021,7 +3021,7 @@ async fn selecting_the_serving_account_changes_nothing_and_says_so() {
         role: proxenos_core::responses::ItemRole::User,
         content: Vec::new(),
     }];
-    let _session = harness.sessions.resolve(&input);
+    let _session = harness.sessions.resolve(&input, &test_scope());
     assert_eq!(harness.sessions.len(), 1);
 
     let answer = harness
@@ -3209,7 +3209,7 @@ async fn a_grant_that_becomes_another_account_has_its_catalog_fetched_again() {
         role: proxenos_core::responses::ItemRole::User,
         content: Vec::new(),
     }];
-    let _session = harness.sessions.resolve(&input);
+    let _session = harness.sessions.resolve(&input, &test_scope());
     assert_eq!(harness.sessions.len(), 1);
 
     // The owning program signs the profile in as another account.
@@ -6970,7 +6970,7 @@ async fn reloading_the_serving_profile_elsewhere_drops_its_conversations() {
         "content": [{ "type": "input_text", "text": "hello" }],
     }]))
     .unwrap();
-    state.sessions.resolve(&input);
+    state.sessions.resolve(&input, &test_scope());
     assert_eq!(state.sessions.len(), 1);
 
     std::fs::write(
@@ -7006,7 +7006,7 @@ async fn reloading_around_the_serving_profile_keeps_its_conversations() {
         "content": [{ "type": "input_text", "text": "hello" }],
     }]))
     .unwrap();
-    state.sessions.resolve(&input);
+    state.sessions.resolve(&input, &test_scope());
 
     std::fs::write(
         dir.path().join("config.toml"),
@@ -7763,4 +7763,14 @@ async fn a_linked_configuration_file_is_written_through_its_link() {
         "the link was replaced"
     );
     assert!(std::fs::read_to_string(&target).unwrap().contains("high"));
+}
+
+/// The scope a conversation is held to, for a test that resolves one
+/// directly rather than through a turn.
+fn test_scope() -> proxenos::session::Scope {
+    proxenos::session::Scope {
+        requested: "claude-sonnet-5".to_owned(),
+        model: "claude-sonnet-5".to_owned(),
+        account: None,
+    }
 }
