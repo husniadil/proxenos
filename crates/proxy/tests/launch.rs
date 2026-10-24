@@ -160,15 +160,17 @@ fn no_policy_means_no_flag() {
 /// a caller's own `--settings` is not refused for a collision with nothing.
 #[test]
 fn an_empty_policy_document_is_no_policy() {
-    assert_eq!(launch::policy_of(Some(&json!({}))), None);
+    assert_eq!(launch::policy_of(Some(&serde_json::json!({}))), None);
     assert_eq!(launch::policy_of(Some(&serde_json::Value::Null)), None);
     assert_eq!(launch::policy_of(None), None);
     assert_eq!(
-        launch::policy_of(Some(&json!({ "attribution": { "commit": "" } }))),
+        launch::policy_of(Some(
+            &serde_json::json!({ "attribution": { "commit": "" } })
+        )),
         Some(r#"{"attribution":{"commit":""}}"#.to_owned())
     );
 
-    let policy = launch::policy_of(Some(&json!({})));
+    let policy = launch::policy_of(Some(&serde_json::json!({})));
     let plan = launch::plan(
         &command(&["claude", "--settings", "theirs"]),
         policy.as_deref(),
