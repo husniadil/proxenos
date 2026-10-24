@@ -102,7 +102,15 @@ pub enum ToolSpec {
     WebSearch {
         external_web_access: bool,
         indexed_web_access: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filters: Option<SearchFilters>,
     },
+}
+
+/// The domains a search is held to.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SearchFilters {
+    pub allowed_domains: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

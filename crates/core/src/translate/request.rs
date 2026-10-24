@@ -17,6 +17,7 @@ use crate::responses::InputItem;
 use crate::responses::ItemRole;
 use crate::responses::Reasoning;
 use crate::responses::ResponsesRequest;
+use crate::responses::SearchFilters;
 use crate::responses::Summary;
 use crate::responses::ToolChoice as ResponsesToolChoice;
 use crate::responses::ToolChoiceMode;
@@ -255,6 +256,11 @@ fn translate_tool(tool: &Tool) -> ToolSpec {
         return ToolSpec::WebSearch {
             external_web_access: true,
             indexed_web_access: true,
+            filters: tool
+                .allowed_domains
+                .clone()
+                .filter(|domains| !domains.is_empty())
+                .map(|allowed_domains| SearchFilters { allowed_domains }),
         };
     }
 

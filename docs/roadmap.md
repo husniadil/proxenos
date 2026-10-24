@@ -198,13 +198,14 @@ The probes now carry a real PNG and a real PDF and match on assembled text.
 
 #### Does the hosted search tool take the client's domain filters?
 
-**Open.** The client's search tool can carry `allowed_domains`,
-`blocked_domains` and `max_uses`, and §2.6 sends none of them, so a search the
-client restricted runs unrestricted. The Responses search tool documents a
-`filters.allowed_domains`; whether this backend takes it, what it does with a
-blocked list it has no field for, and whether anything stands for `max_uses`
-are unmeasured. Settle with a turn whose filter excludes the only source that
-holds an unguessable code.
+**Open — derived, not confirmed.** The client's search tool can carry
+`allowed_domains`, `blocked_domains` and `max_uses`. §2.6 sends the first as
+`filters.allowed_domains`, the field the Responses search tool documents, and
+the other two not at all. Whether this backend takes the filter is unmeasured.
+Settle with one recorded search held to one domain: a refusal, or any result
+off that domain, falsifies it. The result URLs come from the search tool, so
+the model cannot supply them. What a blocked list or `max_uses` would do stays
+unmeasured, since neither has a field to send.
 
 #### Which patterns does the schema validator refuse beyond the ones measured?
 
