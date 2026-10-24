@@ -6,6 +6,62 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.35.12]
+
+- **A cut HTTP stream is an error, as a cut socket is.** Over HTTP a body that
+  ended before the turn's terminal event closed as a finished answer, so a
+  truncated reply read as complete and was not retried. It is now an
+  `overloaded_error`, and a body error after the terminal event no longer turns
+  a finished turn into a failed one.
+
+- **A tool call announced while another streams keeps its arguments.** Opening
+  the second of two calls closed the first one's block, and the first reached
+  the client with input `{}` or cut-off JSON. The second now waits for the
+  first to close.
+
+- **A conversation is held to its model and account.** A request for another
+  model or as another account that replayed the same conversation joined it,
+  received that conversation's encrypted reasoning, and left its next turn to
+  send in full. It is now a conversation of its own.
+
+- **A replay equal in value continues its conversation.** A number written
+  `2.0` and replayed as `2`, or a message returned as several text parts and
+  replayed as one, started a new session and sent the whole history.
+
+- **Two daemons sharing a home both count their turns.** The tally kept the
+  higher of two totals, which dropped every turn of the daemon with the lower
+  one. Each write now adds what that daemon counted since its last.
+
+- **A quiet stream writes pings.** Once `message_start` is out, each 15 seconds
+  without a frame writes a `ping`, so a model reasoning at length is not read
+  as a dead connection. The preamble peek also stops waiting after ten seconds.
+
+- **Calibration files a turn against the size it was estimated from.** The fit
+  could move while the turn was in flight, and the observation landed off its
+  axis.
+
+- **The daemon stops cleanly on SIGTERM.** What a supervisor sends is now
+  answered as Ctrl-C is, with turns in flight finished. Keychain reads no
+  longer hold a runtime worker while they wait.
+
+- **`statusline` waits at most two seconds on a daemon.** One that accepted the
+  connection and never answered held the status line for good.
+
+- **`accounts login --path` refuses what the daemon would.** A relative path,
+  a `~`, or a directory another profile of the provider names became a
+  declaration the daemon refused to start on.
+
+- **`exec` treats an empty client policy as none.** It passed `--settings {}`
+  and refused a caller's own `--settings` for colliding with it.
+
+- **Smaller corrections.** A catalog body naming neither list is unreadable
+  rather than an empty catalog. Patterns under draft-07 `dependencies` are
+  checked. Renaming an account and removing a profile read a header with a
+  comment after it, and removing a profile keeps the comment that opens the
+  next table. A binary WebSocket frame fails the turn instead of being skipped,
+  an SSE body's byte order mark is dropped, and the relay drops headers a
+  message's `Connection` names.
+
 ## [0.35.11]
 
 - **A configuration write is never read half-done.** The daemon wrote its
