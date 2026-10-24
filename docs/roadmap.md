@@ -6,7 +6,7 @@ not repeat it.
 
 ## Where this stands
 
-The current release is **v0.36.1**. Shipped, at the level of capability:
+The current release is **v0.37.0**. Shipped, at the level of capability:
 
 - **Two providers behind one Messages surface.** Codex through the translate
   path (Messages ⇄ Responses), Anthropic through the relay path, which forwards
@@ -198,13 +198,13 @@ The probes now carry a real PNG and a real PDF and match on assembled text.
 
 #### Does the hosted search tool take the client's domain filters?
 
-**Open.** The client's search tool can carry `allowed_domains`,
-`blocked_domains` and `max_uses`, and §2.6 sends none of them, so a search the
-client restricted runs unrestricted. The Responses search tool documents a
-`filters.allowed_domains`; whether this backend takes it, what it does with a
-blocked list it has no field for, and whether anything stands for `max_uses`
-are unmeasured. Settle with a turn whose filter excludes the only source that
-holds an unguessable code.
+**Settled live: yes, for `allowed_domains`.** One recorded search for the Rust
+1.80 announcement, held to `en.wikipedia.org`: the completed response echoed
+`filters.allowed_domains` in its tools, its one citation was on that domain,
+and the answer said nothing for the query was found there, where the
+announcement itself is on `blog.rust-lang.org`. §2.6 sends the filter, and the
+`web-search-filters` fixture holds the exchange. What a blocked list or
+`max_uses` would do stays unmeasured, since neither has a field to send.
 
 #### Which patterns does the schema validator refuse beyond the ones measured?
 

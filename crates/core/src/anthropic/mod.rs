@@ -53,6 +53,9 @@ pub struct Tool {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<serde_json::Value>,
+    /// The domains a search tool's results are restricted to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_domains: Option<Vec<String>>,
     /// Set by the client on tools it has not yet discovered. It is never
     /// cleared, so it means "was undiscovered when the session began", not "is
     /// undiscovered now" — see `docs/proxy-behavior.md` §2.5.

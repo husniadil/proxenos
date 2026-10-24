@@ -1,0 +1,639 @@
+{
+  "name": "web-search-filters",
+  "capability": "web-search",
+  "provenance": "captured",
+  "note": "Captured from a live exchange: a WebSearch held to en.wikipedia.org through a daemon that sends allowed_domains as filters.allowed_domains. The completed response echoes the filter in its tools, and its one citation is on that domain. Scrubbed before committing: the rate-limit, turn-state, moderation and timing events, and each response's safety_identifier and prompt_cache_key.",
+  "request": {
+    "messages": [
+      {
+        "content": "Perform a web search for the query: Rust 1.80 release announcement",
+        "role": "user"
+      }
+    ],
+    "model": "gpt-5.6-terra",
+    "system": "You are an assistant for performing a web search tool use",
+    "tools": [
+      {
+        "allowed_domains": [
+          "en.wikipedia.org"
+        ],
+        "defer_loading": false,
+        "name": "web_search",
+        "type": "web_search_20250305"
+      }
+    ]
+  },
+  "upstream": [
+    {
+      "response": {
+        "access_programs": null,
+        "background": false,
+        "completed_at": null,
+        "created_at": 1792852230,
+        "error": null,
+        "frequency_penalty": 0.0,
+        "id": "resp_052a4a000e4c1ce2016adcc106e34c87d0b872c71350e980aa",
+        "incomplete_details": null,
+        "instructions": "You are gpt-5.6-terra, answering through Claude Code, a terminal-based coding agent.\n\nYou are an assistant for performing a web search tool use\n\n# Working budget\n\nThis conversation is replayed in full on every turn, so anything pulled into context is paid for again on each turn that follows. Retrieval that did not change what you do next is the most expensive kind of waste here.\n\n## Reading\n\nRead the smallest slice that answers the question. Prefer a targeted search or a bounded line range over a whole file; read a file whole when most of it is needed, or when its structure is itself the question. What is already in context does not need reading again.\n\nAfter a read, consider whether you can act. If you can, act. If a fact is still missing, name that fact and make one more targeted read for it.\n\n## Tools and skills\n\nReach for a tool or a skill when its subject is what you are actually doing and it tells you something you would otherwise guess. One whose content you could predict from its description is rarely worth its cost. Having consulted one, prefer doing the work over collecting another.\n\nThese budgets take precedence over anything above that asks for broad reading or preemptive tool use before acting.",
+        "max_output_tokens": null,
+        "max_tool_calls": null,
+        "metadata": {},
+        "model": "gpt-5.6-terra",
+        "moderation": null,
+        "object": "response",
+        "output": [],
+        "parallel_tool_calls": true,
+        "presence_penalty": 0.0,
+        "previous_response_id": null,
+        "prompt_cache_retention": "24h",
+        "reasoning": {
+          "context": "all_turns",
+          "effort": "medium",
+          "mode": "standard",
+          "summary": "detailed"
+        },
+        "service_tier": "auto",
+        "status": "in_progress",
+        "store": false,
+        "temperature": 1.0,
+        "text": {
+          "format": {
+            "type": "text"
+          },
+          "verbosity": "medium"
+        },
+        "tool_choice": "auto",
+        "tool_usage": {
+          "image_gen": {
+            "input_tokens": 0,
+            "input_tokens_details": {
+              "image_tokens": 0,
+              "text_tokens": 0
+            },
+            "output_tokens": 0,
+            "output_tokens_details": {
+              "image_tokens": 0,
+              "text_tokens": 0
+            },
+            "total_tokens": 0
+          },
+          "web_search": {
+            "num_requests": 0
+          }
+        },
+        "tools": [
+          {
+            "filters": {
+              "allowed_domains": [
+                "en.wikipedia.org"
+              ]
+            },
+            "return_token_budget": "default",
+            "search_content_types": [
+              "text"
+            ],
+            "search_context_size": "medium",
+            "type": "web_search",
+            "user_location": {
+              "city": null,
+              "country": "US",
+              "region": null,
+              "timezone": null,
+              "type": "approximate"
+            }
+          }
+        ],
+        "top_logprobs": 0,
+        "top_p": 0.98,
+        "truncation": "disabled",
+        "usage": null,
+        "user": null
+      },
+      "safety_buffering": false,
+      "sequence_number": 0,
+      "type": "response.created"
+    },
+    {
+      "response": {
+        "access_programs": null,
+        "background": false,
+        "completed_at": null,
+        "created_at": 1792852230,
+        "error": null,
+        "frequency_penalty": 0.0,
+        "id": "resp_052a4a000e4c1ce2016adcc106e34c87d0b872c71350e980aa",
+        "incomplete_details": null,
+        "instructions": "You are gpt-5.6-terra, answering through Claude Code, a terminal-based coding agent.\n\nYou are an assistant for performing a web search tool use\n\n# Working budget\n\nThis conversation is replayed in full on every turn, so anything pulled into context is paid for again on each turn that follows. Retrieval that did not change what you do next is the most expensive kind of waste here.\n\n## Reading\n\nRead the smallest slice that answers the question. Prefer a targeted search or a bounded line range over a whole file; read a file whole when most of it is needed, or when its structure is itself the question. What is already in context does not need reading again.\n\nAfter a read, consider whether you can act. If you can, act. If a fact is still missing, name that fact and make one more targeted read for it.\n\n## Tools and skills\n\nReach for a tool or a skill when its subject is what you are actually doing and it tells you something you would otherwise guess. One whose content you could predict from its description is rarely worth its cost. Having consulted one, prefer doing the work over collecting another.\n\nThese budgets take precedence over anything above that asks for broad reading or preemptive tool use before acting.",
+        "max_output_tokens": null,
+        "max_tool_calls": null,
+        "metadata": {},
+        "model": "gpt-5.6-terra",
+        "moderation": null,
+        "object": "response",
+        "output": [],
+        "parallel_tool_calls": true,
+        "presence_penalty": 0.0,
+        "previous_response_id": null,
+        "prompt_cache_retention": "24h",
+        "reasoning": {
+          "context": "all_turns",
+          "effort": "medium",
+          "mode": "standard",
+          "summary": "detailed"
+        },
+        "service_tier": "auto",
+        "status": "in_progress",
+        "store": false,
+        "temperature": 1.0,
+        "text": {
+          "format": {
+            "type": "text"
+          },
+          "verbosity": "medium"
+        },
+        "tool_choice": "auto",
+        "tool_usage": {
+          "image_gen": {
+            "input_tokens": 0,
+            "input_tokens_details": {
+              "image_tokens": 0,
+              "text_tokens": 0
+            },
+            "output_tokens": 0,
+            "output_tokens_details": {
+              "image_tokens": 0,
+              "text_tokens": 0
+            },
+            "total_tokens": 0
+          },
+          "web_search": {
+            "num_requests": 0
+          }
+        },
+        "tools": [
+          {
+            "filters": {
+              "allowed_domains": [
+                "en.wikipedia.org"
+              ]
+            },
+            "return_token_budget": "default",
+            "search_content_types": [
+              "text"
+            ],
+            "search_context_size": "medium",
+            "type": "web_search",
+            "user_location": {
+              "city": null,
+              "country": "US",
+              "region": null,
+              "timezone": null,
+              "type": "approximate"
+            }
+          }
+        ],
+        "top_logprobs": 0,
+        "top_p": 0.98,
+        "truncation": "disabled",
+        "usage": null,
+        "user": null
+      },
+      "safety_buffering": false,
+      "sequence_number": 1,
+      "type": "response.in_progress"
+    },
+    {
+      "item": {
+        "content": [],
+        "encrypted_content": "gAAAAABq3MEHOdrYr0W4FOVihSnX8lE7P39rbkVNdknWafXu2UAoHWZxayjV9MNcjNn2yN6MKAYiqx4braWPh-FKZphGAUmU176VJ8OCapX_iUzbdGYThBi8urqqIN_68if3Ez01ybWR441L16EYMp2gQb9h3YqPU8SeLjYoTRCHN9ZAgob3maRFDavbbRZL3pwFzSPEVAx3xUHVLe_vR7_IKvdDz1BovSwLWguTT7JwCIwm3_-eF3HyiDYiGKswsSobHclRsRmUVGRLRlmuST8DWRO90jJijGjC7M7AbT_k-XrkJE_xH5qsoKOdhgvmzstAtDo5uc-EjLrR-dYWolGwmz249vlwG4f-V4ZhUOMwahB1FL3-qc19H0LE1Sv3kr01AhPdHiyAqow5SA5l1PMDKqXAPF2IN8XjifQ3F80ilgRtXgy6wtQIL30PTZ58-UsteuHW961YeWXTlxnUe9Z_AFQqndX3gqmbW3MBSoW-wGSq9y58IAtS2ZmmXoxKAZ-z0k-8A5n7XORStaUhRvpHaQ7cGqxZ1sjXsWG1X5o8_5akDZ849JBIV7TCtuItypZ1FRUQzTL-R4yeYQS80NlqSPdvDXwJU3xh4WCAkgVovTq4C197N6YMICi9gk-oadGL-c7zMCH1Io7UsW_XX4tFIOAKqn-xEMOCXn52vbY7HxRxW17Nu2-dHx6m--7K1gI-sbFYToo5wGS2knmy3sktZx6vYBZkTNLURR9-vnhaNJYH4B6dMZa_7_Ns0Cul__EYKs39SP9xp3q6j_KFi9UkdT-w-c2pj5NgUoscIHMi2kvMfqia9sdluyTlR455ptECCsdowuXxexCQBID0dcgFPawwa5AQoqcvYtuSKQoXgjata0hbKMFmxl2johLVG2esR5k2xRfxx9SNsuvS7ybUu1RAFBcHEBi-qMn7aWQVjZgl2UzAbR-GxfCpSLfTqp7WMvLJVwBUCIVAIZ9IOFZJXtqbdMrXShsVubCRQmdyN6aXjWkEHuduR1fs2icBY3mscfDA6RB0pdA1JF6k15rUKGa4G5gWmEX9_4Wg3iYWXCVxHTErWCSaMBVI9CYv7cN06ImEe6vzxXRl4VcNJXxbj0eduCXc2zlvKQeJffS4EhNtCul48cC0QavKwCaq4n8l053FJEFqFuve4V1uOOFHEUyvZnZsRhLKCRWb73LkR4UE8-t617Xa9jxHpqi4W3SakroX4HyHQhtT07LoAdX3W3o7-kT2oneZ9TiVX6mHSA5GSIbHhlkCCkSiNnjQeBpCamBHAgJq8zD8SnxdqE81jPieBWIsYXPXpG0r0POGMmIdFhgj7jfCXCgkwxUDyEtAHgWcXa4cnIFtXd6UCliIewCxP4G1RRK3C5Vt8unXyRz_wDMT6ZaUthda7H7BFiUb9dSgbf7G",
+        "id": "rs_052a4a000e4c1ce2016adcc107b7b087d0a1d887a4fad9f3ca",
+        "summary": [],
+        "type": "reasoning"
+      },
+      "output_index": 0,
+      "sequence_number": 2,
+      "type": "response.output_item.added"
+    },
+    {
+      "item_id": "rs_052a4a000e4c1ce2016adcc107b7b087d0a1d887a4fad9f3ca",
+      "output_index": 0,
+      "part": {
+        "text": "",
+        "type": "summary_text"
+      },
+      "sequence_number": 3,
+      "summary_index": 0,
+      "type": "response.reasoning_summary_part.added"
+    },
+    {
+      "delta": "**Planning Wikipedia domain-restricted search**",
+      "item_id": "rs_052a4a000e4c1ce2016adcc107b7b087d0a1d887a4fad9f3ca",
+      "obfuscation": "M",
+      "output_index": 0,
+      "sequence_number": 4,
+      "summary_index": 0,
+      "type": "response.reasoning_summary_text.delta"
+    },
+    {
+      "item_id": "rs_052a4a000e4c1ce2016adcc107b7b087d0a1d887a4fad9f3ca",
+      "output_index": 0,
+      "sequence_number": 5,
+      "summary_index": 0,
+      "text": "**Planning Wikipedia domain-restricted search**",
+      "type": "response.reasoning_summary_text.done"
+    },
+    {
+      "item_id": "rs_052a4a000e4c1ce2016adcc107b7b087d0a1d887a4fad9f3ca",
+      "output_index": 0,
+      "part": {
+        "text": "**Planning Wikipedia domain-restricted search**",
+        "type": "summary_text"
+      },
+      "sequence_number": 6,
+      "summary_index": 0,
+      "type": "response.reasoning_summary_part.done"
+    },
+    {
+      "item": {
+        "content": [],
+        "encrypted_content": "gAAAAABq3MEJ3NEyURefZnvHJB1Tk7viwl_uk_P0acOQhGQjE02RfKrRif0FoSaoXbaXZm63kEUriOH5PMZy3_2YNE1GlIXmd8rWZ3ykycrX1sHW2QcwlB-2xzCkQr5EqBKHnmT9h5lb1LSWFff8H38gR4bimdSXnh9qJQe_vbjmEJcQ4S1t1cEZeYhCPiklHlr7SeKDGjoxW7bFJjKfYywZ2w05RYUKWSaf0fsk6S0nHhYs1txPBixh9DSHXgYIETZ3z2r1g_aMMoUlHXwVhpQi3t1I1cuhaT_CHtlYTai7ADdSqN2pdPQreGdMdxu2nQ7K272Opu446PgvJOWu4XiXWTKeZq48AexYwdk5hyEl7DnvtcVxiTRKBDqrXHDK9I9SY99Lug_EuWYgI2k_kI2nxzSWGKyFl_LzMAYe9WasrQjkGWk-1UmMnWZ0Q5m-kTCBZftK2G_qOWuDQuIdVtyWx0YMsTMHHqFsMtXFhrBjHNa9A17HBkQpXK0fRDdyoAHmdYzO6MGwFr3Jho2HAmg6eKi0spSxBxdRBX3LUlupu5LBgqpPqQ8wFlHF1MitI0j6b8yURkDBlzv9pBgzS0uBlxMH5pQB6LUhWfZi3S6uNDqLk16US4kyxpCjW_suU2VhPav5iFmaWd4apWeXZGUbQPmxTw9LyO9jiJvyyHQRQIbDh3J4YI2aF5oWoCRIe2vy-T53o8fnMTu_lSaZEjuTsNuEHLD74EoQAmbLYI7anT9W4SrpR1owwLAgA_rfgUwYswrm-bojeeHveSBjKrN96EVrDk9g2Nvd7dsBNZcj1KMOXX9HPzjPFmRSDHD1FvHeY0bqfRZlq1yw1_z5rYW_8rntYtF1ufXG603_iaDYjJij-rn71oNF5LmGhF-6Sx1gpnVMbsBk61A4b9ZOD1hZECDSZVApUm-IUFT6u7DGcibsk24qZ_hZHtEl2aCwvIii7zxosVJD1rAFD5BJ3PTr1tMdDvSy2qVb-0XRxmggSSh-YIPXG3sIJ_0r4tfuo6-jLu6sov7lThxJAIHHunZhNBSoh53cwcjKCRUUgStwmjhBtxYgArYN2OQhaOc5V_LB_FKE6PwrNk9Yp2NHD104F3oZ497sup_2kFOSwCO7V-MjU3u1KC9qMxOeTcu1hIB-RwL6gqJ-oC0c0L0nmwRhsHX4QPGBOj1jUwWKRPBFljh60KpBZxeFA05xgMNZSujOYDtISNvSwp5UjVk2bT2hSMgHkh4GR6zL5hj8YcGq3tf85z6F1-Fn-WZxmHdDk0r2g68OzVROp-5S4Z4o_oi1A5icn3iN9nj4EgK0c6N816NTdnSj4RezayU8Utd8rneNijitvxa_LE3XIfhTG3ObdjrlpKAicxt-FAZ2v5NjPdouP_R1h1hrBqOQaQcS8BTargha2N-VFkvXOC_OEwe_meo3ePpj2ukOHiLM9XVKauEMXdjZhlGGPUjIuR8FnflcBHr6I1dHISu0MJsRI_mFB9HxM17_yLoRW9S0bQs9vnRWmdhUrZHTWTh5jGlNOcAl02kgFRkOZifu0x8jEsIlnwdFu8hYddxvZYeE2uqcfHVIJR0TeCYiKokJ7JE_pe1VJBQ5ihz2R2cktFfkt3ovhOCbSG_QOmj5Tb0mLwGdnPscFkUdLaydnDvD2ifnIX8BrILaXu3vOng0l1PWn2JBOZnFimu50Y68z_6QOBDHncG1RzaN3ZSAObeeRM-k43Y9cpeN7BWk51YTy2xib2ZaHKlWQGJyW-woJIO1HC2XLDnYQ_JGtOGr8TCe7zjuy4m0hQBcuIfTZgJdYfogHYjF1qpkhzkqwLr9RHVQw6_x6_Cq1ZkBKCcFBIVK7ZuimrWdluG1JS_Ysx9IKzU0zdDX57uz1yUYgMIQ5tvdaq3WZZkfyNNXzP01UBMKaejVXcircrIOaMxuwYaurKHCZDbwdcRbnPaesPO9lkLmUAlOV9WXBcjcGRU=",
+        "id": "rs_052a4a000e4c1ce2016adcc107b7b087d0a1d887a4fad9f3ca",
+        "summary": [
+          {
+            "text": "**Planning Wikipedia domain-restricted search**",
+            "type": "summary_text"
+          }
+        ],
+        "type": "reasoning"
+      },
+      "output_index": 0,
+      "sequence_number": 7,
+      "type": "response.output_item.done"
+    },
+    {
+      "item": {
+        "id": "ws_052a4a000e4c1ce2016adcc109439087d0af29a38982141333",
+        "status": "in_progress",
+        "type": "web_search_call"
+      },
+      "output_index": 1,
+      "sequence_number": 8,
+      "type": "response.output_item.added"
+    },
+    {
+      "item_id": "ws_052a4a000e4c1ce2016adcc109439087d0af29a38982141333",
+      "output_index": 1,
+      "sequence_number": 9,
+      "type": "response.web_search_call.in_progress"
+    },
+    {
+      "item_id": "ws_052a4a000e4c1ce2016adcc109439087d0af29a38982141333",
+      "output_index": 1,
+      "sequence_number": 10,
+      "type": "response.web_search_call.searching"
+    },
+    {
+      "item_id": "ws_052a4a000e4c1ce2016adcc109439087d0af29a38982141333",
+      "output_index": 1,
+      "sequence_number": 11,
+      "type": "response.web_search_call.completed"
+    },
+    {
+      "item": {
+        "action": {
+          "queries": [
+            "Rust 1.80 release announcement"
+          ],
+          "query": "Rust 1.80 release announcement",
+          "type": "search"
+        },
+        "id": "ws_052a4a000e4c1ce2016adcc109439087d0af29a38982141333",
+        "status": "completed",
+        "type": "web_search_call"
+      },
+      "output_index": 1,
+      "sequence_number": 12,
+      "type": "response.output_item.done"
+    },
+    {
+      "item": {
+        "content": [],
+        "id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "in_progress",
+        "type": "message"
+      },
+      "output_index": 2,
+      "sequence_number": 13,
+      "type": "response.output_item.added"
+    },
+    {
+      "content_index": 0,
+      "item_id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+      "output_index": 2,
+      "part": {
+        "annotations": [],
+        "logprobs": [],
+        "text": "",
+        "type": "output_text"
+      },
+      "sequence_number": 14,
+      "type": "response.content_part.added"
+    },
+    {
+      "content_index": 0,
+      "delta": "Search completed",
+      "item_id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+      "logprobs": [],
+      "obfuscation": "",
+      "output_index": 2,
+      "safety_buffering": false,
+      "sequence_number": 15,
+      "type": "response.output_text.delta"
+    },
+    {
+      "content_index": 0,
+      "delta": ".",
+      "item_id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+      "logprobs": [],
+      "obfuscation": "fu0kjNMsPD2kCPI",
+      "output_index": 2,
+      "safety_buffering": false,
+      "sequence_number": 16,
+      "type": "response.output_text.delta"
+    },
+    {
+      "content_index": 0,
+      "delta": " No dedicated",
+      "item_id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+      "logprobs": [],
+      "obfuscation": "zJN",
+      "output_index": 2,
+      "safety_buffering": false,
+      "sequence_number": 17,
+      "type": "response.output_text.delta"
+    },
+    {
+      "content_index": 0,
+      "delta": " **Rust 1.80 release announcement",
+      "item_id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+      "logprobs": [],
+      "obfuscation": "JQ7Ayl784soyYz5",
+      "output_index": 2,
+      "safety_buffering": false,
+      "sequence_number": 18,
+      "type": "response.output_text.delta"
+    },
+    {
+      "content_index": 0,
+      "delta": "** result was found",
+      "item_id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+      "logprobs": [],
+      "obfuscation": "mM5tXvBjU4Mfj",
+      "output_index": 2,
+      "safety_buffering": false,
+      "sequence_number": 19,
+      "type": "response.output_text.delta"
+    },
+    {
+      "content_index": 0,
+      "delta": " on",
+      "item_id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+      "logprobs": [],
+      "obfuscation": "APHPFHvZQYH3v",
+      "output_index": 2,
+      "safety_buffering": false,
+      "sequence_number": 20,
+      "type": "response.output_text.delta"
+    },
+    {
+      "content_index": 0,
+      "delta": " English Wikipedia; the closest relevant result is",
+      "item_id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+      "logprobs": [],
+      "obfuscation": "AXTJqCFNHAI6aJ",
+      "output_index": 2,
+      "safety_buffering": false,
+      "sequence_number": 21,
+      "type": "response.output_text.delta"
+    },
+    {
+      "content_index": 0,
+      "delta": " the Rust programming-language",
+      "item_id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+      "logprobs": [],
+      "obfuscation": "f6",
+      "output_index": 2,
+      "safety_buffering": false,
+      "sequence_number": 22,
+      "type": "response.output_text.delta"
+    },
+    {
+      "content_index": 0,
+      "delta": " article:",
+      "item_id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+      "logprobs": [],
+      "obfuscation": "0rZFnLc",
+      "output_index": 2,
+      "safety_buffering": false,
+      "sequence_number": 23,
+      "type": "response.output_text.delta"
+    },
+    {
+      "content_index": 0,
+      "delta": " ",
+      "item_id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+      "logprobs": [],
+      "obfuscation": "rXFmW0w4Swc7DZt",
+      "output_index": 2,
+      "safety_buffering": false,
+      "sequence_number": 24,
+      "type": "response.output_text.delta"
+    },
+    {
+      "content_index": 0,
+      "delta": "([en.wikipedia.org](https://en.wikipedia.org/wiki/Rust_%28programming_language%29?utm_source=openai))",
+      "item_id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+      "logprobs": [],
+      "obfuscation": "HFxwweZnmG0",
+      "output_index": 2,
+      "safety_buffering": false,
+      "sequence_number": 25,
+      "type": "response.output_text.delta"
+    },
+    {
+      "annotation": {
+        "end_index": 276,
+        "start_index": 175,
+        "title": "Rust (programming language)",
+        "type": "url_citation",
+        "url": "https://en.wikipedia.org/wiki/Rust_%28programming_language%29?utm_source=openai"
+      },
+      "annotation_index": 0,
+      "content_index": 0,
+      "item_id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+      "output_index": 2,
+      "sequence_number": 26,
+      "type": "response.output_text.annotation.added"
+    },
+    {
+      "content_index": 0,
+      "item_id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+      "logprobs": [],
+      "output_index": 2,
+      "sequence_number": 28,
+      "text": "Search completed. No dedicated **Rust 1.80 release announcement** result was found on English Wikipedia; the closest relevant result is the Rust programming-language article: ([en.wikipedia.org](https://en.wikipedia.org/wiki/Rust_%28programming_language%29?utm_source=openai))",
+      "type": "response.output_text.done"
+    },
+    {
+      "content_index": 0,
+      "item_id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+      "output_index": 2,
+      "part": {
+        "annotations": [
+          {
+            "end_index": 276,
+            "start_index": 175,
+            "title": "Rust (programming language)",
+            "type": "url_citation",
+            "url": "https://en.wikipedia.org/wiki/Rust_%28programming_language%29?utm_source=openai"
+          }
+        ],
+        "logprobs": [],
+        "text": "Search completed. No dedicated **Rust 1.80 release announcement** result was found on English Wikipedia; the closest relevant result is the Rust programming-language article: ([en.wikipedia.org](https://en.wikipedia.org/wiki/Rust_%28programming_language%29?utm_source=openai))",
+        "type": "output_text"
+      },
+      "sequence_number": 29,
+      "type": "response.content_part.done"
+    },
+    {
+      "item": {
+        "content": [
+          {
+            "annotations": [
+              {
+                "end_index": 276,
+                "start_index": 175,
+                "title": "Rust (programming language)",
+                "type": "url_citation",
+                "url": "https://en.wikipedia.org/wiki/Rust_%28programming_language%29?utm_source=openai"
+              }
+            ],
+            "logprobs": [],
+            "text": "Search completed. No dedicated **Rust 1.80 release announcement** result was found on English Wikipedia; the closest relevant result is the Rust programming-language article: ([en.wikipedia.org](https://en.wikipedia.org/wiki/Rust_%28programming_language%29?utm_source=openai))",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_052a4a000e4c1ce2016adcc10ae84487d0b1dbbe49b319fe38",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      },
+      "output_index": 2,
+      "sequence_number": 30,
+      "type": "response.output_item.done"
+    },
+    {
+      "response": {
+        "access_programs": null,
+        "background": false,
+        "completed_at": 1792852236,
+        "created_at": 1792852230,
+        "error": null,
+        "frequency_penalty": 0.0,
+        "id": "resp_052a4a000e4c1ce2016adcc106e34c87d0b872c71350e980aa",
+        "incomplete_details": null,
+        "instructions": "You are gpt-5.6-terra, answering through Claude Code, a terminal-based coding agent.\n\nYou are an assistant for performing a web search tool use\n\n# Working budget\n\nThis conversation is replayed in full on every turn, so anything pulled into context is paid for again on each turn that follows. Retrieval that did not change what you do next is the most expensive kind of waste here.\n\n## Reading\n\nRead the smallest slice that answers the question. Prefer a targeted search or a bounded line range over a whole file; read a file whole when most of it is needed, or when its structure is itself the question. What is already in context does not need reading again.\n\nAfter a read, consider whether you can act. If you can, act. If a fact is still missing, name that fact and make one more targeted read for it.\n\n## Tools and skills\n\nReach for a tool or a skill when its subject is what you are actually doing and it tells you something you would otherwise guess. One whose content you could predict from its description is rarely worth its cost. Having consulted one, prefer doing the work over collecting another.\n\nThese budgets take precedence over anything above that asks for broad reading or preemptive tool use before acting.",
+        "max_output_tokens": null,
+        "max_tool_calls": null,
+        "metadata": {},
+        "model": "gpt-5.6-terra",
+        "moderation": null,
+        "object": "response",
+        "output": [],
+        "parallel_tool_calls": true,
+        "presence_penalty": 0.0,
+        "previous_response_id": null,
+        "prompt_cache_retention": "24h",
+        "reasoning": {
+          "context": "all_turns",
+          "effort": "medium",
+          "mode": "standard",
+          "summary": "detailed"
+        },
+        "service_tier": "default",
+        "status": "completed",
+        "store": false,
+        "temperature": 1.0,
+        "text": {
+          "format": {
+            "type": "text"
+          },
+          "verbosity": "medium"
+        },
+        "tool_choice": "auto",
+        "tool_usage": {
+          "image_gen": {
+            "input_tokens": 0,
+            "input_tokens_details": {
+              "image_tokens": 0,
+              "text_tokens": 0
+            },
+            "output_tokens": 0,
+            "output_tokens_details": {
+              "image_tokens": 0,
+              "text_tokens": 0
+            },
+            "total_tokens": 0
+          },
+          "web_search": {
+            "num_requests": 1
+          }
+        },
+        "tools": [
+          {
+            "filters": {
+              "allowed_domains": [
+                "en.wikipedia.org"
+              ]
+            },
+            "return_token_budget": "default",
+            "search_content_types": [
+              "text"
+            ],
+            "search_context_size": "medium",
+            "type": "web_search",
+            "user_location": {
+              "city": null,
+              "country": "US",
+              "region": null,
+              "timezone": null,
+              "type": "approximate"
+            }
+          }
+        ],
+        "top_logprobs": 0,
+        "top_p": 0.98,
+        "truncation": "disabled",
+        "usage": {
+          "input_tokens": 8811,
+          "input_tokens_details": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 3584
+          },
+          "output_tokens": 114,
+          "output_tokens_details": {
+            "reasoning_tokens": 64
+          },
+          "total_tokens": 8925
+        },
+        "user": null
+      },
+      "safety_buffering": false,
+      "sequence_number": 31,
+      "type": "response.completed"
+    }
+  ]
+}

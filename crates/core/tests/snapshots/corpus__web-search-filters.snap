@@ -1,0 +1,68 @@
+---
+source: crates/core/tests/corpus.rs
+expression: replay(&fixture)
+---
+--- request ---
+{
+  "model": "gpt-5.6-terra",
+  "instructions": "You are an assistant for performing a web search tool use",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Perform a web search for the query: Rust 1.80 release announcement"
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "type": "web_search",
+      "external_web_access": true,
+      "indexed_web_access": true,
+      "filters": {
+        "allowed_domains": [
+          "en.wikipedia.org"
+        ]
+      }
+    }
+  ],
+  "reasoning": {
+    "summary": "auto"
+  },
+  "include": [
+    "reasoning.encrypted_content"
+  ],
+  "parallel_tool_calls": true,
+  "store": false,
+  "stream": true,
+  "prompt_cache_key": "fixture-web-search-filters"
+}
+
+--- frames ---
+{"type":"message_start","message":{"id":"msg_web-search-filters","type":"message","role":"assistant","model":"gpt-5.6-terra","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":100,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
+{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}
+{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"**Planning Wikipedia domain-restricted search**"}}
+{"type":"content_block_stop","index":0}
+{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}
+{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Search completed"}}
+{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"."}}
+{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":" No dedicated"}}
+{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":" **Rust 1.80 release announcement"}}
+{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"** result was found"}}
+{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":" on"}}
+{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":" English Wikipedia; the closest relevant result is"}}
+{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":" the Rust programming-language"}}
+{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":" article:"}}
+{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":" "}}
+{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"([en.wikipedia.org](https://en.wikipedia.org/wiki/Rust_%28programming_language%29?utm_source=openai))"}}
+{"type":"content_block_stop","index":1}
+{"type":"content_block_start","index":2,"content_block":{"type":"server_tool_use","id":"ws_052a4a000e4c1ce2016adcc109439087d0af29a38982141333","name":"web_search","input":{"query":"Rust 1.80 release announcement"}}}
+{"type":"content_block_stop","index":2}
+{"type":"content_block_start","index":3,"content_block":{"type":"web_search_tool_result","tool_use_id":"ws_052a4a000e4c1ce2016adcc109439087d0af29a38982141333","content":[{"type":"web_search_result","url":"https://en.wikipedia.org/wiki/Rust_%28programming_language%29?utm_source=openai","title":"Rust (programming language)"}]}}
+{"type":"content_block_stop","index":3}
+{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":5227,"output_tokens":114,"cache_creation_input_tokens":0,"cache_read_input_tokens":3584}}
+{"type":"message_stop"}

@@ -539,6 +539,44 @@ fn web_search_maps_to_the_native_tool(#[case] tool_type: &str) {
     );
 }
 
+/// §2.6 — the domains a search was restricted to travel as the hosted tool's
+/// filter. Without it a search the client restricted runs everywhere, and the
+/// answer cites sources the client excluded. Settled live: roadmap §L.
+#[test]
+fn allowed_domains_become_the_search_filter() {
+    let out = translate(json!({
+        "model": "gpt-5.5",
+        "messages": [{ "role": "user", "content": "hello" }],
+        "tools": [{
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "allowed_domains": ["en.wikipedia.org", "docs.rs"],
+        }],
+    }));
+
+    assert_eq!(
+        out["tools"],
+        json!([{
+            "type": "web_search",
+            "external_web_access": true,
+            "indexed_web_access": true,
+            "filters": { "allowed_domains": ["en.wikipedia.org", "docs.rs"] },
+        }])
+    );
+}
+
+/// §2.6 — an empty list restricts nothing, so it sends no filter.
+#[test]
+fn an_empty_domain_list_sends_no_filter() {
+    let out = translate(json!({
+        "model": "gpt-5.5",
+        "messages": [{ "role": "user", "content": "hello" }],
+        "tools": [{ "type": "web_search_20250305", "name": "web_search", "allowed_domains": [] }],
+    }));
+
+    assert_eq!(out["tools"][0].get("filters"), None);
+}
+
 /// §2.4 — `tool_choice` mapping. Anything the spec does not name is `auto`,
 /// because a choice the backend does not understand fails the request.
 #[rstest]

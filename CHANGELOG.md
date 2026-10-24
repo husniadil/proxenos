@@ -6,6 +6,20 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.37.0]
+
+- **A search the client held to some domains stays on them.** The client's
+  `allowed_domains` now goes upstream as the search tool's
+  `filters.allowed_domains`. It used to be dropped, so a restricted search ran
+  on every domain and the answer could cite sources the client excluded.
+  Settled live: a search held to one domain came back with results on it
+  alone. `blocked_domains` and `max_uses` still send nothing, since the search
+  tool has no field for either.
+
+- **`doctor` has a `web-search-filters` probe.** It checks that the filter
+  reaches the request and that every result comes back on the allowed
+  domain, against a captured exchange or, with `--live`, the backend.
+
 ## [0.36.1]
 
 - **A tool pattern with `\Z`, or `\b` inside a class, no longer fails the

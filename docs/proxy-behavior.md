@@ -353,6 +353,19 @@ Translated as a function tool, it becomes a tool the model cannot execute and a
 search that silently returns nothing. Both access flags are stated rather than
 left to a default, because a default of false produces the same empty search.
 
+#### A search's allowed domains become the tool's filter
+
+**Settled live** (roadmap §L). The client's `allowed_domains` goes as
+`filters.allowed_domains`, the field the Responses search tool documents. An
+empty list sends no filter. `blocked_domains` and `max_uses` send nothing,
+since the tool documents no field for either. The `web-search-filters` probe
+(§10.3) holds it.
+
+##### Why
+
+Without it a search the client restricted runs on every domain, and the answer
+cites sources the client excluded.
+
 ### 2.7 Request fields
 
 #### The fixed fields
@@ -501,7 +514,7 @@ the excerpt is the only diagnostic available.
 
 | File | What it holds |
 |---|---|
-| `crates/core/src/translate/request.rs` | `translate_request`: instructions, content blocks, tool results, tools, deferral, effort |
+| `crates/core/src/translate/request.rs` | `translate_request`: instructions, content blocks, tool results, tools, the search filter, deferral, effort |
 | `crates/core/src/translate/schema.rs` | The `pattern` allow-list and the subschema walk |
 | `crates/core/src/anthropic/mod.rs` | Inbound Messages types, `tool_reference`, `web_search` detection, source URLs |
 | `crates/core/src/responses.rs` | Outbound Responses types, `CallOutput::from_parts`, `Effort` |
@@ -3228,7 +3241,9 @@ recording was written to pass tests only the recording.
 
 #### A capability test turns on content the model could not infer
 
-Random codes, verbatim strings.
+Random codes, verbatim strings. A search result's URL counts too: the search
+tool supplies it, and the model writes none of them, so a probe may turn on the
+host every result came back from.
 
 ##### Why
 

@@ -253,6 +253,53 @@ fn reassembly_does_not_invent_a_marker() {
     }
 }
 
+/// A search held to a domain fails the moment one result is off it, and a
+/// subdomain of it is still on it. An ignored filter returns whatever ranks
+/// first, so one stray host is the whole signal.
+#[test]
+fn a_search_result_off_the_allowed_domain_fails_the_filter_probe() {
+    let probe = probe::all()
+        .into_iter()
+        .find(|probe| probe.name == "web-search-filters")
+        .unwrap();
+    let request = serde_json::json!({
+        "tools": [{ "filters": { "allowed_domains": ["en.wikipedia.org"] } }],
+    });
+    let results = |urls: &[&str]| {
+        vec![serde_json::json!({
+            "type": "content_block_start",
+            "content_block": {
+                "type": "web_search_tool_result",
+                "content": urls
+                    .iter()
+                    .map(|url| serde_json::json!({ "type": "web_search_result", "url": url }))
+                    .collect::<Vec<_>>(),
+            },
+        })]
+    };
+
+    let held = results(&[
+        "https://en.wikipedia.org/wiki/Rust",
+        "https://m.en.wikipedia.org/wiki/Rust",
+    ]);
+    assert_eq!(probe::evaluate(&probe, &request, &held), Status::Passed);
+
+    let ignored = results(&[
+        "https://en.wikipedia.org/wiki/Rust",
+        "https://blog.rust-lang.org/2024/07/25/Rust-1.80.0.html",
+    ]);
+    match probe::evaluate(&probe, &request, &ignored) {
+        Status::Failed(reason) => assert!(reason.contains("blog.rust-lang.org"), "{reason}"),
+        other => panic!("a result off the domain must fail, got {other:?}"),
+    }
+
+    let lookalike = results(&["https://noten.wikipedia.org.example/wiki/Rust"]);
+    assert!(matches!(
+        probe::evaluate(&probe, &request, &lookalike),
+        Status::Failed(_)
+    ));
+}
+
 /// The marker is unguessable by construction: it appears in the fixture and
 /// nowhere else in the tree. A probe keyed on something derivable from a
 /// filename would pass against a model that never saw the file.
