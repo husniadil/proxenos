@@ -8,6 +8,10 @@ use handler::ControlState;
 use protocol::Request;
 use protocol::Response;
 use protocol::codes;
+#[cfg(any(windows, test))]
+use sha2::Digest;
+#[cfg(any(windows, test))]
+use sha2::Sha256;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::io::AsyncBufReadExt;
@@ -528,7 +532,7 @@ pub async fn call(
 pub async fn serve(path: &Path, state: ControlState) -> Result<(), ProxyError> {
     use tokio::net::windows::named_pipe::ServerOptions;
 
-    let name = pipe_name(path);
+    let name = pipe_for(path);
     loop {
         let server = ServerOptions::new().create(&name).map_err(|error| {
             ProxyError::invalid_request(format!("could not create the control pipe: {error}"))
@@ -574,13 +578,11 @@ pub async fn call(
 ) -> Result<serde_json::Value, ProxyError> {
     use tokio::net::windows::named_pipe::ClientOptions;
 
-    let client = ClientOptions::new()
-        .open(pipe_name(path))
-        .map_err(|error| {
-            ProxyError::invalid_request(format!(
-                "could not reach the daemon: {error}. Is it running? Start it with `proxenos run`."
-            ))
-        })?;
+    let client = ClientOptions::new().open(pipe_for(path)).map_err(|error| {
+        ProxyError::invalid_request(format!(
+            "could not reach the daemon: {error}. Is it running? Start it with `proxenos run`."
+        ))
+    })?;
 
     let (reader, mut writer) = tokio::io::split(client);
     let mut body = serde_json::to_string(&Request::new(1, method, params)).unwrap_or_default();
@@ -622,11 +624,67 @@ pub async fn call(
     }
 }
 
+/// The pipe a socket path names, by `pipe_name` with this process's
+/// temporary directory.
 #[cfg(windows)]
-fn pipe_name(path: &Path) -> String {
-    let stem = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("proxenos");
-    format!(r"\\.\pipe\{stem}")
+fn pipe_for(path: &Path) -> String {
+    pipe_name(path, &path_for(None, Some(&std::env::temp_dir())))
+}
+
+/// Pipe names are one namespace for the whole machine, so a socket anywhere
+/// but the temporary directory (`unnamed`) gets a pipe of its own, named after
+/// its path's digest. Every `PROXENOS_HOME` used to meet at one pipe, and the
+/// second daemon could not create it. The temporary directory's socket keeps
+/// the plain name a running daemon already holds. A digest rather than the
+/// path itself, since a backslash is the one character a pipe name cannot hold.
+#[cfg(any(windows, test))]
+fn pipe_name(path: &Path, unnamed: &Path) -> String {
+    if path == unnamed {
+        return r"\\.\pipe\proxenos.sock".to_owned();
+    }
+    let digest = Sha256::digest(path.to_string_lossy().as_bytes());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!(r"\\.\pipe\proxenos-{hex:.16}.sock")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEMP: &str = r"C:\Users\a\AppData\Local\Temp\proxenos.sock";
+
+    #[test]
+    fn the_temporary_directorys_socket_keeps_its_pipe() {
+        assert_eq!(
+            pipe_name(Path::new(TEMP), Path::new(TEMP)),
+            r"\\.\pipe\proxenos.sock"
+        );
+    }
+
+    #[test]
+    fn two_homes_name_two_pipes() {
+        let first = pipe_name(Path::new(r"D:\home-a\proxenos.sock"), Path::new(TEMP));
+        let second = pipe_name(Path::new(r"D:\home-b\proxenos.sock"), Path::new(TEMP));
+
+        assert_ne!(first, second);
+        assert_ne!(first, r"\\.\pipe\proxenos.sock");
+        let name = first.strip_prefix(r"\\.\pipe\").expect("a pipe's prefix");
+        assert!(
+            name.starts_with("proxenos-") && name.ends_with(".sock"),
+            "{first}"
+        );
+        assert!(
+            !name.contains('\\'),
+            "a pipe name holds no backslash: {first}"
+        );
+    }
+
+    #[test]
+    fn one_home_names_one_pipe_each_time() {
+        let home = Path::new(r"D:\home-a\proxenos.sock");
+        assert_eq!(
+            pipe_name(home, Path::new(TEMP)),
+            pipe_name(home, Path::new(TEMP))
+        );
+    }
 }

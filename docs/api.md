@@ -1529,6 +1529,21 @@ and the first daemon to bind the name there owns it.
 ignored it, an isolated CLI sharing a `TMPDIR` reached the real daemon, and every
 login path ends in `accounts.select`.
 
+### On Windows the socket is a named pipe
+
+The socket in the temporary directory is `\\.\pipe\proxenos.sock`. Any other
+socket path, such as one under `PROXENOS_HOME`, is `\\.\pipe\proxenos-`
+followed by the first 16 hex digits of the SHA-256 of the path as written, then
+`.sock`. The daemon and the CLI derive it from the same socket path.
+
+#### Why
+
+Pipe names are one namespace for the whole machine. While every daemon took
+the socket's file name, each `PROXENOS_HOME` met at one pipe and the second
+daemon could not create it. A digest stands in for the path because a backslash
+is the one character a pipe name cannot hold. The temporary directory's pipe
+keeps the name a daemon started before 0.36.0 holds.
+
 ### An unaddressable path is refused by name
 
 Both bind and dial check the path against `sun_path` — 104 bytes on macOS, 108 on
@@ -2084,7 +2099,7 @@ operator has to guess about.
 |---|---|
 | `crates/proxy/src/control/protocol.rs` | Request and response shapes, codes, `METHODS` |
 | `crates/proxy/src/control/handler.rs` | Every method |
-| `crates/proxy/src/control/mod.rs` | Socket path, bind, dial, HTTP client |
+| `crates/proxy/src/control/mod.rs` | Socket path, bind, dial, the Windows pipe name, HTTP client |
 | `crates/proxy/src/ingress.rs` | `POST /control` |
 | `crates/proxy/src/config/edit.rs` | Text edits for persisted changes |
 | `crates/proxy/src/usage.rs` | Quota figures, refresh sweep |
@@ -2546,7 +2561,9 @@ anything else has to be upgraded in step, only additions are safe.
 
 `accounts.forget`, renamed to `accounts.remove`. The project's former name
 `codex-cc-proxy` and `CODEX_CC_PROXY_*`, renamed to `proxenos` and `PROXENOS_*`
-with no aliases; a store or variable under the old name refuses loudly.
+with no aliases; a store or variable under the old name refuses loudly. The
+Windows pipe of a socket under `PROXENOS_HOME`, which was `proxenos.sock` for
+every home, renamed to one named after the path (§3).
 
 ### An added field is a capability
 
