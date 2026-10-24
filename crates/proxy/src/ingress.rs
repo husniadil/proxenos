@@ -7,7 +7,6 @@
 //! it was. `Door` and `serving_router` below.
 
 use crate::error::ProxyError;
-use crate::estimate::Estimator;
 use crate::upstream::Transport;
 use axum::Json;
 use axum::Router;
@@ -858,9 +857,9 @@ async fn messages(
 
     // §6.2 — the estimate carried in `message_start`, corrected by everything
     // this conversation has already learned.
-    let estimate = session
+    let (raw_estimate, estimate) = session
         .estimator
-        .estimate_sending(&request, &session.discovered());
+        .sizing_sending(&request, &session.discovered());
 
     // §7.2 — refuse a request the model cannot hold, before it is sent.
     //
@@ -1010,6 +1009,7 @@ async fn messages(
         Calibration {
             session: Arc::clone(&session),
             estimate,
+            raw: raw_estimate,
         },
         Arc::clone(&session),
         translated,
@@ -1179,6 +1179,9 @@ async fn json_response(
 struct Calibration {
     session: Arc<crate::session::Session>,
     estimate: u64,
+    /// The raw size `estimate` was made from. The observation is filed
+    /// against it, since the fit can move while the turn is in flight.
+    raw: u64,
 }
 
 /// Where this turn's token counts are filed once upstream reports them.
@@ -1242,7 +1245,7 @@ impl StreamState {
         self.calibration
             .session
             .estimator
-            .observe(self.calibration.estimate, actual);
+            .observe_raw(self.calibration.raw, actual);
     }
 
     /// §8.3 — add what upstream charged this turn to the account that served

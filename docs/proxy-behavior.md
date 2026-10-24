@@ -1348,13 +1348,15 @@ rather than its base64 length.
 
 Each completed turn yields the raw upstream `input_tokens` for a request that
 was also estimated, and the pair is folded into a fit retained on the session.
-The observation is on the *raw* estimate: the correction in force is inverted
-off the reported estimate first.
+The observation is on the *raw* estimate, the one the turn's corrected
+estimate was made from, kept with the turn rather than recovered later.
 
 ##### Why
 
 Fitting against a figure the fit produced makes the correction chase its own
-output.
+output. Two turns of one conversation can be in flight at once, so the fit can
+move between a turn's estimate and its observation, and inverting the reported
+estimate through the fit in force at observation files it somewhere else.
 
 #### The fit is a line, not a multiplier
 
@@ -1427,7 +1429,7 @@ visibly wrong, and it corrects on the next one.
 | `crates/core/src/translate/response.rs` | `translate_usage`: the cached-token conversion |
 | `crates/proxy/src/estimate.rs` | `CalibratedEstimator`, `Fit`, the raw estimate, the feature-gated tokenizer |
 | `crates/proxy/src/ingress.rs` | `count_tokens`, `calibrate`, `tally` |
-| `crates/proxy/src/usage.rs` | `UsageStore`: the tally, snapshot persistence, `restore`, `merge_into`, `replace_file` |
+| `crates/proxy/src/usage.rs` | `UsageStore`: the tally, snapshot persistence, `restore`, `add_into`, `replace_file` |
 | `crates/proxy/src/config.rs` | `spend.json` and `quota.json` paths |
 | `crates/proxy/tests/estimator.rs` | The fit's behaviour |
 | `crates/proxy/tests/usage.rs` | Tally and snapshot persistence |
