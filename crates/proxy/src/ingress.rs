@@ -946,7 +946,11 @@ async fn messages(
     // so the refusal is the first event that *speaks to the outcome* rather
     // than the first event on the wire.
     let mut rate_limit_headers: Vec<(&'static str, String)> = Vec::new();
-    let (preamble, events) = peek_preamble(events).await;
+    let Peeked {
+        seen: preamble,
+        rest: events,
+        ended,
+    } = peek_preamble(events, PREAMBLE_WAIT).await;
     for event in &preamble {
         // A transport failure here is as early as a refusal event, and as
         // unreadable when framed behind a 200.
@@ -962,10 +966,10 @@ async fn messages(
             return error.into_response();
         }
     }
-    // Fewer events than the peek allows, every one of them preamble: the
-    // stream ended before the response started. Streamed on, it would be a
-    // 200 with no frames at all.
-    if preamble.len() < PREAMBLE
+    // The stream ended within the peek, every event preamble: it ended before
+    // the response started. Streamed on, it would be a 200 with no frames at
+    // all. A peek the wait cut short is not an end, and is streamed on.
+    if ended
         && preamble.iter().all(|event| {
             event
                 .as_ref()
@@ -1414,18 +1418,28 @@ impl StreamState {
 /// Bounded, because this runs before a single byte reaches the client: reading
 /// until the response starts would let a slow backend hold the status open
 /// indefinitely. Four is past the preamble the backend actually sends and stops
-/// well short of any response body.
+/// well short of any response body. Bounded in time as well as in count: a
+/// backend that sends its preamble and then nothing would hold the status for
+/// as long as it stayed silent.
 const PREAMBLE: usize = 4;
+
+/// How long the peek waits for the response to start before it writes the
+/// status with what it has (§5.1).
+const PREAMBLE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 async fn peek_preamble(
     mut events: crate::upstream::EventStream,
-) -> (
-    Vec<Result<String, ProxyError>>,
-    crate::upstream::EventStream,
-) {
+    wait: std::time::Duration,
+) -> Peeked {
+    let deadline = tokio::time::Instant::now() + wait;
     let mut seen = Vec::new();
+    let mut ended = false;
     while seen.len() < PREAMBLE {
-        let Some(event) = events.next().await else {
+        let Ok(next) = tokio::time::timeout_at(deadline, events.next()).await else {
+            break;
+        };
+        let Some(event) = next else {
+            ended = true;
             break;
         };
         let ends_preamble = event
@@ -1437,7 +1451,19 @@ async fn peek_preamble(
             break;
         }
     }
-    (seen, events)
+    Peeked {
+        seen,
+        rest: events,
+        ended,
+    }
+}
+
+/// What the peek read, the stream after it, and whether the stream ended
+/// within the peek rather than the wait running out.
+struct Peeked {
+    seen: Vec<Result<String, ProxyError>>,
+    rest: crate::upstream::EventStream,
+    ended: bool,
 }
 
 /// Whether an event precedes the response rather than being part of it.
@@ -1574,6 +1600,31 @@ mod tests {
             written.last().map(Vec::as_slice),
             Some([Frame::MessageStop])
         ));
+    }
+
+    /// A backend that sends its preamble and then goes quiet does not hold
+    /// the status: past the wait, the peek hands back what it has and the rest
+    /// of the stream after it.
+    #[tokio::test]
+    async fn the_preamble_peek_is_bounded_in_time() {
+        let preamble = r#"{"type":"codex.rate_limits"}"#.to_owned();
+        let events: crate::upstream::EventStream = stream::iter(vec![Ok(preamble.clone())])
+            .chain(stream::pending())
+            .boxed();
+
+        let peeked = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            peek_preamble(events, std::time::Duration::from_millis(30)),
+        )
+        .await;
+
+        let peeked = peeked.expect("the peek waited on a silent backend");
+        assert_eq!(peeked.seen.len(), 1);
+        assert_eq!(
+            peeked.seen.first().and_then(|event| event.as_ref().ok()),
+            Some(&preamble)
+        );
+        assert!(!peeked.ended, "a wait cut short read as the stream ending");
     }
 
     /// Nothing is written before the message starts: a ping ahead of

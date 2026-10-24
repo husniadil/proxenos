@@ -950,7 +950,8 @@ sized for ordinary messages would sever a long conversation mid-turn.
 On the HTTP transport, the lines of one event are joined with newlines before
 parsing. A line opening with `:` is a comment and ignored. `\r\n`, `\r`, and
 `\n` all end a line, including a `\r\n` split across two chunks. An event left
-unterminated when the body ends is still delivered.
+unterminated when the body ends is still delivered. A byte order mark opening
+the body is dropped, as the SSE format says.
 
 ##### Why
 
@@ -967,9 +968,11 @@ this proxy fails to emit.
 
 #### WebSocket events need no reassembly
 
-Each text frame is one event; pings are answered by the library. Both
-transports produce the same event stream before translation, so §5.1 onward is
-transport-independent.
+Each text frame is one event; pings are answered by the library. A binary
+frame carries nothing this reads, and fails the turn as a transport failure
+(§5.1) rather than being skipped. The pump reads at most 64 events ahead of the
+client (`PUMP_BUFFER`). Both transports produce the same event stream before
+translation, so §5.1 onward is transport-independent.
 
 #### Every emitted frame names its event
 
@@ -1069,18 +1072,20 @@ surface writes `ping` frames, after `message_start` (`fixtures/surface/`).
 
 #### A refusal before the response starts is a status
 
-The first four upstream events are read before anything is written. An `error`
-event among them becomes an HTTP error response in the shape of `api.md` §1.1,
-with the status the event states (502 where it states none) mapped as in §2.8.
-A stream that ends among them, before any event of the response itself, is
-`overloaded_error`.
+The first four upstream events, or what arrives within ten seconds
+(`PREAMBLE_WAIT`), are read before anything is written. An `error` event among
+them becomes an HTTP error response in the shape of `api.md` §1.1, with the
+status the event states (502 where it states none) mapped as in §2.8. A stream
+that ends among them, before any event of the response itself, is
+`overloaded_error`; a peek the wait cut short is streamed on.
 
 ##### Why
 
 The backend opens a stream with a quota snapshot and metadata before it speaks
 to the outcome. A 200 whose body is one error frame and no `message_start` is
-not a message the client can read. The peek is bounded so a slow backend cannot
-hold the status open.
+not a message the client can read. The peek is bounded, in count and in time,
+so a slow backend cannot hold the status open: a backend that sent its preamble
+and then nothing held it for as long as it stayed silent.
 
 #### A failure after the response starts is an error frame
 
@@ -3066,9 +3071,10 @@ An id on this path is absent from that list by construction.
   header line beside the client's own `anthropic-beta`.
 - **`x-api-key` is dropped.** A turn authenticated as whatever the caller held is
   a turn this proxy did not route.
-- **Hop-by-hop, `host`, `content-length`, and `accept-encoding` are dropped.**
-  They describe this hop, and this path does not decode a content coding, so
-  asking for one would relay bytes the client never agreed to.
+- **Hop-by-hop, `host`, `content-length`, and `accept-encoding` are dropped**,
+  and so is every header the request's own `Connection` names. They describe
+  this hop, and this path does not decode a content coding, so asking for one
+  would relay bytes the client never agreed to.
 - **Everything else passes through**, `anthropic-version`, `anthropic-beta`,
   and the client's identifying headers included.
 
@@ -3084,8 +3090,8 @@ grant behind (measured: grant plus header answers 200).
 
 #### The response headers pass through, less hop-by-hop
 
-The response status and every response header not in the hop-by-hop set reach
-the client as sent.
+The response status and every response header not in the hop-by-hop set, and
+not named by the response's own `Connection`, reach the client as sent.
 
 ### 9.3 Errors
 

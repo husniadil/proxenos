@@ -111,3 +111,28 @@ fn an_unterminated_event_waits_for_the_end_of_the_stream() {
 
     assert_eq!(decoder.finish(), vec!["{}".to_owned()]);
 }
+
+/// A stream may open with a byte order mark, which the SSE format says to
+/// drop. Kept, it made the first field name `\u{FEFF}data`, and the first
+/// event was lost.
+#[test]
+fn a_leading_byte_order_mark_is_dropped() {
+    assert_eq!(
+        decode("\u{FEFF}data: first\n\ndata: second\n\n"),
+        vec!["first".to_owned(), "second".to_owned()]
+    );
+
+    // Split across chunks, it is still the stream's first three bytes.
+    let mut decoder = SseDecoder::default();
+    let bom = "\u{FEFF}".as_bytes();
+    let mut payloads: Vec<String> = decoder.push(&bom[..1]).collect();
+    payloads.extend(decoder.push(&bom[1..]));
+    payloads.extend(decoder.push(b"data: first\n\n"));
+    assert_eq!(payloads, vec!["first".to_owned()]);
+
+    // Only the first: one later in the stream is part of the data.
+    assert_eq!(
+        decode("data: a\n\ndata: \u{FEFF}b\n\n"),
+        vec!["a".to_owned(), "\u{FEFF}b".to_owned()]
+    );
+}

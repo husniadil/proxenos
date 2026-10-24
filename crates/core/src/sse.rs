@@ -29,6 +29,9 @@ pub struct SseDecoder {
     /// Set when the previous chunk ended on `\r`, so a `\n` opening the next
     /// chunk is the same terminator rather than an empty line.
     pending_newline_after_cr: bool,
+    /// Whether a line has ended yet. Only the stream's first line may open
+    /// with the byte order mark the format says to drop.
+    past_first_line: bool,
 }
 
 impl SseDecoder {
@@ -71,8 +74,14 @@ impl SseDecoder {
     }
 
     fn end_line(&mut self, payloads: &mut Vec<String>) {
-        let line = String::from_utf8_lossy(&self.buffer).into_owned();
+        let mut line = String::from_utf8_lossy(&self.buffer).into_owned();
         self.buffer.clear();
+        if !self.past_first_line {
+            self.past_first_line = true;
+            if let Some(rest) = line.strip_prefix('\u{FEFF}') {
+                line = rest.to_owned();
+            }
+        }
 
         if line.is_empty() {
             self.dispatch(payloads);

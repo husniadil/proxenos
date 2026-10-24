@@ -111,6 +111,17 @@ impl PooledConnection {
                     }
                 },
                 OpCode::Close => return None,
+                // Events arrive as text. A binary frame carries something this
+                // cannot read, and the reference client refuses one outright;
+                // skipped, the turn would wait on events it had already been
+                // sent.
+                OpCode::Binary => {
+                    return Some(Err(ProxyError::overloaded(
+                        "the websocket sent a binary frame, which carries no events this \
+                         client reads"
+                            .to_owned(),
+                    )));
+                }
                 // Pings are answered by the library; nothing else carries
                 // events.
                 _ => continue,
@@ -118,6 +129,9 @@ impl PooledConnection {
         }
     }
 }
+
+/// How many events the pump reads ahead of the client.
+const PUMP_BUFFER: usize = 64;
 
 /// The response id an event names, if any.
 fn response_id(payload: &str) -> Option<String> {
@@ -169,7 +183,10 @@ pub fn pump(
     opening: Vec<Result<String, ProxyError>>,
     slot: std::sync::Arc<tokio::sync::Mutex<Option<PooledConnection>>>,
 ) -> EventStream {
-    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    // Bounded, so a client reading slowly holds the socket's reads back rather
+    // than letting the turn pile up in memory. Room for the opening events
+    // with plenty to spare.
+    let (sender, receiver) = tokio::sync::mpsc::channel(PUMP_BUFFER.max(opening.len()));
 
     // The events read before the connection was handed over, delivered first.
     let mut opening_failed = false;
@@ -186,7 +203,7 @@ pub fn pump(
             }
             Err(_) => opening_failed = true,
         }
-        let _ = sender.send(event);
+        let _ = sender.try_send(event);
     }
 
     tokio::spawn(async move {
@@ -225,7 +242,7 @@ pub fn pump(
                 connection.seen_response_id = Some(id);
             }
 
-            if sender.send(event).is_err() {
+            if sender.send(event).await.is_err() {
                 // The client went away. Dropping the connection propagates the
                 // cancellation upstream rather than generating into nothing
                 // (§5.3).
@@ -254,9 +271,11 @@ pub fn pump(
         } else {
             // Closed before the turn's terminal event: a transport failure.
             // Ending quietly would close the message as a finished answer.
-            let _ = sender.send(Err(ProxyError::overloaded(
-                "the websocket closed before the turn completed".to_owned(),
-            )));
+            let _ = sender
+                .send(Err(ProxyError::overloaded(
+                    "the websocket closed before the turn completed".to_owned(),
+                )))
+                .await;
         }
     });
 

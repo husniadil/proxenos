@@ -259,6 +259,9 @@ enum WsBehavior {
     /// Answer every generate frame with all but the last event, then close
     /// the socket cleanly — a connection cut before the turn completed.
     CloseMidTurn,
+    /// Answer every generate frame with its first event as a text frame and
+    /// the rest as one binary frame.
+    BinaryMidTurn,
 }
 
 impl WsServer {
@@ -387,6 +390,22 @@ impl WsServer {
                                     ))
                                     .await;
                             }
+                            continue;
+                        }
+
+                        if matches!(behavior, WsBehavior::BinaryMidTurn) {
+                            let _ = socket
+                                .send(tokio_tungstenite::tungstenite::Message::Text(
+                                    events[0].to_string().into(),
+                                ))
+                                .await;
+                            let rest: String =
+                                events[1..].iter().map(ToString::to_string).collect();
+                            let _ = socket
+                                .send(tokio_tungstenite::tungstenite::Message::Binary(
+                                    rest.into_bytes().into(),
+                                ))
+                                .await;
                             continue;
                         }
 
@@ -1623,4 +1642,46 @@ async fn an_http_body_failing_after_the_terminal_event_leaves_the_turn_finished(
             .and_then(|event| event.as_ref().ok())
             .is_some_and(|payload| payload.contains("response.completed"))
     );
+}
+
+/// A binary frame carries events this client cannot read; the reference client
+/// refuses one outright. Skipping it silently left the turn waiting on events
+/// that had already been sent, so it fails the turn instead, and the socket is
+/// not kept.
+#[tokio::test]
+async fn a_binary_frame_mid_turn_ends_the_stream_with_an_error() {
+    let ws = WsServer::start(stream_events(), WsBehavior::BinaryMidTurn).await;
+    let addr = start_http().await;
+    let conduit = Conduit::new(
+        Arc::new(HttpTransport::new(format!("http://{addr}/responses"))),
+        Some(Arc::new(
+            WebSocketTransport::new(ws.url.clone()).with_compression(false),
+        )),
+        "test-session".to_owned(),
+    );
+
+    let (events, _) = conduit
+        .send(
+            &request(items(json!([message("turn 0")]))),
+            &Baseline::new(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("the turn should start");
+    let events: Vec<_> = tokio::time::timeout(std::time::Duration::from_secs(5), events.collect())
+        .await
+        .expect("the turn waited on events a binary frame carried");
+
+    let error = events
+        .last()
+        .expect("some events")
+        .as_ref()
+        .expect_err("the binary frame was skipped");
+    assert_eq!(
+        error.kind,
+        proxenos_core::anthropic::ErrorKind::OverloadedError
+    );
+    assert!(!conduit.has_pooled_connection().await);
 }
