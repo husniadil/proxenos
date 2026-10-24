@@ -1096,6 +1096,8 @@ stopped 0.2.0+ab12cd3; launchd started it again as 0.3.0+cd34ef5
 - The daemon answers before it goes; the run loop is released only once the
   response is written.
 - An in-flight turn is cut.
+- A signal is answered differently: Ctrl-C or SIGTERM (what a supervisor sends)
+  stops both doors taking connections, lets a turn in flight finish, and exits 0.
 - The CLI watches `instance` on `status`: a different id is a different process.
   It waits three seconds for the daemon to go and twelve for anything to bring it
   back, returning as soon as it sees the answer.
@@ -1124,6 +1126,7 @@ something the client's own retry already handles.
 | File | What it holds |
 |---|---|
 | `crates/proxy/src/commands/daemon.rs` | `stop` and its sentences |
+| `crates/proxy/src/daemon.rs` | The signals that stop the doors |
 | `crates/proxy/src/commands/mod.rs` | `STOP_WINDOW`, `RESTART_WINDOW`, `watch` |
 | `crates/proxy/src/control/handler.rs` | The `shutdown` method |
 

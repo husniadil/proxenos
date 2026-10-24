@@ -1,8 +1,8 @@
 //! Storing a key read from stdin.
 //!
 //! Behind a trait rather than reading stdin directly, so the terminal half and
-//! the pipe half are testable without a terminal. `--key` takes any secret and
-//! validates nothing about its shape.
+//! the pipe half are testable without a terminal. `accounts add-key` takes any
+//! secret and validates nothing about its shape.
 //!
 //! Silence while reading a tty reads as a hang. The prompt is written to
 //! **stderr** and only where a person is typing, so a piped key stays byte for

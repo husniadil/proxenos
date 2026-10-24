@@ -77,25 +77,46 @@ const SECURITY_NOT_FOUND: i32 = 44;
 
 impl GrantReader for HostReader {
     fn read(&self, source: &Source) -> Result<Option<String>, ProxyError> {
-        match source {
-            Source::Codex { auth_json } => read_file(auth_json),
-            Source::Claude(ClaudeSource::File { path }) => read_file(path),
-            Source::Claude(ClaudeSource::Keychain { service }) => read_keychain(service),
-            // `grant` splits a compound source into its places before reading,
-            // so this arm answers only a caller that read the source whole. It
-            // walks the same order, and the keychain's failure goes no further
-            // than the log — the refusal that carries it is `grant`'s to word.
-            Source::Claude(ClaudeSource::KeychainThenFile { service, path }) => {
-                match read_keychain(service) {
-                    Ok(Some(raw)) => Ok(Some(raw)),
-                    Ok(None) => read_file(path),
-                    Err(error) => {
-                        tracing::debug!(
-                            %error,
-                            "the keychain could not be read; trying the file beside it"
-                        );
-                        read_file(path)
-                    }
+        off_the_runtime(|| read_host(source))
+    }
+}
+
+/// Run blocking work where an async caller is waiting, without holding one of
+/// the runtime's workers while it blocks.
+///
+/// A keychain read spawns `security` and waits on it, and a turn resolves its
+/// grant from inside the runtime. On the daemon's multi-thread runtime the
+/// worker is handed off for the duration, so other turns go on being served.
+/// A current-thread runtime cannot hand its one thread off, and outside a
+/// runtime there is nothing to hand off, so both just run it.
+fn off_the_runtime<T>(work: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(work)
+        }
+        _ => work(),
+    }
+}
+
+fn read_host(source: &Source) -> Result<Option<String>, ProxyError> {
+    match source {
+        Source::Codex { auth_json } => read_file(auth_json),
+        Source::Claude(ClaudeSource::File { path }) => read_file(path),
+        Source::Claude(ClaudeSource::Keychain { service }) => read_keychain(service),
+        // `grant` splits a compound source into its places before reading,
+        // so this arm answers only a caller that read the source whole. It
+        // walks the same order, and the keychain's failure goes no further
+        // than the log — the refusal that carries it is `grant`'s to word.
+        Source::Claude(ClaudeSource::KeychainThenFile { service, path }) => {
+            match read_keychain(service) {
+                Ok(Some(raw)) => Ok(Some(raw)),
+                Ok(None) => read_file(path),
+                Err(error) => {
+                    tracing::debug!(
+                        %error,
+                        "the keychain could not be read; trying the file beside it"
+                    );
+                    read_file(path)
                 }
             }
         }
@@ -274,4 +295,61 @@ fn locate(reader: &dyn GrantReader, source: &Source) -> Result<Located, ProxyErr
 
 fn as_error(error: BorrowedError) -> ProxyError {
     ProxyError::authentication(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    /// With one worker, blocking work that held it would starve every other
+    /// task until it gave up. Handed off, the other task runs and the blocking
+    /// work sees what it set.
+    #[test]
+    fn blocking_work_leaves_the_runtime_serving() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let seen = runtime.block_on(async {
+            let flag = Arc::new(AtomicBool::new(false));
+            let waiting = {
+                let flag = Arc::clone(&flag);
+                tokio::spawn(async move {
+                    off_the_runtime(|| {
+                        let deadline = Instant::now() + Duration::from_secs(5);
+                        while Instant::now() < deadline {
+                            if flag.load(Ordering::SeqCst) {
+                                return true;
+                            }
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        false
+                    })
+                })
+            };
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let setter = {
+                let flag = Arc::clone(&flag);
+                tokio::spawn(async move { flag.store(true, Ordering::SeqCst) })
+            };
+            setter.await.unwrap();
+            waiting.await.unwrap()
+        });
+        assert!(seen);
+    }
+
+    /// A current-thread runtime, as a test's, and no runtime at all both run
+    /// the work in place rather than panicking.
+    #[test]
+    fn blocking_work_runs_anywhere() {
+        assert_eq!(off_the_runtime(|| 1), 1);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        assert_eq!(runtime.block_on(async { off_the_runtime(|| 2) }), 2);
+    }
 }

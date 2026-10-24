@@ -68,8 +68,28 @@ pub async fn serve_router(
         .map_err(|error| ProxyError::invalid_request(format!("server stopped: {error}")))
 }
 
+/// Ctrl-C, or SIGTERM where there is one. A supervisor stops a daemon with
+/// SIGTERM, and its default would kill the process with turns in flight.
 async fn shutdown() {
-    let _ = tokio::signal::ctrl_c().await;
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = terminate.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 /// A stop asked for over the control socket.
