@@ -62,12 +62,62 @@ fn strip_ids(item: &InputItem) -> serde_json::Value {
         // string that is not JSON has no canonical form, and inventing one
         // would make two genuinely different calls compare equal.
         if let Some(arguments) = object.get("arguments").and_then(serde_json::Value::as_str)
-            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(arguments)
+            && let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(arguments)
         {
+            canonical_numbers(&mut parsed);
             object.insert("arguments".to_owned(), parsed);
+        }
+
+        // One message may come back as several text parts, and the client is
+        // shown them as one block and replays one part with the same text.
+        if let Some(serde_json::Value::Array(parts)) = object.get_mut("content") {
+            join_text_parts(parts);
         }
     }
     value
+}
+
+/// A number written `2.0` by one serializer and `2` by another is one value.
+/// An integral float is compared as the integer it is, where a double holds
+/// that integer exactly; past that it stays as written, since two integers a
+/// double cannot tell apart are not equal.
+fn canonical_numbers(value: &mut serde_json::Value) {
+    const EXACT: f64 = 9_007_199_254_740_992.0;
+    match value {
+        serde_json::Value::Number(number) if !number.is_i64() && !number.is_u64() => {
+            if let Some(float) = number.as_f64()
+                && float.fract() == 0.0
+                && float.abs() <= EXACT
+            {
+                #[allow(clippy::cast_possible_truncation)]
+                let integer = float as i64;
+                *value = serde_json::Value::from(integer);
+            }
+        }
+        serde_json::Value::Array(values) => values.iter_mut().for_each(canonical_numbers),
+        serde_json::Value::Object(map) => map.values_mut().for_each(canonical_numbers),
+        _ => {}
+    }
+}
+
+/// Adjacent text parts of one kind, joined into one, as the client is shown
+/// them.
+fn join_text_parts(parts: &mut Vec<serde_json::Value>) {
+    let mut joined: Vec<serde_json::Value> = Vec::with_capacity(parts.len());
+    for part in parts.drain(..) {
+        let kind = part.get("type").and_then(serde_json::Value::as_str);
+        let text = part.get("text").and_then(serde_json::Value::as_str);
+        if let (Some(kind @ ("input_text" | "output_text")), Some(text)) = (kind, text)
+            && let Some(previous) = joined.last_mut()
+            && previous.get("type").and_then(serde_json::Value::as_str) == Some(kind)
+            && let Some(serde_json::Value::String(held)) = previous.get_mut("text")
+        {
+            held.push_str(text);
+            continue;
+        }
+        joined.push(part);
+    }
+    *parts = joined;
 }
 
 /// Whether the client could ever have replayed this item.

@@ -1117,3 +1117,58 @@ fn two_tiers_on_one_model_must_agree_on_its_effort() {
     .resolve(proxenos::config::CrossAccountTiers::Refused)
     .expect("one stated effort on a shared model is fine");
 }
+
+/// A supervisor stops the daemon with SIGTERM (launchd's `bootout`,
+/// systemd's `stop`). It is answered the way Ctrl-C is: the doors stop taking
+/// connections, what is in flight finishes, and the process exits cleanly
+/// rather than being killed by the signal's default.
+#[cfg(unix)]
+#[test]
+fn sigterm_stops_the_daemon_cleanly() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join("config");
+    std::fs::create_dir_all(&config).unwrap();
+    let mut daemon = std::process::Command::new(env!("CARGO_BIN_EXE_proxenos"))
+        .args(["run", "--port", "0"])
+        .env_remove("PROXENOS_DAEMON")
+        .env_remove("PROXENOS_TOKEN_FILE")
+        .env_remove("PROXENOS_TOKEN")
+        .env("PROXENOS_HOME", &config)
+        .env("HOME", home.path())
+        .env("TMPDIR", home.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let socket = config.join("proxenos.sock");
+    for _ in 0..200 {
+        if socket.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    assert!(socket.exists(), "the daemon never bound its control socket");
+
+    let sent = std::process::Command::new("kill")
+        .args(["-TERM", &daemon.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(sent.success());
+
+    let mut status = None;
+    for _ in 0..200 {
+        if let Some(exited) = daemon.try_wait().unwrap() {
+            status = Some(exited);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let Some(status) = status else {
+        let _ = daemon.kill();
+        panic!("the daemon did not stop on SIGTERM");
+    };
+    assert_eq!(status.signal(), None, "killed by the signal: {status:?}");
+    assert!(status.success(), "{status:?}");
+}

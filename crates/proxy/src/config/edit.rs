@@ -311,13 +311,25 @@ pub fn rename_account(document: &str, from: &str, to: &str) -> Result<Option<Str
 ///
 /// Both spellings of the name are recognized, because TOML allows a bare key
 /// and a quoted one for the same table and an operator may have written either.
+///
+/// A comment may follow the header, as `opens_table` reads it, and is kept in
+/// what is returned so a rename leaves it where it was.
 fn account_header(line: &str, account: &str) -> Option<String> {
     let trimmed = line.trim();
     let rest = trimmed.strip_prefix("[accounts.")?;
     let rest = rest
         .strip_prefix(&format!("\"{account}\""))
         .or_else(|| rest.strip_prefix(account))?;
-    (rest == "]" || rest.starts_with('.')).then(|| rest.to_owned())
+    (closes_header(rest) || rest.starts_with('.')).then(|| rest.to_owned())
+}
+
+/// Whether what follows a table's name closes its header: `]`, then nothing
+/// but a comment.
+fn closes_header(rest: &str) -> bool {
+    rest.strip_prefix(']').is_some_and(|after| {
+        let after = after.trim_start();
+        after.is_empty() || after.starts_with('#')
+    })
 }
 
 /// A name as it has to be written in a table header: bare where TOML allows a
@@ -470,9 +482,11 @@ pub fn add_profile(
 /// The table ends at the next header or at the end of the file, which is what
 /// TOML says it does. Comments *above* the header are left where they are: a
 /// comment line belongs to whoever wrote it, and this cannot tell one written
-/// about this profile from one written about the section before it. A stray
-/// comment is a cosmetic remainder; guessing at ownership and taking a line
-/// that explained something else is a loss.
+/// about this profile from one written about the section before it. For the
+/// same reason the comments and blank lines just above the next header stay:
+/// they read as that table's introduction. A stray comment is a cosmetic
+/// remainder; guessing at ownership and taking a line that explained
+/// something else is a loss.
 pub fn remove_profile(document: &str, name: &str) -> Result<Option<String>, ProxyError> {
     let lines: Vec<&str> = document.lines().collect();
     let Some(opens) = lines
@@ -482,11 +496,30 @@ pub fn remove_profile(document: &str, name: &str) -> Result<Option<String>, Prox
         return Ok(None);
     };
 
-    let closes = lines
+    let next = lines
         .iter()
         .skip(opens + 1)
         .position(|line| line.trim().starts_with('['))
-        .map_or(lines.len(), |offset| opens + 1 + offset);
+        .map(|offset| opens + 1 + offset);
+    let closes = match next {
+        None => lines.len(),
+        Some(next) => {
+            let mut closes = next;
+            while closes > opens + 1
+                && lines.get(closes - 1).is_some_and(|line| {
+                    let line = line.trim();
+                    line.is_empty() || line.starts_with('#')
+                })
+            {
+                closes -= 1;
+            }
+            // The blank line that set the removed table off goes with it.
+            while lines.get(closes).is_some_and(|line| line.trim().is_empty()) {
+                closes += 1;
+            }
+            closes
+        }
+    };
 
     let kept: Vec<&str> = lines
         .iter()
@@ -506,7 +539,7 @@ fn profile_header(line: &str, name: &str) -> Option<String> {
     let rest = rest
         .strip_prefix(&format!("\"{name}\""))
         .or_else(|| rest.strip_prefix(name))?;
-    (rest == "]").then(|| rest.to_owned())
+    closes_header(rest).then(|| rest.to_owned())
 }
 
 /// A TOML basic string. A profile directory is often under a path with a space

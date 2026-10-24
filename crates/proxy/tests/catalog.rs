@@ -295,6 +295,24 @@ fn an_unreadable_catalog_is_an_error() {
     assert!(Catalog::parse("{{ not json", SHIPPING).is_err());
 }
 
+/// A body naming neither list is not an account with no models. Read as one,
+/// it was an authoritative empty catalog, and every tier the check reached was
+/// marked missing. It is refused as unreadable, so the fallback list stands
+/// in. A list that is present and empty is still an empty catalog.
+#[test]
+fn a_body_with_neither_list_is_unreadable_rather_than_empty() {
+    for body in [r#"{}"#, r#"{"object":"list"}"#, r#"{"error":"later"}"#] {
+        let error = Catalog::parse(body, SHIPPING).expect_err(body);
+        assert!(error.message.contains("model catalog"), "{}", error.message);
+    }
+
+    for body in [r#"{"data":[]}"#, r#"{"models":[]}"#] {
+        let catalog = Catalog::parse(body, SHIPPING).expect(body);
+        assert!(catalog.ids().is_empty(), "{body}");
+        assert!(catalog.authoritative, "{body}");
+    }
+}
+
 /// Some responses key the list differently. Both shapes parse.
 #[test]
 fn either_list_key_parses() {

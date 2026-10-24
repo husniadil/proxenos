@@ -260,7 +260,38 @@ pub fn plan(
                  remove the key first with `proxenos accounts remove {name}`."
             );
         }
-        Some(path.unwrap_or_else(|| directory(config_dir, name)))
+        let typed = path.is_some();
+        let directory = path.unwrap_or_else(|| directory(config_dir, name));
+        // What `config::validate_profiles` refuses at the daemon's start, asked
+        // of the declaration this would write, so the client is not run into
+        // a file the daemon will not read.
+        if let Some((holder, _)) = config.profiles.iter().find(|(_, declared)| {
+            declared.provider == provider && declared.path.as_deref() == Some(directory.as_path())
+        }) {
+            anyhow::bail!(
+                "`{holder}` already declares {} for {}, so `{name}` would be the same profile. \
+                 One directory holds one grant; sign `{holder}` in again with `--relogin`, or \
+                 choose another directory.",
+                directory.display(),
+                provider.as_str()
+            );
+        }
+        if typed {
+            let shown = directory.display();
+            if directory.to_string_lossy().starts_with('~') {
+                anyhow::bail!(
+                    "`--path {shown}` starts with `~`, which nothing here expands. Write the \
+                     path out in full."
+                );
+            }
+            if !directory.is_absolute() {
+                anyhow::bail!(
+                    "`--path {shown}` is relative. A profile is found from a daemon whose \
+                     working directory is not this one, so it must be absolute."
+                );
+            }
+        }
+        Some(directory)
     };
     // Each provider's own configured path: the same key the daemon pokes that
     // client by (§8.4), so a login and a refresh cannot run different programs.
@@ -751,6 +782,52 @@ mod tests {
             refusal.contains("already declared in `[profiles]`"),
             "{refusal}"
         );
+    }
+
+    /// `--path` is declared as it was typed, and the daemon refuses to start
+    /// on a relative path or a `~`. Refused here instead, before the client
+    /// runs, rather than written into a file the daemon then will not read.
+    #[test]
+    fn a_relative_or_tilde_path_is_refused_before_anything_runs() {
+        for typed in ["profiles/work", "~/.codex-work"] {
+            let refusal = plan(
+                "work",
+                Provider::Codex,
+                Some(PathBuf::from(typed)),
+                false,
+                false,
+                &config(""),
+                Path::new("/config"),
+                &[],
+            )
+            .expect_err("not a path the daemon reads")
+            .to_string();
+
+            assert!(refusal.contains("--path"), "{refusal}");
+            assert!(refusal.contains(typed), "{refusal}");
+        }
+    }
+
+    /// A directory another declaration of the same program already names is
+    /// the same profile, which the daemon refuses to start on. Refused here,
+    /// naming the declaration that holds it.
+    #[test]
+    fn a_directory_already_declared_is_refused_before_anything_runs() {
+        let refusal = plan(
+            "spare",
+            Provider::Codex,
+            Some(PathBuf::from("/profiles/work")),
+            false,
+            false,
+            &config("[profiles.work]\nprovider = \"codex\"\npath = \"/profiles/work\"\n"),
+            Path::new("/config"),
+            &[],
+        )
+        .expect_err("the same profile")
+        .to_string();
+
+        assert!(refusal.contains("`work`"), "{refusal}");
+        assert!(refusal.contains("same profile"), "{refusal}");
     }
 
     /// A name the key store already holds is refused the same way. `add-key`

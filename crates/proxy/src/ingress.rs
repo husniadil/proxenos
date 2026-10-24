@@ -7,7 +7,6 @@
 //! it was. `Door` and `serving_router` below.
 
 use crate::error::ProxyError;
-use crate::estimate::Estimator;
 use crate::upstream::Transport;
 use axum::Json;
 use axum::Router;
@@ -400,7 +399,7 @@ async fn count_tokens(
     };
 
     let probe = translate_request(&request, &TranslateOptions::default());
-    let estimate = match state.sessions.lookup(&probe.input) {
+    let estimate = match state.sessions.lookup(&probe.input, &request.model) {
         Some(session) => session
             .estimator
             .estimate_sending(&request, &session.discovered()),
@@ -740,7 +739,16 @@ async fn messages(
     // Translated once with no session knowledge, purely to derive the item
     // sequence this conversation is identified by (§3.1).
     let probe = translate_request(&request, &TranslateOptions::default());
-    let session = state.sessions.resolve(&probe.input);
+    let session = state.sessions.resolve(
+        &probe.input,
+        &crate::session::Scope {
+            requested: request.model.clone(),
+            model: upstream_model
+                .clone()
+                .unwrap_or_else(|| request.model.clone()),
+            account: account.clone(),
+        },
+    );
     session.record_discovered(discovered_tool_names(&request));
 
     // §2.7 — the ceiling is the operator's, capped again by what this model
@@ -858,9 +866,9 @@ async fn messages(
 
     // §6.2 — the estimate carried in `message_start`, corrected by everything
     // this conversation has already learned.
-    let estimate = session
+    let (raw_estimate, estimate) = session
         .estimator
-        .estimate_sending(&request, &session.discovered());
+        .sizing_sending(&request, &session.discovered());
 
     // §7.2 — refuse a request the model cannot hold, before it is sent.
     //
@@ -938,7 +946,11 @@ async fn messages(
     // so the refusal is the first event that *speaks to the outcome* rather
     // than the first event on the wire.
     let mut rate_limit_headers: Vec<(&'static str, String)> = Vec::new();
-    let (preamble, events) = peek_preamble(events).await;
+    let Peeked {
+        seen: preamble,
+        rest: events,
+        ended,
+    } = peek_preamble(events, PREAMBLE_WAIT).await;
     for event in &preamble {
         // A transport failure here is as early as a refusal event, and as
         // unreadable when framed behind a 200.
@@ -954,10 +966,10 @@ async fn messages(
             return error.into_response();
         }
     }
-    // Fewer events than the peek allows, every one of them preamble: the
-    // stream ended before the response started. Streamed on, it would be a
-    // 200 with no frames at all.
-    if preamble.len() < PREAMBLE
+    // The stream ended within the peek, every event preamble: it ended before
+    // the response started. Streamed on, it would be a 200 with no frames at
+    // all. A peek the wait cut short is not an end, and is streamed on.
+    if ended
         && preamble.iter().all(|event| {
             event
                 .as_ref()
@@ -1010,6 +1022,7 @@ async fn messages(
         Calibration {
             session: Arc::clone(&session),
             estimate,
+            raw: raw_estimate,
         },
         Arc::clone(&session),
         translated,
@@ -1104,6 +1117,42 @@ fn frame_stream(
     })
 }
 
+/// How long the event stream may go without writing before a ping is.
+const KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The frames, with a `ping` written for each `period` nothing else was, once
+/// the message has started (§5.1).
+///
+/// A model reasoning before it writes can leave the response silent for
+/// minutes, and an intermediary or the client reads silence as a dead
+/// connection. The real surface writes pings, and only after `message_start`.
+fn keep_alive(
+    frames: impl futures::Stream<Item = Vec<proxenos_core::anthropic::Frame>> + Send + 'static,
+    period: std::time::Duration,
+) -> impl futures::Stream<Item = Vec<proxenos_core::anthropic::Frame>> + Send + 'static {
+    stream::unfold(
+        (Box::pin(frames), false),
+        move |(mut frames, started)| async move {
+            let next = if started {
+                match tokio::time::timeout(period, frames.next()).await {
+                    Ok(next) => next,
+                    Err(_) => {
+                        return Some((vec![proxenos_core::anthropic::Frame::Ping], (frames, true)));
+                    }
+                }
+            } else {
+                frames.next().await
+            };
+            let batch = next?;
+            let started = started
+                || batch.iter().any(|frame| {
+                    matches!(frame, proxenos_core::anthropic::Frame::MessageStart { .. })
+                });
+            Some((batch, (frames, started)))
+        },
+    )
+}
+
 /// Render frames to the wire as they arrive.
 ///
 /// Dropping this response cancels the upstream request with it: the stream is
@@ -1113,7 +1162,7 @@ fn sse_response(
     frames: impl futures::Stream<Item = Vec<proxenos_core::anthropic::Frame>> + Send + 'static,
     rate_limit_headers: Vec<(&'static str, String)>,
 ) -> Response {
-    let body = frames.filter_map(|frames| async move {
+    let body = keep_alive(frames, KEEP_ALIVE).filter_map(|frames| async move {
         if frames.is_empty() {
             return None;
         }
@@ -1179,6 +1228,9 @@ async fn json_response(
 struct Calibration {
     session: Arc<crate::session::Session>,
     estimate: u64,
+    /// The raw size `estimate` was made from. The observation is filed
+    /// against it, since the fit can move while the turn is in flight.
+    raw: u64,
 }
 
 /// Where this turn's token counts are filed once upstream reports them.
@@ -1242,7 +1294,7 @@ impl StreamState {
         self.calibration
             .session
             .estimator
-            .observe(self.calibration.estimate, actual);
+            .observe_raw(self.calibration.raw, actual);
     }
 
     /// §8.3 — add what upstream charged this turn to the account that served
@@ -1366,18 +1418,28 @@ impl StreamState {
 /// Bounded, because this runs before a single byte reaches the client: reading
 /// until the response starts would let a slow backend hold the status open
 /// indefinitely. Four is past the preamble the backend actually sends and stops
-/// well short of any response body.
+/// well short of any response body. Bounded in time as well as in count: a
+/// backend that sends its preamble and then nothing would hold the status for
+/// as long as it stayed silent.
 const PREAMBLE: usize = 4;
+
+/// How long the peek waits for the response to start before it writes the
+/// status with what it has (§5.1).
+const PREAMBLE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 async fn peek_preamble(
     mut events: crate::upstream::EventStream,
-) -> (
-    Vec<Result<String, ProxyError>>,
-    crate::upstream::EventStream,
-) {
+    wait: std::time::Duration,
+) -> Peeked {
+    let deadline = tokio::time::Instant::now() + wait;
     let mut seen = Vec::new();
+    let mut ended = false;
     while seen.len() < PREAMBLE {
-        let Some(event) = events.next().await else {
+        let Ok(next) = tokio::time::timeout_at(deadline, events.next()).await else {
+            break;
+        };
+        let Some(event) = next else {
+            ended = true;
             break;
         };
         let ends_preamble = event
@@ -1389,7 +1451,19 @@ async fn peek_preamble(
             break;
         }
     }
-    (seen, events)
+    Peeked {
+        seen,
+        rest: events,
+        ended,
+    }
+}
+
+/// What the peek read, the stream after it, and whether the stream ended
+/// within the peek rather than the wait running out.
+struct Peeked {
+    seen: Vec<Result<String, ProxyError>>,
+    rest: crate::upstream::EventStream,
+    ended: bool,
 }
 
 /// Whether an event precedes the response rather than being part of it.
@@ -1473,4 +1547,101 @@ fn upstream_refusal(payload: &str) -> Option<ProxyError> {
 
 fn render(frames: &[proxenos_core::anthropic::Frame]) -> String {
     frames.iter().map(encode_frame).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proxenos_core::anthropic::Frame;
+
+    fn started() -> Frame {
+        Frame::MessageStart {
+            message: proxenos_core::anthropic::MessageStart {
+                id: "msg_1".to_owned(),
+                kind: proxenos_core::anthropic::MessageLiteral::Message,
+                role: proxenos_core::anthropic::AssistantLiteral::Assistant,
+                model: "claude-sonnet-5".to_owned(),
+                content: Vec::new(),
+                stop_reason: None,
+                stop_sequence: None,
+                usage: proxenos_core::anthropic::Usage::default(),
+            },
+        }
+    }
+
+    /// A long stretch with nothing from upstream — a model reasoning before it
+    /// writes — leaves the response silent, and an intermediary or the client
+    /// reads silence as a dead connection. A ping is written for each quiet
+    /// period once the message has started, as the real surface writes them.
+    #[tokio::test]
+    async fn a_quiet_stream_is_kept_alive_with_pings() {
+        let period = std::time::Duration::from_millis(40);
+        let frames = stream::iter(vec![vec![started()], vec![Frame::MessageStop]]).then(
+            move |frames| async move {
+                if matches!(frames.first(), Some(Frame::MessageStop)) {
+                    tokio::time::sleep(period * 4).await;
+                }
+                frames
+            },
+        );
+
+        let written: Vec<Vec<Frame>> = keep_alive(frames, period).collect().await;
+
+        let pings = written
+            .iter()
+            .filter(|frames| matches!(frames.as_slice(), [Frame::Ping]))
+            .count();
+        assert!(pings >= 2, "{written:?}");
+        assert!(matches!(
+            written.first().map(Vec::as_slice),
+            Some([Frame::MessageStart { .. }])
+        ));
+        assert!(matches!(
+            written.last().map(Vec::as_slice),
+            Some([Frame::MessageStop])
+        ));
+    }
+
+    /// A backend that sends its preamble and then goes quiet does not hold
+    /// the status: past the wait, the peek hands back what it has and the rest
+    /// of the stream after it.
+    #[tokio::test]
+    async fn the_preamble_peek_is_bounded_in_time() {
+        let preamble = r#"{"type":"codex.rate_limits"}"#.to_owned();
+        let events: crate::upstream::EventStream = stream::iter(vec![Ok(preamble.clone())])
+            .chain(stream::pending())
+            .boxed();
+
+        let peeked = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            peek_preamble(events, std::time::Duration::from_millis(30)),
+        )
+        .await;
+
+        let peeked = peeked.expect("the peek waited on a silent backend");
+        assert_eq!(peeked.seen.len(), 1);
+        assert_eq!(
+            peeked.seen.first().and_then(|event| event.as_ref().ok()),
+            Some(&preamble)
+        );
+        assert!(!peeked.ended, "a wait cut short read as the stream ending");
+    }
+
+    /// Nothing is written before the message starts: a ping ahead of
+    /// `message_start` is not a frame the surface ever sends.
+    #[tokio::test]
+    async fn no_ping_precedes_the_message() {
+        let period = std::time::Duration::from_millis(20);
+        let frames = stream::iter(vec![vec![started()]]).then(move |frames| async move {
+            tokio::time::sleep(period * 4).await;
+            frames
+        });
+
+        let written: Vec<Vec<Frame>> = keep_alive(frames, period).collect().await;
+
+        assert!(matches!(
+            written.first().map(Vec::as_slice),
+            Some([Frame::MessageStart { .. }])
+        ));
+    }
 }

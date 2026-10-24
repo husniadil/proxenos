@@ -469,3 +469,66 @@ fn unparseable_arguments_fall_back_to_the_literal_text() {
     assert!(extends(&one, &same));
     assert!(!extends(&one, &other));
 }
+
+/// A number the model wrote as `2.0` and the client's serializer wrote back as
+/// `2` is one value, and the call is one call. Read as two, every turn after
+/// it started a new session and sent the whole history.
+#[test]
+fn a_number_written_two_ways_is_one_value() {
+    let server = items(json!([{
+        "type": "function_call", "call_id": "c", "name": "Read",
+        "arguments": "{\"offset\":2.0,\"limit\":100}",
+    }]));
+    let client = items(json!([{
+        "type": "function_call", "call_id": "c", "name": "Read",
+        "arguments": "{\"offset\":2,\"limit\":100.0}",
+    }]));
+    let other = items(json!([{
+        "type": "function_call", "call_id": "c", "name": "Read",
+        "arguments": "{\"offset\":2.5,\"limit\":100}",
+    }]));
+
+    assert!(extends(&server, &client));
+    assert!(!extends(&server, &other));
+}
+
+/// Integers past what a double holds exactly are compared exactly: equal as
+/// doubles is not equal.
+#[test]
+fn large_integers_are_not_rounded_into_each_other() {
+    let one = items(json!([{
+        "type": "function_call", "call_id": "c", "name": "T",
+        "arguments": "{\"id\":9007199254740993}",
+    }]));
+    let two = items(json!([{
+        "type": "function_call", "call_id": "c", "name": "T",
+        "arguments": "{\"id\":9007199254740992}",
+    }]));
+
+    assert!(!extends(&one, &two));
+}
+
+/// The backend may return one message as several text parts. The client is
+/// shown them as one block and replays one part holding the same text, which
+/// is the same message.
+#[test]
+fn a_message_split_into_parts_is_the_message_joined() {
+    let server = items(json!([{
+        "type": "message", "role": "assistant",
+        "content": [
+            { "type": "output_text", "text": "Hello, " },
+            { "type": "output_text", "text": "world." },
+        ],
+    }]));
+    let client = items(json!([{
+        "type": "message", "role": "assistant",
+        "content": [{ "type": "output_text", "text": "Hello, world." }],
+    }]));
+    let other = items(json!([{
+        "type": "message", "role": "assistant",
+        "content": [{ "type": "output_text", "text": "Hello world." }],
+    }]));
+
+    assert!(extends(&server, &client));
+    assert!(!extends(&server, &other));
+}

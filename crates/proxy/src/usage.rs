@@ -420,31 +420,6 @@ impl Snapshot {
         })
     }
 
-    /// What a profile body states about the account: its plan, and what the
-    /// subscription behind it is doing.
-    ///
-    /// The quota body states neither. The profile endpoint beside it states
-    /// the plan as `organization.organization_type` — and for a max org the
-    /// multiplier rides separately in `rate_limit_tier`
-    /// (`default_claude_max_20x`) — and the subscription as
-    /// `organization.subscription_status`. An organization type this does not
-    /// recognize yields no plan rather than a guessed one; the status is
-    /// passed through as stated, because a canceled account is reported to
-    /// keep serving quota that looks untouched while every turn is refused,
-    /// and this proxy has measured only the word that means nothing is wrong.
-    ///
-    /// `None` where there is no organization to read at all.
-    /// This snapshot, plus the named windows a previous one carried that this
-    /// one does not.
-    ///
-    /// The headers on a served turn state the 5h, 7d and overage windows; the
-    /// usage endpoint states the 5h, 7d and each model's own. Neither names
-    /// the other's, so a snapshot that replaced the whole set made "Fable"
-    /// and "overage" take turns on a meter. A named window the newer source
-    /// did not restate is kept from the older one until it resets — a window
-    /// measured by duration is never carried, since every source states
-    /// those, and a reset window is dropped rather than shown at a figure
-    /// the reset erased.
     /// The windows in the one order every reader gets them in (`api.md` §3):
     /// the account's own by length, shortest first, then the named ones in
     /// the order they came.
@@ -458,6 +433,17 @@ impl Snapshot {
             .sort_by_key(|window| (window.window_minutes.is_none(), window.window_minutes));
     }
 
+    /// This snapshot, plus the named windows a previous one carried that this
+    /// one does not.
+    ///
+    /// The headers on a served turn state the 5h, 7d and overage windows; the
+    /// usage endpoint states the 5h, 7d and each model's own. Neither names
+    /// the other's, so a snapshot that replaced the whole set made "Fable"
+    /// and "overage" take turns on a meter. A named window the newer source
+    /// did not restate is kept from the older one until it resets — a window
+    /// measured by duration is never carried, since every source states
+    /// those, and a reset window is dropped rather than shown at a figure
+    /// the reset erased.
     #[must_use]
     pub fn carrying(&self, previous: &Self, now: u64) -> Self {
         let mut merged = self.clone();
@@ -482,6 +468,20 @@ impl Snapshot {
         merged
     }
 
+    /// What a profile body states about the account: its plan, and what the
+    /// subscription behind it is doing.
+    ///
+    /// The quota body states neither. The profile endpoint beside it states
+    /// the plan as `organization.organization_type` — and for a max org the
+    /// multiplier rides separately in `rate_limit_tier`
+    /// (`default_claude_max_20x`) — and the subscription as
+    /// `organization.subscription_status`. An organization type this does not
+    /// recognize yields no plan rather than a guessed one; the status is
+    /// passed through as stated, because a canceled account is reported to
+    /// keep serving quota that looks untouched while every turn is refused,
+    /// and this proxy has measured only the word that means nothing is wrong.
+    ///
+    /// `None` where there is no organization to read at all.
     pub fn anthropic_profile(payload: &str) -> Option<Profile> {
         let body: Value = serde_json::from_str(payload).ok()?;
         let organization = body.get("organization")?;
@@ -932,16 +932,52 @@ fn restore(mut measured: Measured, now: u64) -> Option<Measured> {
     Some(measured)
 }
 
-/// Take whichever count is higher per account. A tally only ever grows, so the
-/// higher of two counts is the one closer to what was actually served.
-fn merge_into(
+/// Add one tally to another, per account.
+///
+/// What is added is what this daemon counted since its last write, never its
+/// whole view: two daemons sharing a home each count their own turns, and
+/// taking the higher of their totals kept one daemon's turns and dropped every
+/// turn of the other.
+fn add_into(
     merged: &mut std::collections::BTreeMap<String, Spent>,
-    held: &std::collections::BTreeMap<String, Spent>,
+    unflushed: &std::collections::BTreeMap<String, Spent>,
 ) {
-    for (name, spent) in held {
+    for (name, spent) in unflushed {
         let entry = merged.entry(name.clone()).or_default();
-        entry.input = entry.input.max(spent.input);
-        entry.output = entry.output.max(spent.output);
+        entry.input = entry.input.saturating_add(spent.input);
+        entry.output = entry.output.saturating_add(spent.output);
+    }
+}
+
+/// What a tally write does besides adding what is unwritten.
+#[derive(Clone, Copy)]
+enum TallyChange<'a> {
+    None,
+    /// A removed account: gone from the file, and not brought back off it.
+    Forget(&'a str),
+    /// A renamed account: its count moves to the new name.
+    Rename {
+        from: &'a str,
+        to: &'a str,
+    },
+}
+
+impl TallyChange<'_> {
+    fn apply(self, tally: &mut std::collections::BTreeMap<String, Spent>) {
+        match self {
+            Self::None => {}
+            Self::Forget(name) => {
+                tally.remove(name);
+            }
+            Self::Rename { from, to } => {
+                if let Some(moved) = tally.remove(from) {
+                    add_into(
+                        tally,
+                        &std::collections::BTreeMap::from([(to.to_owned(), moved)]),
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -967,7 +1003,7 @@ fn write_and_flush(path: &std::path::Path, body: &str) -> std::io::Result<()> {
     file.sync_all()
 }
 
-fn replace_file(path: &std::path::Path, body: &str) {
+fn replace_file(path: &std::path::Path, body: &str) -> bool {
     let mut pending = path.to_path_buf().into_os_string();
     pending.push(format!(".{}.pending", std::process::id()));
     let pending = std::path::PathBuf::from(pending);
@@ -977,11 +1013,13 @@ fn replace_file(path: &std::path::Path, body: &str) {
     // floor-of-zero by a different route.
     if write_and_flush(&pending, body).is_err() {
         let _ = std::fs::remove_file(&pending);
-        return;
+        return false;
     }
     if std::fs::rename(&pending, path).is_err() {
         let _ = std::fs::remove_file(&pending);
+        return false;
     }
+    true
 }
 
 fn now() -> u64 {
@@ -1016,8 +1054,15 @@ pub struct UsageStore {
     /// Both are needed to answer "is this session mine" for a status line, and
     /// only a turn can report the second kind.
     served: Mutex<std::collections::BTreeSet<String>>,
-    /// Tokens served per account, as upstream counted them.
+    /// Tokens served per account, as upstream counted them: the tally as the
+    /// file held it after this daemon's last write, plus what is unwritten.
     spent: Mutex<std::collections::BTreeMap<String, Spent>>,
+    /// What this daemon counted since its last write reached the file. A
+    /// write adds this to what the file holds, so another daemon's turns in
+    /// the file are kept rather than outvoted (§6.1).
+    unflushed: Mutex<std::collections::BTreeMap<String, Spent>>,
+    /// Held for the whole of a tally write.
+    tally_writing: Mutex<()>,
     /// What the profile endpoint last stated per account, and when.
     ///
     /// The profile is asked for at most hourly: a plan changes on the scale of
@@ -1252,10 +1297,12 @@ impl UsageStore {
         }
         // And what was served as it. The tally answers "how much has this
         // account spent through this daemon", and there is no such account.
-        if let Ok(mut spent) = self.spent.lock() {
-            spent.remove(account);
+        for tally in [&self.spent, &self.unflushed] {
+            if let Ok(mut tally) = tally.lock() {
+                TallyChange::Forget(account).apply(&mut tally);
+            }
         }
-        self.write_tally(Some(account));
+        self.write_tally(TallyChange::Forget(account));
         self.write_quota(Some(account));
     }
 
@@ -1269,17 +1316,17 @@ impl UsageStore {
         {
             by_account.insert(to.to_owned(), measured);
         }
-        if let Ok(mut spent) = self.spent.lock()
-            && let Some(entry) = spent.remove(from)
-        {
-            spent.insert(to.to_owned(), entry);
+        for tally in [&self.spent, &self.unflushed] {
+            if let Ok(mut tally) = tally.lock() {
+                TallyChange::Rename { from, to }.apply(&mut tally);
+            }
         }
         if let Ok(mut profiles) = self.profiles.lock()
             && let Some(profile) = profiles.remove(from)
         {
             profiles.insert(to.to_owned(), profile);
         }
-        self.write_tally(Some(from));
+        self.write_tally(TallyChange::Rename { from, to });
         self.write_quota(Some(from));
     }
 
@@ -1351,12 +1398,13 @@ impl UsageStore {
         else {
             return;
         };
-        if let Ok(mut spent) = self.spent.lock() {
-            let entry = spent.entry(name).or_default();
-            entry.input = entry.input.saturating_add(input);
-            entry.output = entry.output.saturating_add(output);
+        let turn = std::collections::BTreeMap::from([(name, Spent { input, output })]);
+        for tally in [&self.spent, &self.unflushed] {
+            if let Ok(mut tally) = tally.lock() {
+                add_into(&mut tally, &turn);
+            }
         }
-        self.write_tally(None);
+        self.write_tally(TallyChange::None);
     }
 
     /// Test seam: run this in the window between what a write reads and what it
@@ -1373,12 +1421,13 @@ impl UsageStore {
     /// `PROXENOS_HOME` can point two daemons at one directory, and neither can
     /// see the other's turns. Two things keep that from costing a count.
     ///
-    /// The **merge** takes whichever count is higher per account, so a daemon
-    /// that has been running longer never has its total replaced by a younger
-    /// one's. The **comparison** covers what the merge cannot: the merge reads
-    /// the file once, and a write that landed after that read is not in what
-    /// this one is about to replace it with. Re-reading before the replacement
-    /// catches it and the attempt starts over against the newer file.
+    /// The **merge** adds what this daemon counted since its last write to
+    /// what the file holds, so the other daemon's turns already in the file
+    /// stay, and this one's are added once. The **comparison** covers what the
+    /// merge cannot: the merge reads the file once, and a write that landed
+    /// after that read is not in what this one is about to replace it with.
+    /// Re-reading before the replacement catches it and the attempt starts
+    /// over against the newer file.
     ///
     /// It does not close the window, and does not claim to — the comparison
     /// and the rename are two operations, and a write landing between them is
@@ -1387,8 +1436,8 @@ impl UsageStore {
     /// reason and with a lock this file deliberately does not take: a
     /// credential write is a whole account, a tally write is one turn's count.
     ///
-    /// `dropped` is the one case that is not a merge — a forgotten account is
-    /// gone, and must not come back off the disk.
+    /// `change` is what is not a merge: a forgotten account is gone and must
+    /// not come back off the disk, and a renamed one's count moves with it.
     ///
     /// **Blocking I/O, on the async worker that served the turn.** This runs
     /// once per completed turn rather than per event, over a file of a few
@@ -1399,8 +1448,13 @@ impl UsageStore {
     /// Every failure here is silent on purpose. Serving turns does not depend
     /// on this file, and a daemon that refused a turn because a tally could
     /// not be written would trade the product for its bookkeeping.
-    fn write_tally(&self, dropped: Option<&str>) {
+    fn write_tally(&self, change: TallyChange<'_>) {
         let Some(path) = self.tally.as_ref() else {
+            return;
+        };
+        // One write at a time in this process. Two turns finishing together
+        // would otherwise both add the same unwritten count to the file.
+        let Ok(_writing) = self.tally_writing.lock() else {
             return;
         };
         if let Some(parent) = path.parent() {
@@ -1409,19 +1463,16 @@ impl UsageStore {
 
         for attempt in 1..=TALLY_WRITE_ATTEMPTS {
             let read = std::fs::read_to_string(path).ok();
-            let mut merged = read
+            let mut merged: std::collections::BTreeMap<String, Spent> = read
                 .as_deref()
                 .and_then(|raw| serde_json::from_str(raw).ok())
                 .unwrap_or_default();
 
-            let Ok(held) = self.spent.lock() else {
+            change.apply(&mut merged);
+            let Ok(adding) = self.unflushed.lock().map(|unflushed| unflushed.clone()) else {
                 return;
             };
-            merge_into(&mut merged, &held);
-            drop(held);
-            if let Some(dropped) = dropped {
-                merged.remove(dropped);
-            }
+            add_into(&mut merged, &adding);
 
             let Ok(body) = serde_json::to_string_pretty(&merged) else {
                 return;
@@ -1435,7 +1486,27 @@ impl UsageStore {
                 continue;
             }
 
-            replace_file(path, &body);
+            if !replace_file(path, &body) {
+                // Still unwritten, so the next write adds it.
+                return;
+            }
+            // What was added is in the file now. A turn counted since is not,
+            // and stays to be added by the next write.
+            if let Ok(mut unflushed) = self.unflushed.lock() {
+                for (name, added) in &adding {
+                    if let Some(entry) = unflushed.get_mut(name) {
+                        entry.input = entry.input.saturating_sub(added.input);
+                        entry.output = entry.output.saturating_sub(added.output);
+                        if entry.total() == 0 {
+                            unflushed.remove(name);
+                        }
+                    }
+                }
+                add_into(&mut merged, &unflushed);
+            }
+            if let Ok(mut spent) = self.spent.lock() {
+                *spent = merged;
+            }
             return;
         }
     }

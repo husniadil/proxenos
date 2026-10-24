@@ -459,6 +459,28 @@ fn an_unsupported_pattern_is_dropped_wherever_it_sits() {
     );
 }
 
+/// Draft-07's `dependencies` holds a schema for a property where it is not a
+/// list of names, and the validator reads that schema like any other. The
+/// walk skipped it, so a pattern there reached the backend unchecked.
+#[test]
+fn a_pattern_under_draft_07_dependencies_is_checked() {
+    let out = translate(tool_with_schema(json!({
+        "type": "object",
+        "properties": { "a": { "type": "string" }, "b": { "type": "string" } },
+        "dependencies": {
+            "a": { "properties": { "b": { "type": "string", "pattern": r"^\p{L}$" } } },
+            "b": ["a"],
+        },
+    })));
+
+    let dependencies = &out["tools"][0]["parameters"]["dependencies"];
+    assert_eq!(
+        dependencies["a"],
+        json!({ "properties": { "b": { "type": "string" } } })
+    );
+    assert_eq!(dependencies["b"], json!(["a"]));
+}
+
 /// A property *named* `pattern` is a name, not the keyword, and its schema is
 /// left as it stands.
 #[test]

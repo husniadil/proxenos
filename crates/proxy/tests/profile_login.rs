@@ -313,3 +313,43 @@ fn removing_a_profile_the_file_never_had_writes_nothing() {
             .is_none()
     );
 }
+
+/// A header may carry a comment after it, as the other edits already read it.
+/// Missing it here left the table in place, and a second `add_profile` under
+/// the same name then defined it twice.
+#[test]
+fn a_profile_header_with_a_trailing_comment_is_the_same_table() {
+    let document = "[profiles.work] # the one that pays\nprovider = \"codex\"\n";
+
+    let written = edit::remove_profile(document, "work")
+        .expect("edited")
+        .expect("the entry was there");
+    let parsed: Config = toml::from_str(&written).expect("the document parses");
+    assert!(parsed.profiles.is_empty(), "{written}");
+
+    let refused =
+        edit::add_profile(document, "work", Provider::Codex, None).expect_err("the name is taken");
+    assert!(refused.message.contains("already declares"), "{refused:?}");
+}
+
+/// The comment lines just above the next header introduce that table, not the
+/// one being removed, so they stay with it.
+#[test]
+fn removing_a_profile_leaves_the_comment_that_opens_the_next_table() {
+    let document = concat!(
+        "[profiles.work]\n",
+        "provider = \"codex\"\n\n",
+        "# the spare, for when work runs out\n",
+        "[profiles.spare]\n",
+        "provider = \"codex\"\n",
+    );
+
+    let written = edit::remove_profile(document, "work")
+        .expect("edited")
+        .expect("the entry was there");
+
+    assert_eq!(
+        written,
+        "# the spare, for when work runs out\n[profiles.spare]\nprovider = \"codex\"\n"
+    );
+}

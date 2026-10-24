@@ -62,9 +62,11 @@ Four things, and none is a judgement call. `crates/proxy/src/docs_check.rs`
 fails on the first two.
 
 1. **A CLI verb, flag, or config key moved.** Every `proxenos …` line in
-   README, CONTRIBUTING, this file, the skill, the herdr plugin, and the three
-   docs must still parse, and every verb needs its line in `api.md` §2's
-   synopsis.
+   README, CONTRIBUTING, this file, the skill, the herdr plugin's README, and
+   the three docs must still parse, so must every `proxenos …` the herdr
+   plugin's scripts run, and every verb needs its line in `api.md` §2's
+   synopsis. A config key is not checked by the test: search the documents
+   for the old name.
 2. **A file the map below names moved or went.** The map is the only reader of
    those paths, and a session reads it first.
 3. **Implementation disproved a spec rule.** Change the spec in the commit

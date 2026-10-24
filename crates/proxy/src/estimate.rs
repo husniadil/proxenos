@@ -35,6 +35,9 @@ pub trait Estimator: Send + Sync {
 
 /// The structural size of a request, in characters and items.
 ///
+/// A character here is a UTF-8 byte (§6.2): `str::len`, not a count of code
+/// points.
+///
 /// Both estimators measure the same thing and differ only in how they turn it
 /// into tokens, which is what makes comparing them meaningful.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -174,6 +177,14 @@ impl Fit {
         (scale > 0.0).then_some((scale, offset))
     }
 
+    fn add(&mut self, x: f64, y: f64) {
+        self.n += 1.0;
+        self.sum_x += x;
+        self.sum_y += y;
+        self.sum_xy += x * y;
+        self.sum_xx += x * x;
+    }
+
     /// The fallback while the line is undetermined: the mean ratio.
     fn ratio(&self) -> f64 {
         if self.n < 1.0 || self.sum_x <= 0.0 {
@@ -228,6 +239,33 @@ impl CalibratedEstimator {
         self.estimate_shape(shape_sending(request, discovered))
     }
 
+    /// The raw size of what is sent and the estimate made from it, under one
+    /// reading of the fit.
+    ///
+    /// A turn keeps the raw size for its observation (`observe_raw`): the fit
+    /// can move while the turn is in flight, and the observation belongs on
+    /// the axis the estimate was taken on.
+    pub fn sizing_sending(
+        &self,
+        request: &MessagesRequest,
+        discovered: &std::collections::BTreeSet<String>,
+    ) -> (u64, u64) {
+        let shape = shape_sending(request, discovered);
+        (Self::raw(shape), self.estimate_shape(shape))
+    }
+
+    /// Fold in one true count against the raw size it was estimated from.
+    pub fn observe_raw(&self, raw: u64, actual: u64) {
+        if raw == 0 || actual == 0 {
+            return;
+        }
+        let Ok(mut fit) = self.fit.lock() else {
+            return;
+        };
+        #[allow(clippy::cast_precision_loss)]
+        fit.add(raw as f64, actual as f64);
+    }
+
     fn estimate_shape(&self, shape: Shape) -> u64 {
         #[allow(clippy::cast_precision_loss)]
         let raw = Self::raw(shape) as f64;
@@ -260,6 +298,10 @@ impl Estimator for CalibratedEstimator {
     /// The observation is recorded against the *raw* estimate rather than the
     /// corrected one. Fitting against a figure the fit itself produced would
     /// make the correction chase its own output.
+    ///
+    /// The raw figure is recovered by inverting the fit in force now, which
+    /// is right only if the fit has not moved since the estimate. A caller
+    /// that kept the raw size uses `observe_raw` instead, as a turn does.
     fn observe(&self, estimated: u64, actual: u64) {
         if estimated == 0 || actual == 0 {
             return;
@@ -282,13 +324,7 @@ impl Estimator for CalibratedEstimator {
         }
 
         #[allow(clippy::cast_precision_loss)]
-        let y = actual as f64;
-
-        fit.n += 1.0;
-        fit.sum_x += raw;
-        fit.sum_y += y;
-        fit.sum_xy += raw * y;
-        fit.sum_xx += raw * raw;
+        fit.add(raw, actual as f64);
     }
 
     fn name(&self) -> &'static str {

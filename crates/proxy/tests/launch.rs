@@ -155,6 +155,31 @@ fn no_policy_means_no_flag() {
     assert_eq!(plan.arguments, command(&["-p", "hi"]));
 }
 
+/// The daemon answers "no policy" with an empty object, since absence means a
+/// daemon too old to have one. Empty is still nothing to deliver: no flag, and
+/// a caller's own `--settings` is not refused for a collision with nothing.
+#[test]
+fn an_empty_policy_document_is_no_policy() {
+    assert_eq!(launch::policy_of(Some(&serde_json::json!({}))), None);
+    assert_eq!(launch::policy_of(Some(&serde_json::Value::Null)), None);
+    assert_eq!(launch::policy_of(None), None);
+    assert_eq!(
+        launch::policy_of(Some(
+            &serde_json::json!({ "attribution": { "commit": "" } })
+        )),
+        Some(r#"{"attribution":{"commit":""}}"#.to_owned())
+    );
+
+    let policy = launch::policy_of(Some(&serde_json::json!({})));
+    let plan = launch::plan(
+        &command(&["claude", "--settings", "theirs"]),
+        policy.as_deref(),
+    )
+    .expect("nothing collides with an empty policy");
+    assert_eq!(plan.arguments, command(&["--settings", "theirs"]));
+    assert!(!plan.carries_policy);
+}
+
 #[test]
 fn an_empty_command_is_refused() {
     let error = launch::plan(&[], Some(POLICY)).expect_err("there is nothing to start");

@@ -48,6 +48,26 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
     HOP_BY_HOP.contains(&name.as_str())
 }
 
+/// The headers a message's own `Connection` names, which are this hop's too
+/// (RFC 9110 §7.6.1). Header names are case-insensitive and `HeaderName` holds
+/// them lowercased, so they are lowercased here to compare.
+fn named_by_connection(headers: &HeaderMap) -> Vec<String> {
+    headers
+        .get_all(axum::http::header::CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(|name| name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+/// Whether a header describes this hop rather than the message: one of the
+/// fixed set, or one the message's `Connection` names.
+fn belongs_to_hop(name: &HeaderName, named: &[String]) -> bool {
+    is_hop_by_hop(name) || named.iter().any(|named| named == name.as_str())
+}
+
 /// Which stored account a mapping entry's turns are relayed as, if any.
 ///
 /// `docs/proxy-behavior.md` §9.1 in one function: a pinned entry names its
@@ -268,13 +288,14 @@ impl Relay {
             None => self.endpoint.clone(),
         };
         let mut request = self.client.post(url);
+        let named = named_by_connection(headers);
         for (name, value) in headers {
             // The client's own bearer is a placeholder — `ANTHROPIC_AUTH_TOKEN`
             // has to be set for the client's sake and its value is ignored
             // (§8). It is replaced rather than forwarded. So is any key the
             // client carries: a turn authenticated as whatever the caller held
             // is a turn this proxy did not route.
-            if is_hop_by_hop(name)
+            if belongs_to_hop(name, &named)
                 || name == axum::http::header::AUTHORIZATION
                 || name == "x-api-key"
             {
@@ -295,8 +316,9 @@ impl Relay {
             })?;
 
         let mut relayed = Response::builder().status(response.status());
+        let named = named_by_connection(response.headers());
         for (name, value) in response.headers() {
-            if is_hop_by_hop(name) {
+            if belongs_to_hop(name, &named) {
                 continue;
             }
             relayed = relayed.header(name, value);
@@ -310,5 +332,41 @@ impl Relay {
             .map_err(|error| {
                 ProxyError::overloaded(format!("could not relay the response: {error}"))
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A header the message's own `Connection` names is this hop's, like the
+    /// fixed set. Forwarded, it made a claim about a connection the far side
+    /// is not on.
+    #[test]
+    fn a_header_connection_names_is_not_forwarded() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONNECTION,
+            axum::http::HeaderValue::from_static("keep-alive, X-Hop-Only"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-hop-only"),
+            axum::http::HeaderValue::from_static("1"),
+        );
+        headers.insert(
+            HeaderName::from_static("anthropic-version"),
+            axum::http::HeaderValue::from_static("2023-06-01"),
+        );
+
+        let named = named_by_connection(&headers);
+
+        assert!(belongs_to_hop(
+            &HeaderName::from_static("x-hop-only"),
+            &named
+        ));
+        assert!(!belongs_to_hop(
+            &HeaderName::from_static("anthropic-version"),
+            &named
+        ));
     }
 }

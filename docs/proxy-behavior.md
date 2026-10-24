@@ -241,7 +241,8 @@ non-compliant schema is a request rejection, not a stricter model.
 
 Every `pattern` the backend's schema validator would refuse is removed, in the
 tool schema and in every subschema below it (`properties`, `patternProperties`,
-`$defs`, `definitions`, `dependentSchemas`, `items`, `prefixItems`,
+`$defs`, `definitions`, `dependentSchemas`, the schema form of draft-07's
+`dependencies`, `items`, `prefixItems`,
 `additionalItems`, `additionalProperties`, `unevaluated*`, `propertyNames`,
 `contains`, `not`, `if`/`then`/`else`, `allOf`/`anyOf`/`oneOf`). The keys of
 `patternProperties` are patterns too, and an unsupported key is dropped with
@@ -524,10 +525,31 @@ This is the same predicate that governs incremental upload (§4.3), so session
 matching and delta computation share one definition rather than two that can
 disagree.
 
+#### A session is held to one model and one account
+
+A request matches only a session whose turns went to the same upstream model,
+as the same account (the launch tag, else the tier's pin, else whoever is
+serving), for the same model id the client named. Another model or account
+replaying the same conversation starts a session of its own. The instructions
+are not part of identity.
+
+##### Why
+
+The baseline holds the backend's encrypted reasoning, made by one model for one
+account, and it is put back into the next request (§3.3); a side call on another
+tier that replays the main conversation was handed the main model's reasoning,
+and its own items advanced the main session's baseline, so the main
+conversation's next turn matched nothing and sent in full. A changed system
+prompt already makes the next turn a full send (§4.3), and holding identity to
+it would fork a conversation, and lose its calibration, on any change to it.
+
 #### Items are compared by value, not by encoding
 
 A server-assigned `id` is ignored. A tool call's `arguments` string is compared
 as a parsed JSON value where it parses, and as literal text where it does not.
+Within it, an integral number written as a float (`2.0`) is the integer (`2`),
+up to 2^53, past which numbers are compared as written. A message's adjacent
+text parts of one kind are compared joined.
 
 ##### Why
 
@@ -537,6 +559,10 @@ the client replays the object it parsed in its own serializer's order. Compared
 as text, every turn after the model wrote a file forked the conversation and
 uploaded the whole history again (measured live). Arguments that do not parse
 have no canonical form, and inventing one would make two different calls equal.
+Serializers differ on `2.0` too, and past 2^53 a double holds two integers as
+one, so equal as doubles is not equal there. The backend may return one message
+as several text parts; the client is shown them as one block and replays one
+part holding the same text.
 
 #### A shared prefix may match; a partial prefix may not
 
@@ -553,8 +579,8 @@ score would graft one conversation onto another.
 
 #### What a session holds
 
-Its input baseline (what was sent plus the output items the server added), the
-last request and response id, its transport binding (§4), its discovered tool
+Its scope (§3.1), its input baseline (what was sent plus the output items the
+server added), the last request and response id, its transport binding (§4), its discovered tool
 names (§2.5), its retained reasoning items (§3.3), its estimator fit (§6.3),
 and its id, which is both the `session_id` header and `prompt_cache_key`.
 
@@ -592,7 +618,9 @@ the baseline says it did, and the next delta skips them.
 
 #### Sizing never creates a session
 
-`count_tokens` looks a conversation up without creating or reordering one.
+`count_tokens` looks a conversation up without creating or reordering one, by
+the model id the client named, which is all of the scope a sizing request
+carries.
 
 ##### Why
 
@@ -654,7 +682,8 @@ client as model output.
 | File | What it holds |
 |---|---|
 | `crates/core/src/session.rs` | `extends`, `delta`, `reconcile`, value comparison of items, `Baseline` |
-| `crates/proxy/src/session.rs` | `Session`, `SessionStore`: capacity, idle expiry, longest match, seeding, read-only lookup |
+| `crates/proxy/src/session.rs` | `Session`, `Scope`, `SessionStore`: capacity, idle expiry, longest match, seeding, read-only lookup |
+| `crates/proxy/tests/sessions.rs` | The store's capacity, eviction, longest match, scope, and read-only lookup |
 | `crates/core/src/translate/response.rs` | `retained_reasoning`, collected from completed reasoning items |
 | `crates/proxy/src/ingress.rs` | Reconciling before the send, advancing the baseline when the stream ends |
 | `crates/proxy/src/control/handler.rs` | Clearing sessions on a select or a removal of the serving account |
@@ -921,7 +950,8 @@ sized for ordinary messages would sever a long conversation mid-turn.
 On the HTTP transport, the lines of one event are joined with newlines before
 parsing. A line opening with `:` is a comment and ignored. `\r\n`, `\r`, and
 `\n` all end a line, including a `\r\n` split across two chunks. An event left
-unterminated when the body ends is still delivered.
+unterminated when the body ends is still delivered. A byte order mark opening
+the body is dropped, as the SSE format says.
 
 ##### Why
 
@@ -938,9 +968,11 @@ this proxy fails to emit.
 
 #### WebSocket events need no reassembly
 
-Each text frame is one event; pings are answered by the library. Both
-transports produce the same event stream before translation, so §5.1 onward is
-transport-independent.
+Each text frame is one event; pings are answered by the library. A binary
+frame carries nothing this reads, and fails the turn as a transport failure
+(§5.1) rather than being skipped. The pump reads at most 64 events ahead of the
+client (`PUMP_BUFFER`). Both transports produce the same event stream before
+translation, so §5.1 onward is transport-independent.
 
 #### Every emitted frame names its event
 
@@ -987,40 +1019,73 @@ A function call announced without a name waits for its completed item, which
 then opens the block. A completed call whose arguments were streamed does not
 repeat them.
 
+A call announced, or completed, while another call's block is open waits for
+that block to close, holding the argument fragments that arrive for it
+meanwhile. Calls that waited open in the order they were announced.
+
 ##### Why
 
 An Anthropic client cannot patch a block header after it is emitted, and
-receiving the arguments twice leaves it parsing the same JSON twice.
+receiving the arguments twice leaves it parsing the same JSON twice. Only one
+block is open at a time, and a closed block cannot be written to again:
+opening the second call closed the first, whose later fragments then had
+nowhere to go, and it reached the client with input `{}` or cut-off JSON.
 
 #### The stop reason
 
 `tool_use` when the turn produced any function call, `max_tokens` on an
 incomplete response, `end_turn` otherwise.
 
-#### A stream that ends without completing is closed
+#### A stream that ends without completing is a transport failure
 
-If the upstream stream ends after `message_start` without a terminal event, the
-open block is closed and `message_delta` and `message_stop` are emitted.
+On either transport, an upstream stream that ends before the turn's terminal
+event (`response.completed`, `response.incomplete`, `response.failed`, or
+`error`) ends in an `overloaded_error` (below), and the baseline does not
+advance (§4.3). Past the terminal event nothing more is read, so a transport
+failure after it leaves the turn finished.
+
+Where a stream of events ends with no transport to report the cut, the open
+block is closed and `message_delta` and `message_stop` are emitted.
 
 ##### Why
 
-A message left open hangs the client on a turn the backend abandoned, which is
-indistinguishable from a model still thinking.
+A truncated answer closed as `end_turn` reads as a finished one, and the client
+neither retries nor says anything; as a retryable error it is retried. The same
+cut was an error over a socket and a finished turn over HTTP. A failure after
+the terminal event would arrive after `message_stop`, and turn a turn the client
+already has into one with no tally and no baseline. A message left open hangs
+the client on a turn the backend abandoned, which is indistinguishable from a
+model still thinking.
+
+#### A quiet stream is kept alive with pings
+
+Once `message_start` is written, an event stream that has written nothing for
+15 seconds (`KEEP_ALIVE`) writes a `ping`, and again for each further 15
+seconds. Nothing is written before `message_start`. A non-streaming answer has
+nothing to keep alive.
+
+##### Why
+
+A model reasoning before it writes can leave the response silent for minutes,
+and an intermediary or the client reads silence as a dead connection. The real
+surface writes `ping` frames, after `message_start` (`fixtures/surface/`).
 
 #### A refusal before the response starts is a status
 
-The first four upstream events are read before anything is written. An `error`
-event among them becomes an HTTP error response in the shape of `api.md` §1.1,
-with the status the event states (502 where it states none) mapped as in §2.8.
-A stream that ends among them, before any event of the response itself, is
-`overloaded_error`.
+The first four upstream events, or what arrives within ten seconds
+(`PREAMBLE_WAIT`), are read before anything is written. An `error` event among
+them becomes an HTTP error response in the shape of `api.md` §1.1, with the
+status the event states (502 where it states none) mapped as in §2.8. A stream
+that ends among them, before any event of the response itself, is
+`overloaded_error`; a peek the wait cut short is streamed on.
 
 ##### Why
 
 The backend opens a stream with a quota snapshot and metadata before it speaks
 to the outcome. A 200 whose body is one error frame and no `message_start` is
-not a message the client can read. The peek is bounded so a slow backend cannot
-hold the status open.
+not a message the client can read. The peek is bounded, in count and in time,
+so a slow backend cannot hold the status open: a backend that sent its preamble
+and then nothing held it for as long as it stayed silent.
 
 #### A failure after the response starts is an error frame
 
@@ -1030,8 +1095,8 @@ frame, typed from its code: `server_is_overloaded` and `slow_down` →
 `insufficient_quota` → `rate_limit_error`; `context_length_exceeded`,
 `invalid_prompt`, and `bio_policy` → `invalid_request_error`; anything else →
 `api_error`. A transport failure mid-stream is an `overloaded_error` frame; a
-WebSocket closed before the turn's terminal event is one, and does not advance
-the baseline (§4.3).
+WebSocket closed, or an HTTP body ended, before the turn's terminal event is
+one, and does not advance the baseline (§4.3).
 
 ##### Why
 
@@ -1145,7 +1210,8 @@ status and an error body.
 | `crates/core/src/translate/response.rs` | `ResponseTranslator`, search reconstruction, `classify`, `translate_usage` |
 | `crates/core/src/anthropic/stream.rs` | Outbound frame types |
 | `crates/core/src/anthropic/aggregate.rs` | `aggregate`, the non-streaming fold |
-| `crates/proxy/src/ingress.rs` | `peek_preamble`, `upstream_refusal`, `frame_stream`, `json_response`, empty-stream capture |
+| `crates/proxy/src/ingress.rs` | `peek_preamble`, `upstream_refusal`, `frame_stream`, `keep_alive`, `json_response`, empty-stream capture |
+| `crates/proxy/src/upstream/http.rs`, `crates/proxy/src/upstream/pool.rs` | A turn's events ended at its terminal event, and a cut before it reported (`one_turn`, `pump`) |
 | `crates/proxy/src/surface.rs` | The surface vocabulary comparison |
 | `crates/core/tests/response_translation.rs`, `crates/core/tests/response_snapshots.rs` | Frame sequences |
 | `crates/core/tests/sse_framing.rs` | SSE framing |
@@ -1272,9 +1338,10 @@ that is not true.
 `PROXENOS_HOME` can point two daemons at one directory, and neither sees the
 other's turns.
 
-- The **tally** merge takes the higher count per account. Before replacing,
-  the file is re-read; if it changed, the attempt starts over. After five
-  attempts the last one writes what it has.
+- The **tally** merge adds what this daemon counted since its last write to
+  what the file holds, per account. Before replacing, the file is re-read; if
+  it changed, the attempt starts over. After five attempts the last one writes
+  what it has. A write that fails keeps its count for the next one.
 - A **snapshot** write reads once, keeps the **later** record per account, and
   replaces. `usage --refresh` replaces a record the same way a turn does.
 
@@ -1282,8 +1349,10 @@ No lock is taken.
 
 ##### Why
 
-A tally accumulates, so the higher count is closer to the truth; a snapshot
-replaces, so the later measurement describes the account now. The comparison
+A tally accumulates, and each daemon's turns are its own, so each adds what it
+counted; taking the higher of two totals kept one daemon's turns and dropped
+every turn of the other. A snapshot replaces, so the later measurement
+describes the account now. The comparison
 and the rename are two operations and a write landing between them is lost:
 that costs a smaller floor, never a corrupted file or a count that moved
 backwards. A lost credential write is a whole account, which is why the
@@ -1336,8 +1405,15 @@ estimate rather than adding to it.
 Characters divided by 3.6, rounded up, plus 4 tokens per item. The items are
 the system prompt, each message, and each tool that is sent; a withheld deferred
 tool (§2.5) counts nothing. Characters are text, tool names, call inputs, and
-tool descriptions and schemas. An image or document counts as 3,000 characters
-rather than its base64 length.
+tool descriptions and schemas, counted as UTF-8 bytes. An image or document
+counts as 3,000 characters rather than its base64 length.
+
+##### Why
+
+The measurements in §6.3 were taken on bytes, and calibration absorbs the
+difference between the two either way. Counting code points instead would
+change every estimate in a script whose characters take more than one byte,
+against a fit no measurement has checked.
 
 ### 6.3 Calibration
 
@@ -1345,13 +1421,15 @@ rather than its base64 length.
 
 Each completed turn yields the raw upstream `input_tokens` for a request that
 was also estimated, and the pair is folded into a fit retained on the session.
-The observation is on the *raw* estimate: the correction in force is inverted
-off the reported estimate first.
+The observation is on the *raw* estimate, the one the turn's corrected
+estimate was made from, kept with the turn rather than recovered later.
 
 ##### Why
 
 Fitting against a figure the fit produced makes the correction chase its own
-output.
+output. Two turns of one conversation can be in flight at once, so the fit can
+move between a turn's estimate and its observation, and inverting the reported
+estimate through the fit in force at observation files it somewhere else.
 
 #### The fit is a line, not a multiplier
 
@@ -1424,7 +1502,7 @@ visibly wrong, and it corrects on the next one.
 | `crates/core/src/translate/response.rs` | `translate_usage`: the cached-token conversion |
 | `crates/proxy/src/estimate.rs` | `CalibratedEstimator`, `Fit`, the raw estimate, the feature-gated tokenizer |
 | `crates/proxy/src/ingress.rs` | `count_tokens`, `calibrate`, `tally` |
-| `crates/proxy/src/usage.rs` | `UsageStore`: the tally, snapshot persistence, `restore`, `merge_into`, `replace_file` |
+| `crates/proxy/src/usage.rs` | `UsageStore`: the tally, snapshot persistence, `restore`, `add_into`, `replace_file` |
 | `crates/proxy/src/config.rs` | `spend.json` and `quota.json` paths |
 | `crates/proxy/tests/estimator.rs` | The fit's behaviour |
 | `crates/proxy/tests/usage.rs` | Tally and snapshot persistence |
@@ -1545,13 +1623,16 @@ catalog.
 #### An authoritative empty catalog names the client version
 
 A catalog that came back with no models refuses validation with a sentence
-pointing at `upstream.client_version`.
+pointing at `upstream.client_version`. Empty means a `data` or `models` list
+that is present and holds nothing: a body naming neither is unreadable, a
+failed fetch like any other.
 
 ##### Why
 
 The backend answers a client version older than every model's minimum with an
 empty list rather than an error, which reads exactly like an account with no
-models.
+models. A body with no list at all says nothing about the account, and read as
+an empty catalog it marked every checked tier missing.
 
 ### 7.1 Tier mapping
 
@@ -2328,6 +2409,12 @@ the provider said is reported as said.
 `usage.refresh` asks once per account, each on its own credential. Which account
 serves turns is neither read nor changed.
 
+##### Why
+
+Riding a turn only ever fills in the account that made the turn. A spare
+account's headroom is what decides whether to switch to it, and requiring a
+switch to learn it is the question answering itself.
+
 #### Asking is the fallback, once an hour per account
 
 An account's quota endpoint is asked at most once an hour, counted from the
@@ -2344,12 +2431,6 @@ a refused ask left the figure stale, which asked again, which kept it refused.
 The endpoint is shared with that provider's own clients on the same account, so
 a refusal earned here is felt there too. Counting from an answer would ask a
 refusing endpoint again at once.
-
-##### Why
-
-Riding a turn only ever fills in the account that made the turn. A spare
-account's headroom is what decides whether to switch to it, and requiring a
-switch to learn it is the question answering itself.
 
 #### Only where a figure is possible, and each failure is one account's
 
@@ -2990,9 +3071,10 @@ An id on this path is absent from that list by construction.
   header line beside the client's own `anthropic-beta`.
 - **`x-api-key` is dropped.** A turn authenticated as whatever the caller held is
   a turn this proxy did not route.
-- **Hop-by-hop, `host`, `content-length`, and `accept-encoding` are dropped.**
-  They describe this hop, and this path does not decode a content coding, so
-  asking for one would relay bytes the client never agreed to.
+- **Hop-by-hop, `host`, `content-length`, and `accept-encoding` are dropped**,
+  and so is every header the request's own `Connection` names. They describe
+  this hop, and this path does not decode a content coding, so asking for one
+  would relay bytes the client never agreed to.
 - **Everything else passes through**, `anthropic-version`, `anthropic-beta`,
   and the client's identifying headers included.
 
@@ -3008,8 +3090,8 @@ grant behind (measured: grant plus header answers 200).
 
 #### The response headers pass through, less hop-by-hop
 
-The response status and every response header not in the hop-by-hop set reach
-the client as sent.
+The response status and every response header not in the hop-by-hop set, and
+not named by the response's own `Connection`, reach the client as sent.
 
 ### 9.3 Errors
 

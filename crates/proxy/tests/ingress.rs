@@ -2066,7 +2066,7 @@ async fn a_failed_turn_does_not_advance_the_baseline() {
     });
 
     let before = sessions
-        .lookup(&input_of(&continued))
+        .lookup(&input_of(&continued), "claude-sonnet-5")
         .and_then(|session| session.baseline.lock().ok().map(|held| held.len()))
         .expect("the conversation should be known");
 
@@ -2081,7 +2081,7 @@ async fn a_failed_turn_does_not_advance_the_baseline() {
     assert!(!failed.status().is_success(), "the turn should have failed");
 
     let after = sessions
-        .lookup(&input_of(&continued))
+        .lookup(&input_of(&continued), "claude-sonnet-5")
         .and_then(|session| session.baseline.lock().ok().map(|held| held.len()))
         .expect("the conversation should still be known");
 
@@ -2122,7 +2122,7 @@ async fn a_failed_response_is_not_remembered_as_the_one_to_continue() {
 
     let session = harness
         .sessions
-        .lookup(&input_of(&body))
+        .lookup(&input_of(&body), "claude-sonnet-5")
         .expect("the conversation should be known");
     assert_eq!(session.previous().1, None);
 }
@@ -2165,7 +2165,7 @@ async fn an_output_item_the_baseline_cannot_hold_forces_a_full_send_next() {
 
     let session = harness
         .sessions
-        .lookup(&input_of(&body))
+        .lookup(&input_of(&body), "claude-sonnet-5")
         .expect("the conversation should be known");
     assert_eq!(session.previous().1, None);
 }
@@ -2669,7 +2669,7 @@ async fn a_refused_turn_is_not_remembered_as_the_previous_request() {
     .unwrap();
     let session = harness
         .sessions
-        .lookup(&input)
+        .lookup(&input, "claude-sonnet-5")
         .expect("the turn claimed a session");
     assert!(
         session.previous().0.is_none(),
@@ -2861,7 +2861,7 @@ fn an_idle_conversation_is_forgotten() {
         "messages": [{ "role": "user", "content": "hello" }],
     }));
 
-    let session = store.resolve(&input);
+    let session = store.resolve(&input, &test_scope());
     session.advance(&input, &[]);
     assert_eq!(store.len(), 1);
 
@@ -2874,7 +2874,7 @@ fn an_idle_conversation_is_forgotten() {
     );
 
     // And the store still works afterwards.
-    let fresh = store.resolve(&input);
+    let fresh = store.resolve(&input, &test_scope());
     assert_ne!(
         fresh.cache_key, session.cache_key,
         "a new conversation, not the old one"
@@ -2892,13 +2892,16 @@ fn an_active_conversation_survives_the_sweep() {
         "messages": [{ "role": "user", "content": "hello" }],
     }));
 
-    let session = store.resolve(&input);
+    let session = store.resolve(&input, &test_scope());
     session.advance(&input, &[]);
 
     store.forget_idle_for_test(std::time::Duration::from_secs(3600));
 
     assert_eq!(store.len(), 1);
-    assert_eq!(store.resolve(&input).cache_key, session.cache_key);
+    assert_eq!(
+        store.resolve(&input, &test_scope()).cache_key,
+        session.cache_key
+    );
 }
 
 /// §2.8 — every upstream request carries the conversation's `session_id`, and
@@ -3111,9 +3114,10 @@ async fn a_non_streaming_failure_is_an_error_body() {
         )
         .await;
 
-    // A stream that simply ends without completing still describes a turn: the
-    // fold closes what is open rather than failing. What must never happen is
-    // an event stream reaching a caller that asked for JSON.
+    // A stream that ends without completing is a cut (§5.1), and the fold
+    // turns its error frame back into a status. What must never happen is an
+    // event stream reaching a caller that asked for JSON.
+    assert_eq!(response.status().as_u16(), 529);
     assert_eq!(
         response
             .headers()
@@ -3232,8 +3236,8 @@ fn a_new_session_is_claimed_before_anyone_else_can_join_it() {
     }]))
     .unwrap();
 
-    let a = sessions.resolve(&first);
-    let b = sessions.resolve(&second);
+    let a = sessions.resolve(&first, &test_scope());
+    let b = sessions.resolve(&second, &test_scope());
 
     assert!(!Arc::ptr_eq(&a, &b), "two conversations share one session");
 }
@@ -3263,4 +3267,14 @@ fn a_new_recorder_does_not_overwrite_an_earlier_runs_captures() {
         std::fs::read_to_string(dir.path().join("ingress-0000.json")).unwrap(),
         "earlier"
     );
+}
+
+/// The scope a conversation is held to, for a test that resolves one
+/// directly rather than through a turn.
+fn test_scope() -> proxenos::session::Scope {
+    proxenos::session::Scope {
+        requested: "claude-sonnet-5".to_owned(),
+        model: "claude-sonnet-5".to_owned(),
+        account: None,
+    }
 }

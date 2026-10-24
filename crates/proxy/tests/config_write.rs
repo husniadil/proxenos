@@ -390,3 +390,23 @@ fn a_header_with_a_trailing_comment_is_the_same_table() {
         Some("high")
     );
 }
+
+/// Renaming reads a header with a comment after it, as every other edit does.
+/// Missing it left that table under the old name, so the account lost its
+/// effort or its tiers in the file while the store moved on.
+#[test]
+fn renaming_moves_a_header_with_a_trailing_comment() {
+    let document = "[accounts.spare] # spare\neffort = \"low\"\n\n[accounts.spare.tiers] # its own\nopus = \"gpt-6-sol\"\n";
+
+    let written = edit::rename_account(document, "spare", "backup")
+        .unwrap()
+        .expect("there was something to move");
+
+    assert_eq!(
+        written,
+        "[accounts.backup] # spare\neffort = \"low\"\n\n[accounts.backup.tiers] # its own\nopus = \"gpt-6-sol\"\n"
+    );
+    let refused = edit::rename_account(document, "other", "spare")
+        .expect_err("the destination's table is there");
+    assert!(refused.message.contains("already has"), "{refused:?}");
+}

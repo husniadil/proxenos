@@ -303,6 +303,9 @@ holding a grant is written into `[profiles]`.
 
 - `--path DIR` says where. Absent, the profile goes under
   `<config dir>/profiles/<NAME>`.
+- What the daemon refuses to start on is refused before anything runs: a
+  `--path` that is relative or starts with `~`, and a directory another
+  declaration of the same provider already names (§4).
 - A directory already signed in is adopted: no client runs, and the entry is
   written.
 - Where there is no terminal to answer the login's prompts, the command is
@@ -797,7 +800,9 @@ this machine's daemon can file it under the right account.
 ### It never breaks the status line
 
 A daemon not running, a socket not answering, a payload that will not parse:
-each passes through unchanged.
+each passes through unchanged. Everything asked of a daemon shares one
+two-second deadline (`DAEMON_WAIT`), so a daemon that takes the connection and
+never answers costs that long and no longer.
 
 #### Why
 
@@ -821,7 +826,7 @@ every session that has it to prevent a case that may not be happening.
 
 | File | What it holds |
 |---|---|
-| `crates/proxy/src/statusline.rs` | The merge, the session check, and the payload's own quota |
+| `crates/proxy/src/statusline.rs` | The merge, the session check, the payload's own quota, and `DAEMON_WAIT` |
 | `crates/proxy/src/commands/inspect.rs` | The verb |
 
 ### 2.2 `env` and `settings`
@@ -972,7 +977,8 @@ model.
 The `env` method's `settings` field is an empty object where there is no policy.
 Absence means a daemon that predates client policy. `settings` and `exec` refuse
 against such a daemon; `env` continues with a comment saying the policy is
-missing.
+missing. An empty object gives `exec` nothing to deliver, so it passes no
+`--settings`, and a caller's own is forwarded.
 
 #### Why
 
@@ -1096,6 +1102,8 @@ stopped 0.2.0+ab12cd3; launchd started it again as 0.3.0+cd34ef5
 - The daemon answers before it goes; the run loop is released only once the
   response is written.
 - An in-flight turn is cut.
+- A signal is answered differently: Ctrl-C or SIGTERM (what a supervisor sends)
+  stops both doors taking connections, lets a turn in flight finish, and exits 0.
 - The CLI watches `instance` on `status`: a different id is a different process.
   It waits three seconds for the daemon to go and twelve for anything to bring it
   back, returning as soon as it sees the answer.
@@ -1124,6 +1132,7 @@ something the client's own retry already handles.
 | File | What it holds |
 |---|---|
 | `crates/proxy/src/commands/daemon.rs` | `stop` and its sentences |
+| `crates/proxy/src/daemon.rs` | The signals that stop the doors |
 | `crates/proxy/src/commands/mod.rs` | `STOP_WINDOW`, `RESTART_WINDOW`, `watch` |
 | `crates/proxy/src/control/handler.rs` | The `shutdown` method |
 

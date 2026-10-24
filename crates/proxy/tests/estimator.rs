@@ -299,3 +299,36 @@ fn a_discovered_deferred_tool_is_counted() {
     assert_eq!(withheld, shape_of(&request));
     assert!(discovered.characters > withheld.characters + 4000);
 }
+
+/// Two turns of one conversation can be in flight at once, and the fit can
+/// move between a turn's estimate and its observation. The observation is
+/// filed against the raw size the estimate was made from, so it lands on the
+/// same axis whatever the fit has become. Recovering it by inverting the
+/// corrected figure through the fit in force at observation put it somewhere
+/// else, and the fit then drifted.
+#[test]
+fn an_observation_is_filed_against_the_raw_size_its_estimate_was_made_from() {
+    let early = request(4, 40);
+    let later = request(12, 200);
+    let late = request(30, 400);
+
+    // In flight together: `early` is estimated, then `later` and `late` are
+    // observed, moving the fit, and only then is `early` observed.
+    let interleaved = CalibratedEstimator::new();
+    let (early_raw, _) = interleaved.sizing_sending(&early, &Default::default());
+    for turn in [&later, &late] {
+        let (raw, _) = interleaved.sizing_sending(turn, &Default::default());
+        interleaved.observe_raw(raw, modelled_upstream_count(turn));
+    }
+    interleaved.observe_raw(early_raw, modelled_upstream_count(&early));
+
+    // The same three observations, each against its own raw size.
+    let in_order = CalibratedEstimator::new();
+    for turn in [&later, &late, &early] {
+        let (raw, _) = in_order.sizing_sending(turn, &Default::default());
+        in_order.observe_raw(raw, modelled_upstream_count(turn));
+    }
+
+    let probe = request(20, 300);
+    assert_eq!(interleaved.estimate(&probe), in_order.estimate(&probe));
+}

@@ -47,7 +47,9 @@ The watcher re-publishes the bars every 60 seconds
 quota ticks with no herdr event. `usage --refresh` is the one command here
 that contacts the providers. The reporter runs it at most once an hour,
 guarded by a stamp shared across every reporter and watcher, and the popup
-runs it when you press `r`. The scripts write only herdr's own pane metadata plus a
+runs it when you press `r`. The daemon asks each account's endpoint at most
+once an hour however it is called, and within the hour answers with the figure
+it already holds. The scripts write only herdr's own pane metadata plus a
 stamp and one pidfile per watched pane in the plugin state directory.
 
 ## How a pane's account is resolved

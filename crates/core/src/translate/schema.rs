@@ -3,13 +3,16 @@
 
 use serde_json::Value;
 
-/// Subschemas held as the values of a map keyword.
-const MAP_KEYWORDS: [&str; 5] = [
+/// Subschemas held as the values of a map keyword. Draft-07's
+/// `dependencies` holds a list of names or a schema per property; a list is
+/// not an object, so only the schemas are walked.
+const MAP_KEYWORDS: [&str; 6] = [
     "properties",
     "patternProperties",
     "$defs",
     "definitions",
     "dependentSchemas",
+    "dependencies",
 ];
 
 /// Keywords whose value is a subschema, or a list of them.

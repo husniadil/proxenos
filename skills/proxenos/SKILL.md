@@ -92,7 +92,8 @@ proxenos models            # ids the backend knows, with context window and tier
                            # --account NAME for another account's menu
 proxenos tiers             # tier -> model mapping in force; --account NAME for one account's
 proxenos accounts          # stored accounts and which one serves turns (same as `accounts list`)
-proxenos usage             # quota as last reported; --refresh asks the backend (costs a request)
+proxenos usage             # quota as last reported; --refresh asks the backend (costs a request,
+                           # at most once an hour per account; within the hour it reports the held figure)
 proxenos doctor            # capability probes; --live runs them against the real backend
 proxenos incidents         # open incidents on each provider's status page
 proxenos env               # the exports, for a shell you want to configure by hand

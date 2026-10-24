@@ -6,7 +6,7 @@ not repeat it.
 
 ## Where this stands
 
-The current release is **v0.35.11**. Shipped, at the level of capability:
+The current release is **v0.35.12**. Shipped, at the level of capability:
 
 - **Two providers behind one Messages surface.** Codex through the translate
   path (Messages ⇄ Responses), Anthropic through the relay path, which forwards
@@ -194,6 +194,54 @@ entries.
 were not real files, so both probes passed on replay while proving nothing; and
 a marker spread across several deltas was never contiguous in the raw frames.
 The probes now carry a real PNG and a real PDF and match on assembled text.
+
+#### Does the hosted search tool take the client's domain filters?
+
+**Open.** The client's search tool can carry `allowed_domains`,
+`blocked_domains` and `max_uses`, and §2.6 sends none of them, so a search the
+client restricted runs unrestricted. The Responses search tool documents a
+`filters.allowed_domains`; whether this backend takes it, what it does with a
+blocked list it has no field for, and whether anything stands for `max_uses`
+are unmeasured. Settle with a turn whose filter excludes the only source that
+holds an unguessable code.
+
+#### Which patterns does the schema validator refuse beyond the ones measured?
+
+**Open.** §2.4's allow-list was written against the refusals observed, and
+some patterns it keeps may still be refused: a variable-width lookbehind, an
+escape such as `\b` inside a class, a repetition count past the validator's
+own limit. A false accept fails the whole turn. Settle by sending one tool per
+candidate pattern and reading which the backend refuses.
+
+#### What does the backend send for a prewarm frame?
+
+**Open.** The stand-in answers `generate: false` with nothing, and the daemon
+never sends one (§4.1). If the backend answers it with a response of its own,
+that response sits unread on the socket and the next turn would read it as
+its answer. Settle before prewarm is used: send one and read what comes back.
+
+#### Does the backend take a document by URL?
+
+**Open.** A URL-sourced `document` block is sent as `input_file.file_data`
+holding the URL, which is a data field. Whether the backend refuses it, reads
+it, or would take it as `file_url` is unmeasured. The client is not seen to
+send one.
+
+#### Which refusals of a WebSocket upgrade mean the socket cannot be used?
+
+**Open.** Any failure to open a fresh socket latches the session to HTTP for
+its life (§4.2), including a dropped connection, a `401` and a `429` at the
+upgrade. What the backend's policy refusal looks like at the upgrade is
+unmeasured, so which failures should latch, and whether the others should fall
+back for one turn without latching, is not settled.
+
+#### Is a failed or incomplete response's usage what the account is billed?
+
+**Open.** The tally adds the usage of whichever terminal event carries one,
+`response.incomplete` and `response.failed` included, while §6.1 tallies a
+completed turn. An incomplete turn is believed billed; a failed one is
+unmeasured. Settle by comparing the account's spend before and after a turn
+that ends each way.
 
 ### The client
 
