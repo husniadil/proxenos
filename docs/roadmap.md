@@ -6,7 +6,7 @@ not repeat it.
 
 ## Where this stands
 
-The current release is **v0.37.0**. Shipped, at the level of capability:
+The current release is **v0.37.1**. Shipped, at the level of capability:
 
 - **Two providers behind one Messages surface.** Codex through the translate
   path (Messages ⇄ Responses), Anthropic through the relay path, which forwards
@@ -218,10 +218,16 @@ and a word boundary inside a class are now dropped.
 
 #### What does the backend send for a prewarm frame?
 
-**Open.** The stand-in answers `generate: false` with nothing, and the daemon
-never sends one (§4.1). If the backend answers it with a response of its own,
-that response sits unread on the socket and the next turn would read it as
-its answer. Settle before prewarm is used: send one and read what comes back.
+**Settled live: a response of its own.** One prewarm on a fresh socket, with
+the upgrade headers the daemon sends, was answered with `codex.rate_limits`,
+`codex.response.metadata`, `response.created`, `response.in_progress`,
+`responsesapi.websocket_timing` and `response.completed`: no output items, and
+the request's 23 input tokens in `usage`. A turn sent next on the same socket,
+once that was read, returned its random code. **Falsified:** that a prewarm
+produces nothing, which the stand-in answered and `Conduit::prewarm` relied
+on: the next turn would have read the prewarm's empty response as its answer.
+A prewarm now reads its response to the end before the connection is parked
+(§4.1). The daemon still never sends one.
 
 #### Does the backend take a document by URL?
 
@@ -239,6 +245,12 @@ its life (§4.2), including a dropped connection, a `401` and a `429` at the
 upgrade. What the backend's policy refusal looks like at the upgrade is
 unmeasured, so which failures should latch, and whether the others should fall
 back for one turn without latching, is not settled.
+
+Seen in one daemon's log over six weeks on one account: three sockets that
+closed before sending anything, two upgrades answered `504`, one answered
+`503`, and one turn whose borrowed grant had expired at the upgrade. Each
+latched its session to HTTP. None names a policy, and whether the next turn's
+socket would have opened is not recorded.
 
 #### Is a failed or incomplete response's usage what the account is billed?
 
@@ -282,13 +294,17 @@ haiku breaks both in a way that looks unrelated to tier mapping.
 
 #### Does the backend take a function choice naming the hosted search tool?
 
-**Open.** `tool_choice {type: "tool", name: "web_search"}` translates to a
-function choice named `web_search`, while the tool itself goes upstream as the
-hosted search tool rather than a function. The recorded `web-search` fixture
-carries no `tool_choice`, and `WebSearch` works live through the haiku tier
-(above), so either the client does not force the choice or the backend takes it.
-Settle it with one `record surface` of a `WebSearch` call: read whether the
-request forces the choice, and if it does, what the backend answered.
+**Settled live: no.** The client forces it: its `WebSearch` call declares the
+search tool and `tool_choice {type: "tool", name: "web_search"}` (read from
+the client's own build, 2.1.310). That call, posted to a running daemon, went
+upstream as a function choice beside the hosted tool and was refused with
+`400 Tool choice 'function' not found in 'tools' parameter.` Sent straight to
+the socket on a prompt that asked for no search, `{type: "web_search"}` and
+`required` were both taken, and both ran a search. A choice naming the search
+tool now goes as `{type: "web_search"}` (§2.4). **Falsified:** that `WebSearch`
+working live through the haiku tier (above) meant the backend took the
+choice. Since the backend refuses it, the client measured then most likely sent
+none, as the `web-search` fixture does.
 
 #### Do connectors and claude.ai-hosted MCP servers stay out of a proxied session?
 

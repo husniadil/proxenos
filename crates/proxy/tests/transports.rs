@@ -334,8 +334,21 @@ impl WsServer {
                             received.push(body);
                         }
 
-                        // A prewarm produces nothing at all.
+                        // A prewarm is answered with a response of its own and no
+                        // output, as the backend answered one live.
                         if prewarm {
+                            for event in [
+                                json!({ "type": "codex.rate_limits" }),
+                                json!({ "type": "response.created", "response": { "id": "resp_prewarm", "status": "in_progress", "output": [] } }),
+                                json!({ "type": "response.in_progress", "response": { "id": "resp_prewarm", "status": "in_progress", "output": [] } }),
+                                json!({ "type": "response.completed", "response": { "id": "resp_prewarm", "status": "completed", "output": [] } }),
+                            ] {
+                                let _ = socket
+                                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                                        event.to_string().into(),
+                                    ))
+                                    .await;
+                            }
                             continue;
                         }
 
@@ -1122,8 +1135,9 @@ async fn one_connection_serves_a_whole_session() {
     assert_eq!(sends.iter().filter(|sent| **sent == Sent::Delta).count(), 7);
 }
 
-/// §4.1 — a prewarm opens the connection before the turn that will use it, and
-/// produces no response of its own.
+/// §4.1 — a prewarm opens the connection before the turn that will use it. The
+/// backend answers it with a response of its own, and the turn that follows
+/// reads its own answer rather than that one.
 #[tokio::test]
 async fn a_prewarm_opens_the_connection_without_producing_a_turn() {
     let ws = WsServer::start(stream_events(), WsBehavior::Replay).await;
@@ -1164,7 +1178,11 @@ async fn a_prewarm_opens_the_connection_without_producing_a_turn() {
         .collect()
         .await;
 
-    assert_eq!(payloads.len(), 3);
+    let expected: Vec<String> = stream_events().iter().map(ToString::to_string).collect();
+    assert_eq!(
+        payloads, expected,
+        "the turn read the prewarm's response as its own"
+    );
     assert_eq!(
         ws.connections(),
         1,
