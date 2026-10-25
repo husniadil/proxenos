@@ -6,6 +6,8 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.37.1]
+
 - **`WebSearch` works again on the Codex path.** The client's `WebSearch`
   call forces the search tool with a `tool_choice` naming it, and that choice
   went upstream as a function choice beside the hosted search tool, which the
