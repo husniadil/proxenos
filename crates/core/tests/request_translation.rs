@@ -595,6 +595,22 @@ fn tool_choice_maps(#[case] input: Value, #[case] expected: Value) {
     assert_eq!(out["tool_choice"], expected);
 }
 
+/// §2.4 — a choice naming the search tool forces the hosted tool. The search
+/// tool goes upstream as `web_search` rather than a function, and the backend
+/// refuses a function choice beside it: `Tool choice 'function' not found in
+/// 'tools' parameter.` This is the shape of the client's `WebSearch` call.
+#[test]
+fn a_choice_naming_the_search_tool_forces_the_hosted_tool() {
+    let out = translate(json!({
+        "model": "gpt-5.5",
+        "messages": [{ "role": "user", "content": "Perform a web search for the query: rust" }],
+        "tools": [{ "type": "web_search_20250305", "name": "web_search", "max_uses": 8 }],
+        "tool_choice": { "type": "tool", "name": "web_search" },
+    }));
+
+    assert_eq!(out["tool_choice"], json!({ "type": "web_search" }));
+}
+
 /// §2.2 — `tool_use` becomes `function_call`, with `input` serialized into the
 /// `arguments` string the backend expects.
 #[test]

@@ -121,6 +121,10 @@ pub enum ToolChoice {
         r#type: FunctionLiteral,
         name: String,
     },
+    /// A hosted tool, named by its type: it has no function name to give.
+    Hosted {
+        r#type: HostedTool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -134,6 +138,12 @@ pub enum ToolChoiceMode {
 #[serde(rename_all = "lowercase")]
 pub enum FunctionLiteral {
     Function,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostedTool {
+    WebSearch,
 }
 
 /// One item of conversation input.

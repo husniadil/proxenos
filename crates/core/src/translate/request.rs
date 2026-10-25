@@ -13,6 +13,7 @@ use crate::responses::CallOutput;
 use crate::responses::ContentPart;
 use crate::responses::Effort;
 use crate::responses::FunctionLiteral;
+use crate::responses::HostedTool;
 use crate::responses::InputItem;
 use crate::responses::ItemRole;
 use crate::responses::Reasoning;
@@ -110,7 +111,10 @@ pub fn translate_request(
             .flat_map(translate_message)
             .collect(),
         tools: translate_tools(&request.tools, request.tool_choice.as_ref(), options),
-        tool_choice: request.tool_choice.as_ref().map(translate_tool_choice),
+        tool_choice: request
+            .tool_choice
+            .as_ref()
+            .map(|choice| translate_tool_choice(choice, &request.tools)),
         reasoning: Reasoning {
             effort: effort_for(request, options),
             summary: Some(Summary::Auto),
@@ -285,9 +289,21 @@ fn normalize_schema(schema: Option<Value>) -> Value {
     schema
 }
 
-fn translate_tool_choice(choice: &ToolChoice) -> ResponsesToolChoice {
+fn translate_tool_choice(choice: &ToolChoice, tools: &[Tool]) -> ResponsesToolChoice {
     match choice {
         ToolChoice::Any => ResponsesToolChoice::Mode(ToolChoiceMode::Required),
+        // The search tool goes upstream as the hosted tool, so a function
+        // choice naming it names nothing the backend was given, and the turn
+        // is refused (§2.4).
+        ToolChoice::Tool { name }
+            if tools
+                .iter()
+                .any(|tool| tool.name == *name && tool.is_web_search()) =>
+        {
+            ResponsesToolChoice::Hosted {
+                r#type: HostedTool::WebSearch,
+            }
+        }
         ToolChoice::Tool { name } => ResponsesToolChoice::Function {
             r#type: FunctionLiteral::Function,
             name: name.clone(),

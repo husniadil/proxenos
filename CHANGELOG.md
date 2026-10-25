@@ -6,6 +6,15 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **`WebSearch` works again on the Codex path.** The client's `WebSearch`
+  call forces the search tool with a `tool_choice` naming it, and that choice
+  went upstream as a function choice beside the hosted search tool, which the
+  backend refuses: `Tool choice 'function' not found in 'tools' parameter.`
+  With a client that forces the choice, as 2.1.310 does, every search failed
+  with that refusal. A choice naming the
+  search tool now goes as `{type: "web_search"}`, which the backend takes.
+  Settled live: it forced a search on a prompt that asked for none.
+
 ## [0.37.0]
 
 - **A search the client held to some domains stays on them.** The client's

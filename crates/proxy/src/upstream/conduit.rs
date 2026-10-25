@@ -258,11 +258,13 @@ impl Conduit {
         ))
     }
 
-    /// §4.1 — open the connection before the turn that will use it.
+    /// §4.1 — open the connection before the turn that will use it, so the
+    /// first turn of a session does not pay for the handshake.
     ///
-    /// A prewarm produces no response. Its only purpose is that the request
-    /// which follows reuses both the connection and the prior response id, so
-    /// the first turn of a session does not pay for the handshake.
+    /// The backend answers a prewarm with a response of its own that has no
+    /// output, so that response is read here, to its end, before the
+    /// connection is parked. Left unread, the next turn on the socket would
+    /// read it as its answer: a turn where the model said nothing.
     pub async fn prewarm(&self, request: &ResponsesRequest, account: Option<&str>) {
         let Some(websocket) = &self.websocket else {
             return;
@@ -276,7 +278,9 @@ impl Conduit {
 
         match websocket.connect(Some(&self.session_id), account).await {
             Ok(mut connection) => {
-                if connection.send(request, None, false).await.is_ok() {
+                if connection.send(request, None, false).await.is_ok()
+                    && drained(&mut connection).await
+                {
                     // Re-checked under the lock: a turn may have started
                     // between the check above and here, and overwriting its
                     // connection would drop an open socket mid-conversation.
@@ -303,6 +307,21 @@ impl Conduit {
 /// How many events are read past the backend's own opening events before a
 /// socket is judged: the count ingress peeks for the same reason.
 const OPENING_PEEK: usize = 4;
+
+/// Read a prewarm's own response to its end, and say whether the connection
+/// can be parked: it can when that response completed, and not when it ended
+/// in a failure or the socket closed first.
+async fn drained(connection: &mut super::pool::PooledConnection) -> bool {
+    while let Some(Ok(event)) = connection.next_event().await {
+        if super::pool::ends_turn(&event) {
+            return serde_json::from_str::<serde_json::Value>(&event)
+                .ok()
+                .and_then(|event| event.get("type").cloned())
+                == Some(serde_json::Value::from("response.completed"));
+        }
+    }
+    false
+}
 
 /// Whether an event is one of the backend's own, ahead of the response.
 fn is_preamble(event: &str) -> bool {

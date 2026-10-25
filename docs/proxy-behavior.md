@@ -277,15 +277,24 @@ or unbalanced parentheses.
 
 A false accept fails the turn; a false drop loses a hint.
 
-#### `tool_choice` maps to three shapes
+#### `tool_choice` maps to four shapes
 
-`any` → `required`; `tool` → `{type: "function", name}`; `auto`, `none`, and
-anything unrecognized → `auto`.
+`any` → `required`; `tool` naming the search tool (§2.6) →
+`{type: "web_search"}`; any other `tool` → `{type: "function", name}`; `auto`,
+`none`, and anything unrecognized → `auto`.
 
 ##### Why
 
 `none` upstream would withhold the tools, and the client sends it on turns
 where the tool list still has to be visible.
+
+The search tool goes upstream as the hosted tool, not a function, so a
+function choice naming it names nothing the backend was given. **Settled
+live** (roadmap §L): the backend refuses that choice with `400 Tool choice
+'function' not found in 'tools' parameter.`, and takes `{type: "web_search"}`,
+which forced a search on a prompt that asked for none. The client's
+`WebSearch` call forces the choice, and was refused on every call before this
+mapping.
 
 ### 2.5 Deferred tool loading
 
@@ -792,12 +801,23 @@ match misses was parked with the socket, and every later delta repeated it.
 A prewarm frame (`generate: false`) opens a connection before the turn that
 will use it. The daemon never sends one.
 
+The backend answers a prewarm with a response of its own. **Settled live**
+(roadmap §L): `response.created`, `response.in_progress` and
+`response.completed`, behind the usual `codex.*` events, with no output items
+and the request's input counted in `usage`. A prewarm reads that response to
+its end before the connection is parked, and parks it only when the response
+completed.
+
 ##### Why
 
 A proxy learns that a conversation exists only when its first request arrives,
 at which point opening the connection and sending on it are the same act.
 Prewarming needs a signal that a turn is *about* to happen, which a front-end
 watching the user type has and an HTTP surface does not.
+
+A prewarm's response left unread sits on the socket, and the next turn would
+read it as its own answer: a completed turn with nothing in it. A prewarm also
+counts its input, so it is not free.
 
 ### 4.2 HTTP fallback
 
