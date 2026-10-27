@@ -2128,7 +2128,7 @@ codex_program  = "/opt/homebrew/bin/codex"
 
 [tiers]
 opus   = "gpt-6.1-sol"
-sonnet = "gpt-5.6-terra"
+sonnet = "gpt-6.1-terra"
 haiku  = "gpt-6-luna"
 fable  = "gpt-6-astra"
 

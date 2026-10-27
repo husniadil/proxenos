@@ -613,6 +613,23 @@ fn a_defaulted_tier_falls_back_through_its_generations_then_the_tier_below() {
     without_newest_sol.substitute_unavailable_defaults(&mut tiers);
 
     assert_eq!(tiers[0].model, "gpt-6-sol", "the sol one step back");
+
+    // The same for sonnet: an account that has not listed the newest terra
+    // keeps the terra it had.
+    let without_newest_terra = Catalog::parse(
+        r#"{"data":[
+            {"id":"gpt-5.6-terra","is_visible":true},
+            {"id":"gpt-5.6-luna","is_visible":true}
+        ]}"#,
+        SHIPPING,
+    )
+    .unwrap();
+    let mut tiers = proxenos::config::Tiers::default()
+        .resolve(proxenos::config::CrossAccountTiers::Refused)
+        .unwrap();
+    tiers.retain(|tier| tier.tier == "sonnet");
+    without_newest_terra.substitute_unavailable_defaults(&mut tiers);
+    assert_eq!(tiers[0].model, "gpt-5.6-terra", "the terra one step back");
 }
 
 /// A model the operator stated is never substituted. They may know something

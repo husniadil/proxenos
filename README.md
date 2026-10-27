@@ -118,7 +118,7 @@ effort = "high"            # a ceiling on what the client asks for; unset means 
 
 [tiers]
 opus   = "gpt-6.1-sol"     # these four are the defaults
-sonnet = "gpt-5.6-terra"
+sonnet = "gpt-6.1-terra"
 haiku  = "gpt-6-luna"      # WebFetch and WebSearch run on haiku
 fable  = "gpt-6-astra"
 

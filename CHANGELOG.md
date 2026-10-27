@@ -6,6 +6,12 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.38.0]
+
+- **Sonnet defaults to `gpt-6.1-terra`.** A defaulted sonnet walks back through
+  `gpt-5.6-terra`, so an account whose catalog does not list the newest terra
+  keeps the terra it had. The fallback catalog names it.
+
 ## [0.37.1]
 
 - **`WebSearch` works again on the Codex path.** The client's `WebSearch`
