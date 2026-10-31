@@ -6,6 +6,12 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **0.38.0 moved a defaulted opus and fable as well as sonnet.** That
+  release's entry named only sonnet. A defaulted tier the catalog lacks walks
+  back through the tiers below it, sonnet's list included, so an account whose
+  catalog lists no sol or astra but does list `gpt-6.1-terra` runs opus and
+  fable on it, where 0.37.1 ran them on `gpt-5.6-terra`.
+
 ## [0.38.0]
 
 - **Sonnet defaults to `gpt-6.1-terra`.** A defaulted sonnet walks back through
