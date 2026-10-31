@@ -20,6 +20,8 @@ provider of the account serving it:
 - `just run` / `just record` / `just doctor`: run the daemon, capture
   fixtures, probe capabilities.
 - `just setup` / `just build` / `just fmt`: tooling, release build, format.
+- `just dist` / `just release`: the release archives built on a Mac (no
+  Windows), and publishing them for a pushed tag without the release workflow.
 
 **No test touches the network.** Every upstream interaction in the suite runs
 against a local replay server, so the suite is green without credentials or
