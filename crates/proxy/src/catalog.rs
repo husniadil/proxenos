@@ -146,7 +146,7 @@ impl Catalog {
     /// that names what a free account lacks.
     ///
     /// `gpt-6.1-terra` is not plan-gated: a paid account and a free one both
-    /// serve it.
+    /// serve it (measured 2026-10-27).
     pub fn fallback() -> Self {
         let models = [
             "gpt-6-astra",
