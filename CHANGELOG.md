@@ -6,6 +6,8 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.38.1]
+
 - **The curated relay list names `claude-fable-5-2`,** at a 1,000,000-token
   window, which is its standard one. It has no `[1m]` variant, so the launcher
   leaves a plain `--model claude-fable-5-2` as typed. Claude Mythos 5.2 is not
