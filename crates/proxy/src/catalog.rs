@@ -196,9 +196,11 @@ impl Catalog {
         // The million-token window belongs to the `[1m]`-suffixed id: that
         // suffix is the client's own long-context selector, sent in the body
         // as part of the model id and relayed verbatim. The plain id is the
-        // standard window on either path.
+        // standard window on either path. Fable 5.2's standard window is the
+        // million, and the client names no `[1m]` variant for it.
         let models = [
-            ("claude-fable-5-1", 200_000_u64),
+            ("claude-fable-5-2", 1_000_000_u64),
+            ("claude-fable-5-1", 200_000),
             ("claude-fable-5-1[1m]", 1_000_000),
             ("claude-fable-5", 200_000),
             ("claude-fable-5[1m]", 1_000_000),

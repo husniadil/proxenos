@@ -6,6 +6,11 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **The curated relay list names `claude-fable-5-2`,** at a 1,000,000-token
+  window, which is its standard one. It has no `[1m]` variant, so the launcher
+  leaves a plain `--model claude-fable-5-2` as typed. Claude Mythos 5.2 is not
+  listed, the same as Mythos 5.1, since a subscription does not offer it.
+
 - **0.38.0 moved a defaulted opus and fable as well as sonnet.** That
   release's entry named only sonnet. A defaulted tier the catalog lacks walks
   back through the tiers below it, sonnet's list included, so an account whose

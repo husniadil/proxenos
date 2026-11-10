@@ -1258,8 +1258,11 @@ async fn models_for_a_relay_account_lists_the_second_providers_models() {
 
     // The million-token window belongs to the `[1m]`-suffixed id — the
     // client's own long-context selector, relayed verbatim — and the plain id
-    // stays at the standard window.
-    assert_eq!(windows.len(), 23, "{result}");
+    // stays at the standard window. Fable 5.2's standard window is the
+    // million, with no variant.
+    assert_eq!(windows.len(), 24, "{result}");
+    assert_eq!(windows["claude-fable-5-2"], Some(1_000_000), "{result}");
+    assert!(!windows.contains_key("claude-fable-5-2[1m]"), "{result}");
     for plain in [
         "claude-fable-5-1",
         "claude-fable-5",
