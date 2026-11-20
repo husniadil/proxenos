@@ -6,6 +6,13 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **Opus defaults to `gpt-6.2-sol` and fable to `gpt-6.2-astra`.** With the
+  system prompt written as a `developer` message (0.39.3), both read it from the
+  cache on every later turn measured over the daemon, a 32,000-token prompt and
+  tool list included. A defaulted opus walks back through `gpt-6.1-sol` and a
+  defaulted fable through `gpt-6-astra`, so an account whose catalog does not
+  list the 6.2 generation keeps the models it had.
+
 ## [0.39.3]
 
 - **The GPT-6.2 models cache the system prompt.** 0.39.2 built the

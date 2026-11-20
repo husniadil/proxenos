@@ -84,24 +84,24 @@ socket and cache scope, and measured over the daemon on 2026-11-20,
 `gpt-6.2-sol` cached nothing on any turn. Sent straight to the backend, the same
 `developer` message cached over HTTP and over a WebSocket delta alike.
 
-#### No tier defaults to a model that leaves `instructions` out of the cache
+#### A model that trails `instructions` is a default only once it is measured to cache
 
-The GPT-6.2 models are served when a tier names them, and no tier defaults to
+A model that places `instructions` after `input` becomes a tier's default only
+after its system prompt, carried as above, is measured to be read from the
+cache over this proxy. The GPT-6.2 models were, and opus and fable default to
 them.
 
 ##### Why
 
-From GPT-6.2 the backend places `instructions` after `input`, so the system
-prompt is never part of a cached prefix. Measured 2026-11-20 over this proxy,
-three four-turn conversations each, a ~15,000-token constant prefix: with the
-prefix as the system prompt, `gpt-6.1-sol` read 14,848 tokens from the cache
-on seven of nine later turns and `gpt-6.2-sol` read none on any. With the same
-prefix as the first user message, `gpt-6.2-sol` read 14,720 on eight of nine.
-A default on 6.2 sends a whole system prompt uncached on every turn. The tools
-are cached on 6.2 where they are: a ~17,000-token tool list was read from the
-cache on five of six later turns. The `developer` carriage above is what 6.2
-gets instead, and a default moves to 6.2 once it is measured to cache there
-(`roadmap.md`, Next).
+From GPT-6.2 the backend places `instructions` after `input`, so a system
+prompt sent there is never part of a cached prefix. Measured 2026-11-20 over
+this proxy, four-turn conversations with a ~15,000-token constant prefix: as
+`instructions`, `gpt-6.1-sol` read 14,848 tokens from the cache on seven of
+nine later turns and `gpt-6.2-sol` read none on any, so a default on 6.2 sent a
+whole system prompt uncached on every turn. Carried as the `developer`
+message, `gpt-6.2-sol` and `gpt-6.2-astra` each read 14,976 on six of six later
+turns, and with a ~17,000-token tool list beside it `gpt-6.2-sol` read about
+32,000 on six of six.
 
 #### A message with any other role is carried as a `user` item
 

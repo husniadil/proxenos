@@ -76,7 +76,7 @@ fn an_omitted_tier_takes_its_default() {
 
     assert_eq!(model("opus"), "gpt-5.5");
     assert_eq!(model("haiku"), "gpt-6-luna");
-    assert_eq!(model("fable"), "gpt-6-astra");
+    assert_eq!(model("fable"), "gpt-6.2-astra");
 }
 
 /// A tier mapped to an empty string is not mapped. Treating it as present sends
@@ -521,10 +521,10 @@ fn every_tier_has_the_default_the_readme_states() {
             .expect("every tier is mapped")
     };
 
-    assert_eq!(model("opus"), "gpt-6.1-sol");
+    assert_eq!(model("opus"), "gpt-6.2-sol");
     assert_eq!(model("sonnet"), "gpt-6.1-terra");
     assert_eq!(model("haiku"), "gpt-6-luna");
-    assert_eq!(model("fable"), "gpt-6-astra");
+    assert_eq!(model("fable"), "gpt-6.2-astra");
 }
 
 /// A configuration stating nothing at all is a working configuration.

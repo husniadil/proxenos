@@ -198,10 +198,10 @@ port = 8787
 # arrives. Two tiers on one model must agree on its effort. Both keys may sit in
 # one table: `haiku = { account = "spare", model = "...", effort = "low" }`.
 [tiers]
-# opus   = "gpt-6.1-sol"
+# opus   = "gpt-6.2-sol"
 # sonnet = "gpt-6.1-terra"
 # haiku  = "gpt-6-luna"
-# fable  = "gpt-6-astra"
+# fable  = "gpt-6.2-astra"
 
 # What differs for one account, keyed by the name `accounts` lists it under.
 # Two subscriptions on different plans are offered different models, and a key
@@ -1623,14 +1623,12 @@ pub const TIER_NAMES: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
 /// Each tier's shipped models, newest generation first, with the tiers ordered
 /// from the top down. The head of each list is the default; the rest is where
 /// a defaulted tier falls back to when an account's catalog lacks it.
-///
-/// The GPT-6.2 models are left out on purpose. They place `instructions`
-/// after `input`, so the system prompt this proxy sends there is never part of
-/// a cached prefix: measured 2026-11-20, `gpt-6.2-sol` cached nothing across
-/// twelve turns where `gpt-6.1-sol` cached the ~15,000-token prefix (§2.1).
 const DEFAULT_TIERS: [(&str, &[&str]); 4] = [
-    ("fable", &["gpt-6-astra"]),
-    ("opus", &["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"]),
+    ("fable", &["gpt-6.2-astra", "gpt-6-astra"]),
+    (
+        "opus",
+        &["gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"],
+    ),
     ("sonnet", &["gpt-6.1-terra", "gpt-5.6-terra"]),
     ("haiku", &["gpt-6-luna", "gpt-5.6-luna"]),
 ];

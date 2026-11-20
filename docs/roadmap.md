@@ -51,15 +51,6 @@ Named, never numbered: twice a numbered intention shipped as something else,
 and a roadmap that misnames a released version is read as a record and is wrong
 as one. Intended, not committed.
 
-**A system prompt the GPT-6.2 models cache.** Those models place
-`instructions` after `input`, so the system prompt is never cached there
-(`proxy-behavior.md` §2.1), and no tier defaults to them. For those two models
-the system prompt now opens `input` as a `developer` message, the way the
-provider's own Codex client sends it. The tools cache where they are
-(measured). **Done when** that carriage is measured live to be accepted and to
-cache the system prompt on a paid account, and opus and fable default to the
-6.2 models again.
-
 **Package-manager routes.** There is no Homebrew tap and no container image;
 `install.sh`, the release archives and `cargo install` are the install routes. **Done when** either installs a release binary that `doctor`
 answers from.
