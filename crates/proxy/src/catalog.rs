@@ -115,10 +115,11 @@ pub struct Catalog {
     /// The account this list was fetched for, where it was fetched at all.
     ///
     /// A catalog is one account's menu: the plan decides which models appear
-    /// and which efforts each one offers. Nothing refetches it when the daemon
-    /// starts serving a different account, so the attribution is what lets an
-    /// answer say the list belongs to somebody else instead of presenting it
-    /// as this account's. `None` means unattributed — a fallback list, or one
+    /// and which efforts each one offers. It is fetched again when the account
+    /// serving turns changes and every six hours (§7.0), but until a refetch
+    /// for a new account lands, or after one fails, the list held is the
+    /// previous account's. The attribution is what lets an answer say the list
+    /// belongs to somebody else instead of presenting it as this account's. `None` means unattributed — a fallback list, or one
     /// parsed directly — and is never stale, because it never claimed an
     /// account in the first place.
     pub fetched_for: Option<String>,
