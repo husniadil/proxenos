@@ -1671,6 +1671,34 @@ fn the_profile_endpoint_names_the_plan_with_its_multiplier() {
     assert_eq!(plan("not json"), None);
 }
 
+/// The plan's own display name wins over the one built from the type and the
+/// tier. Captured live: `plan_display_name: "Ultra"` beside
+/// `organization_type: "claude_max"` and `rate_limit_tier:
+/// "default_claude_max_20x"`, which the provider's client shows as Ultra.
+#[test]
+fn the_profile_endpoint_names_the_plan_by_its_display_name() {
+    let plan = |body: &str| {
+        Snapshot::anthropic_profile(body).and_then(|profile: proxenos::usage::Profile| profile.plan)
+    };
+
+    assert_eq!(
+        plan(
+            r#"{"organization":{"organization_type":"claude_max",
+                "rate_limit_tier":"default_claude_max_20x",
+                "plan_display_name":"Ultra","plan_display_label":"Ultra plan"}}"#
+        ),
+        Some("ultra".to_owned())
+    );
+    // A blank name is no name: the plan is built as before.
+    assert_eq!(
+        plan(
+            r#"{"organization":{"organization_type":"claude_max",
+                "rate_limit_tier":"default_claude_max_5x","plan_display_name":" "}}"#
+        ),
+        Some("max 5x".to_owned())
+    );
+}
+
 /// The same profile body states what the subscription behind the account is
 /// doing. Captured live: `subscription_status: "active"`.
 ///

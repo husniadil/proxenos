@@ -17,7 +17,7 @@ use proxenos::catalog::CatalogSource;
 use proxenos::config::ResolvedTier;
 use proxenos::control;
 use proxenos::control::handler::ControlState;
-use proxenos::control::handler::follow_serving_account;
+use proxenos::control::handler::{follow_serving_account, refetch_catalog};
 use proxenos::control::protocol::METHODS;
 use serde_json::Value;
 use serde_json::json;
@@ -3286,6 +3286,70 @@ async fn a_failed_follow_keeps_the_list_and_says_it_is_stale() {
     );
 }
 
+/// The list of the account already served is asked for again, and a model
+/// the provider added since takes the tier mapped onto it.
+///
+/// A refetch whose ids match changes nothing; one that finds the new model
+/// puts the mapping back in force, which clears the mark the tier carried for
+/// want of it. A failed one keeps the list.
+#[tokio::test]
+async fn a_refetch_finds_a_model_added_since_the_start() {
+    let catalogs = CatalogServer::start().await;
+    let harness = Harness::start()
+        .await
+        .with_configuration(mapping_per_account(&["acct_two"]))
+        .await;
+    harness
+        .store
+        .add(&grant("acct_two", "a-two"), None)
+        .unwrap();
+    harness.store.select("acct_two").unwrap();
+    let harness = harness.with_catalog_source(&catalogs.url).await;
+    let state = harness.control.clone().expect("a state that can refetch");
+    std::fs::write(
+        &harness.config_file,
+        "[accounts.acct_two.tiers]\n\
+         opus = \"model-added-later\"\n\
+         sonnet = \"model-for-acct_two\"\n\
+         haiku = \"model-for-acct_two\"\n\
+         fable = \"model-for-acct_two\"\n",
+    )
+    .unwrap();
+    harness.call("config.reload").await.unwrap();
+    let missing = |status: &Value| status["missing_tiers"].clone();
+    let before = harness.call("status").await.unwrap();
+    assert_eq!(missing(&before), json!(["opus"]), "{before}");
+
+    assert_eq!(refetch_catalog(&state).await, Some(true));
+    assert_eq!(
+        missing(&harness.call("status").await.unwrap()),
+        json!(["opus"]),
+        "the same list moved the mapping"
+    );
+
+    catalogs.add("model-added-later");
+    assert_eq!(refetch_catalog(&state).await, Some(true));
+    let after = harness.call("status").await.unwrap();
+    assert_eq!(missing(&after), json!([]), "{after}");
+    let models = harness.call("models").await.unwrap();
+    assert!(
+        models["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["id"] == json!("model-added-later")),
+        "{models}"
+    );
+
+    catalogs.refuse();
+    assert_eq!(refetch_catalog(&state).await, Some(false));
+    assert_eq!(
+        harness.call("models").await.unwrap()["models"],
+        models["models"],
+        "a failed refetch replaced the list"
+    );
+}
+
 /// `tiers` asked about another account reads that account's own mapping.
 ///
 /// A tier is one account's mapping (§7.1): the section in force is the
@@ -3540,6 +3604,7 @@ async fn the_launch_window_is_the_tagged_accounts_own() {
 type CatalogState = (
     Arc<std::sync::Mutex<Vec<String>>>,
     Arc<std::sync::atomic::AtomicBool>,
+    Arc<std::sync::Mutex<Vec<String>>>,
 );
 
 /// A catalog stub on loopback, answering per account.
@@ -3547,20 +3612,22 @@ struct CatalogServer {
     url: String,
     seen: Arc<std::sync::Mutex<Vec<String>>>,
     refusing: Arc<std::sync::atomic::AtomicBool>,
+    added: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl CatalogServer {
     async fn start() -> Self {
         let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
         let refusing = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let state = (Arc::clone(&seen), Arc::clone(&refusing));
+        let added = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let state = (Arc::clone(&seen), Arc::clone(&refusing), Arc::clone(&added));
 
         let app = axum::Router::new().route(
             "/models",
             axum::routing::get(
                 |axum::extract::State(state): axum::extract::State<CatalogState>,
                  headers: axum::http::HeaderMap| async move {
-                    let (seen, refusing) = state;
+                    let (seen, refusing, added) = state;
                     let account = headers
                         .get("chatgpt-account-id")
                         .and_then(|value| value.to_str().ok())
@@ -3572,12 +3639,19 @@ impl CatalogServer {
                     if let Ok(mut seen) = seen.lock() {
                         seen.push(account.clone());
                     }
+                    let mut data = vec![
+                        json!({ "id": format!("model-for-{account}"), "context_window": 272_000 }),
+                    ];
+                    if let Ok(added) = added.lock() {
+                        data.extend(
+                            added
+                                .iter()
+                                .map(|id| json!({ "id": id, "context_window": 272_000 })),
+                        );
+                    }
                     (
                         axum::http::StatusCode::OK,
-                        json!({ "data": [
-                            { "id": format!("model-for-{account}"), "context_window": 272_000 }
-                        ] })
-                        .to_string(),
+                        json!({ "data": data }).to_string(),
                     )
                 },
             ),
@@ -3594,6 +3668,15 @@ impl CatalogServer {
             url: format!("http://{addr}/models"),
             seen,
             refusing,
+            added,
+        }
+    }
+
+    /// A model every account's list carries from now on, the way a provider
+    /// adds one while a daemon runs.
+    fn add(&self, id: &str) {
+        if let Ok(mut added) = self.added.lock() {
+            added.push(id.to_owned());
         }
     }
 
@@ -7682,6 +7765,56 @@ async fn a_status_line_keeps_the_windows_in_order_and_drops_a_reset_one() {
             (None, Some("Fable".to_owned()))
         ]
     );
+}
+
+/// A status line states no window's status, so the provider's word on a
+/// window (asked for at the endpoint) is kept while the status line's figure
+/// is for the same window, and dropped once it is for the next one.
+#[tokio::test]
+async fn a_status_line_keeps_the_providers_word_on_the_same_window() {
+    let harness = Harness::start().await;
+    let window = |minutes: u64, resets: u64| proxenos::usage::Window {
+        used_percent: 90.0,
+        window_minutes: Some(minutes),
+        resets_at: Some(resets),
+        status: Some("warning".into()),
+        ..Default::default()
+    };
+    let earlier = proxenos::usage::Snapshot {
+        // The endpoint's reset carries a fraction the parse cuts, a second
+        // off the status line's whole one.
+        windows: vec![window(300, 1_899_999_999), window(10_080, 1_899_000_000)],
+        ..Default::default()
+    };
+    harness
+        .usage
+        .record_for(Some("claude"), &earlier, proxenos::usage::Source::Fetch);
+
+    let answer = harness
+        .call_with(
+            "usage.record",
+            json!({ "rate_limits": status_limits(94.0, 95.0) }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(answer["recorded"], json!(true), "{answer}");
+
+    let measured = harness.usage.latest_for("claude").unwrap();
+    let status = |minutes: u64| {
+        measured
+            .snapshot
+            .windows
+            .iter()
+            .find(|w| w.window_minutes == Some(minutes))
+            .map(|w| (w.used_percent, w.status.clone()))
+            .unwrap()
+    };
+    assert_eq!(
+        status(300),
+        (94.0, Some("warning".to_owned())),
+        "the same window"
+    );
+    assert_eq!(status(10_080), (95.0, None), "a later window");
 }
 
 /// A figure filed under a guessed account is another account's quota with a

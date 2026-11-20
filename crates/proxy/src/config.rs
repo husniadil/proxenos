@@ -198,10 +198,10 @@ port = 8787
 # arrives. Two tiers on one model must agree on its effort. Both keys may sit in
 # one table: `haiku = { account = "spare", model = "...", effort = "low" }`.
 [tiers]
-# opus   = "gpt-6.1-sol"
+# opus   = "gpt-6.2-sol"
 # sonnet = "gpt-6.1-terra"
 # haiku  = "gpt-6-luna"
-# fable  = "gpt-6-astra"
+# fable  = "gpt-6.2-astra"
 
 # What differs for one account, keyed by the name `accounts` lists it under.
 # Two subscriptions on different plans are offered different models, and a key
@@ -546,9 +546,9 @@ pub struct AnthropicEndpoints {
     pub usage: String,
     /// Where a borrowed grant's plan is asked for, beside its quota.
     ///
-    /// The quota body states no plan; this one states it with its multiplier
-    /// (`max 20x`). Asked at most hourly, and only where quota was already
-    /// being asked for.
+    /// The quota body states no plan; this one states it by its display name
+    /// (`ultra`), or by its type with its multiplier (`max 20x`). Asked at
+    /// most hourly, and only where quota was already being asked for.
     #[serde(default = "default_anthropic_profile_endpoint")]
     pub profile: String,
     /// Where this provider states its own incidents (§3 `incidents`). Its
@@ -1624,8 +1624,11 @@ pub const TIER_NAMES: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
 /// from the top down. The head of each list is the default; the rest is where
 /// a defaulted tier falls back to when an account's catalog lacks it.
 const DEFAULT_TIERS: [(&str, &[&str]); 4] = [
-    ("fable", &["gpt-6-astra"]),
-    ("opus", &["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"]),
+    ("fable", &["gpt-6.2-astra", "gpt-6-astra"]),
+    (
+        "opus",
+        &["gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"],
+    ),
     ("sonnet", &["gpt-6.1-terra", "gpt-5.6-terra"]),
     ("haiku", &["gpt-6-luna", "gpt-5.6-luna"]),
 ];

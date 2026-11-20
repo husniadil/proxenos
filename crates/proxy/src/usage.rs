@@ -472,9 +472,12 @@ impl Snapshot {
     /// subscription behind it is doing.
     ///
     /// The quota body states neither. The profile endpoint beside it states
-    /// the plan as `organization.organization_type` — and for a max org the
-    /// multiplier rides separately in `rate_limit_tier`
-    /// (`default_claude_max_20x`) — and the subscription as
+    /// the plan by the name the provider's own client shows,
+    /// `organization.plan_display_name` (`Ultra` for what was `max 20x`),
+    /// which is read first and lowercased the way every other plan here is.
+    /// Without it the plan is built from `organization.organization_type` —
+    /// and for a max org the multiplier that rides separately in
+    /// `rate_limit_tier` (`default_claude_max_20x`). The subscription is
     /// `organization.subscription_status`. An organization type this does not
     /// recognize yields no plan rather than a guessed one; the status is
     /// passed through as stated, because a canceled account is reported to
@@ -496,6 +499,14 @@ impl Snapshot {
     }
 
     fn plan_of(organization: &Value) -> Option<String> {
+        if let Some(name) = organization
+            .get("plan_display_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            return Some(name.to_lowercase());
+        }
         let kind = organization.get("organization_type")?.as_str()?;
 
         match kind {

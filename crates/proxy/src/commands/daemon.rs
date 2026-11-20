@@ -528,7 +528,7 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
     }
 
     // A shipped default naming a model this account cannot see is replaced
-    // rather than refused: `gpt-6.1-sol` is plan-gated, so the default mapping
+    // rather than refused: `gpt-6.2-sol` is plan-gated, so the default mapping
     // would otherwise fail to start for most accounts. A model the operator
     // stated is left alone and validated below.
     let substituted = catalog
@@ -670,6 +670,20 @@ pub(crate) async fn run_with(args: RunArgs, capture: Capture) -> Result<()> {
                     _ => control::handler::FOLLOW,
                 };
                 tokio::time::sleep(pause).await;
+            }
+        });
+    }
+    // The list of the account already served, asked for again (§7.0): a model
+    // the provider adds while the daemon runs is otherwise not on offer until
+    // a restart. The start fetched it, so the first ask waits a period.
+    {
+        let state = control_state.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(control::handler::CATALOG_REFETCH).await;
+                if control::handler::refetch_catalog(&state).await == Some(false) {
+                    tracing::warn!("could not refetch the model catalog; asked again next period");
+                }
             }
         });
     }

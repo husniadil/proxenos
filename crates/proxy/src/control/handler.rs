@@ -2333,6 +2333,56 @@ pub async fn follow_serving_account(state: &ControlState) -> Option<bool> {
     Some(true)
 }
 
+/// How often the daemon asks again for the list of the account it already
+/// serves (`refetch_catalog`).
+pub const CATALOG_REFETCH: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+
+/// Fetch the catalog again for the account it was fetched for (§7.0).
+///
+/// A provider adds a model without this daemon being asked, and the list was
+/// fetched once at the start, so a daemon running for a week did not offer a
+/// model released in that week. Where the ids changed, the mapping is put back
+/// in force against the new list the way `config.reload` does, so a defaulted
+/// tier substituted for want of its newest model takes that model once the
+/// account has it. A list with the same ids leaves the mapping alone.
+///
+/// `None` where there is nothing to ask: the account relays and has no list
+/// here (§9.1). Otherwise whether the refetch landed; a failed one keeps the
+/// list in force.
+pub async fn refetch_catalog(state: &ControlState) -> Option<bool> {
+    let _moving = state.catalog.hold().await;
+    let stored = state.credentials.accounts().ok()?;
+    if serving_account_relays(&stored) {
+        return None;
+    }
+    let before: Vec<String> = state
+        .catalog
+        .current()
+        .ids()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    if !refresh_catalog(state).await {
+        return Some(false);
+    }
+    let after = state.catalog.current();
+    if after.ids() == before.iter().map(String::as_str).collect::<Vec<_>>() {
+        return Some(true);
+    }
+    let name = serving_name(state);
+    if let Err(error) =
+        put_mapping_in_force(state, &configuration(state), name.as_deref(), Absent::Mark)
+    {
+        tracing::warn!(%error, "the tier mapping could not be put back in force");
+    }
+    tracing::info!(
+        account = name.as_deref().unwrap_or("-"),
+        models = after.ids().join(", "),
+        "the model catalog changed; the tier mapping was put back in force against it"
+    );
+    Some(true)
+}
+
 /// The credential of the account serving turns, resolved the same way every
 /// upstream path resolves it.
 ///
@@ -2879,6 +2929,24 @@ fn record_usage(state: &ControlState, params: Option<&Value>) -> Result<Value, P
         .latest_for(&profile.name)
         .map(|measured| measured.snapshot)
         .unwrap_or_default();
+    // A status line states a window's figure and never the provider's word on
+    // it, so a window it replaces passes that word on while it is the same
+    // window (the same reset). Dropping it read a window the provider had
+    // marked as near its limit as one with nothing to say. The endpoint's
+    // reset is RFC 3339 with its fraction cut and the status line's is whole
+    // seconds, so a minute either way is the same reset: the next window of
+    // the same length resets a whole window later.
+    let same_reset = |a: Option<u64>, b: Option<u64>| matches!((a, b), (Some(a), Some(b)) if a.abs_diff(b) <= 60);
+    let mut windows = windows;
+    for new in &mut windows {
+        if let Some(kept) = snapshot.windows.iter().find(|kept| {
+            !kept.is_stale_at(now)
+                && kept.window_minutes == new.window_minutes
+                && same_reset(kept.resets_at, new.resets_at)
+        }) {
+            new.status.clone_from(&kept.status);
+        }
+    }
     snapshot.windows.retain(|kept| {
         !kept.is_stale_at(now)
             && !windows

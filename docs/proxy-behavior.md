@@ -1574,15 +1574,21 @@ visibly wrong, and it corrects on the next one.
 
 ### 7.0 Catalog
 
-#### The catalog is fetched once and held
+#### The catalog is fetched at the start and every six hours
 
-It is fetched at startup, as the serving account, and held for the life of the
-daemon with no TTL.
+It is fetched at startup, as the serving account, and asked for again as the
+same account every six hours (`CATALOG_REFETCH`). A refetch whose ids match the
+list in force changes nothing else. One whose ids differ puts the mapping back
+in force against it the way `config.reload` does, marking a tier the new list
+cannot serve rather than refusing. A failed refetch keeps the list in force.
 
 ##### Why
 
-A mapping validated against it cannot then go stale on its own. A model added
-or withdrawn later is not noticed until something makes the daemon ask again.
+A provider adds a model without telling the daemon. Held for the life of the
+daemon, the list of one that ran for a week did not offer a model released in
+that week, and a defaulted tier substituted for want of its newest model stayed
+on the older one until a restart. Re-applying the mapping only on a changed
+list keeps a refetch from touching a mapping the list gives no reason to touch.
 
 #### A catalog is one account's menu, and one provider's
 
@@ -2109,7 +2115,6 @@ no source. The person holding that message needs the key that undoes it.
 
 ### Not done, on purpose
 
-- No catalog TTL. A switch is what refetches (§7.0).
 - No `[1m]` in a mapped id, and no way to opt into one on the translating path
   (§7.2). `exec` upgrades a plain `--model` to its `[1m]` variant only where the
   serving account relays (`api.md` §2.3).
@@ -2123,8 +2128,8 @@ no source. The person holding that message needs the key that undoes it.
 | `crates/proxy/src/config.rs` | `[tiers]`, `DEFAULT_TIERS`, `[accounts.<name>]`, `cross_account_tiers`, `ClientConfig`, `model_settings`, `check_effort_conflicts` |
 | `crates/proxy/src/policy.rs` | `Snapshot`, `Policy::snapshot_for`: the mapping a turn resolves against |
 | `crates/proxy/src/upstream/relay.rs` | `validated_models`, `validated_tiers`: which tiers the catalog may judge |
-| `crates/proxy/src/control/handler.rs` | `environment_for`, `tiers.set`, `accounts.select`, `config.reload`, `follow_serving_account` |
-| `crates/proxy/src/commands/daemon.rs` | The loop that follows the grant serving turns, every `FOLLOW` or `FOLLOW_RETRY` |
+| `crates/proxy/src/control/handler.rs` | `environment_for`, `tiers.set`, `accounts.select`, `config.reload`, `follow_serving_account`, `refetch_catalog` |
+| `crates/proxy/src/commands/daemon.rs` | The loop that follows the grant serving turns, every `FOLLOW` or `FOLLOW_RETRY`, and the one that refetches the catalog every `CATALOG_REFETCH` |
 | `crates/proxy/src/ingress.rs` | The marked-tier refusal and the window guard |
 | `crates/proxy/src/launch.rs` | `exec`'s `--settings` collision rule and the `[1m]` argument upgrade |
 | `crates/proxy/tests/catalog.rs` | Catalog parsing and visibility |
@@ -2917,16 +2922,21 @@ window where a lookup expects the account's.
 
 #### The plan and subscription status come from the profile endpoint
 
-Asked at most hourly. The organization type gives the plan, and for a max
-organization the rate-limit tier gives the multiplier (`default_claude_max_20x`
-renders `max 20x`). An unrecognized type yields no plan.
+Asked at most hourly. `organization.plan_display_name` gives the plan,
+lowercased (`Ultra` renders `ultra`). Without it, the organization type gives
+the plan, and for a max organization the rate-limit tier gives the multiplier
+(`default_claude_max_20x` renders `max 20x`). An unrecognized type with no
+display name yields no plan.
 `organization.subscription_status` is remembered with the plan. `active`, or
 nothing stated, is silent; any other value is shown verbatim on the account's
 row and in the JSON.
 
 ##### Why
 
-A plan changes on the scale of billing. A cancelled subscription keeps serving
+A plan changes on the scale of billing. The display name is what the
+provider's own client shows, and the provider renamed `max 20x` to Ultra
+without changing the type or the tier, so a plan built from those two named
+the account by a word its owner no longer sees. A cancelled subscription keeps serving
 quota that looks untouched while every turn is refused. Only `active` has been
 observed, and sorting the rest into an invented vocabulary would put words in
 the provider's mouth.

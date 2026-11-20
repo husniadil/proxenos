@@ -1955,7 +1955,9 @@ seconds), and `config_dir`, the session's `CLAUDE_CONFIG_DIR` or absent for the
 stock profile. Files the two windows under the anthropic profile launched from
 that directory, keeping the plan, the credit and every other window of the
 figure already held, as `source: "statusline"`. A held window whose reset has
-passed is dropped rather than given the new figure's age. Returns `recorded` and the
+passed is dropped rather than given the new figure's age. A held window the new
+one replaces passes on its `status` while the two resets are within a minute of
+each other, since the payload states none. Returns `recorded` and the
 `account`, or `recorded: false` with a `detail` where no profile matches or no
 window is current. A figure outside 0 to 100, or a window already reset, is not
 a window.
@@ -1967,6 +1969,13 @@ from, for nothing, and the quota endpoint is the fallback. The profile is
 matched exactly, since a stated stock directory is a different profile (§8.4),
 and a figure filed under a guessed account is another account's quota with a
 fresh age.
+
+The provider's word on a window is asked for at the endpoint and never rides
+the status line. A status line that replaced it with nothing read a window the
+provider had marked as near its limit as one with nothing to say, every time a
+session drew its status line. The minute absorbs the endpoint's reset, whose
+fraction the parse cuts, against the status line's whole seconds. The next
+window of the same length resets a whole window later.
 
 ### `incidents`
 
@@ -2127,10 +2136,10 @@ claude_program = "/opt/homebrew/bin/claude"
 codex_program  = "/opt/homebrew/bin/codex"
 
 [tiers]
-opus   = "gpt-6.1-sol"
+opus   = "gpt-6.2-sol"
 sonnet = "gpt-6.1-terra"
 haiku  = "gpt-6-luna"
-fable  = "gpt-6-astra"
+fable  = "gpt-6.2-astra"
 
 # Optional, one per account, keyed by the name `accounts` lists it under.
 [accounts.spare]
@@ -2229,7 +2238,8 @@ The four tiers, each a model id or a table (below). An omitted tier takes its
 default; a tier written blank is refused.
 
 Each mapped model is checked against the catalog at startup, on
-`accounts.select`, and on `config.reload`. A model the catalog lacks does not stop
+`accounts.select`, on `config.reload`, and when the six-hourly refetch finds a
+changed list (`proxy-behavior.md` §7.0). A model the catalog lacks does not stop
 the daemon:
 
 - A **defaulted** model is replaced with one the account has.
@@ -2459,7 +2469,7 @@ The second provider.
 |---|---|
 | `endpoint` | where a relayed turn goes (`proxy-behavior.md` §9) |
 | `usage` | where that provider states quota for a borrowed grant. Only a grant can ask |
-| `profile` | where it states the plan with its multiplier (`max 20x`); asked beside a quota refresh, at most hourly. A declined answer leaves the plan absent |
+| `profile` | where it states the plan by its display name (`ultra`), or the type with its multiplier (`max 20x`); asked beside a quota refresh, at most hourly. A declined answer leaves the plan absent |
 | `status` | the status page, polled for `incidents` |
 
 #### Why

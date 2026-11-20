@@ -6,6 +6,27 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **Opus defaults to `gpt-6.2-sol` and fable to `gpt-6.2-astra`.** A
+  defaulted opus walks back through `gpt-6.1-sol`, and a defaulted fable
+  through `gpt-6-astra`, so an account whose catalog does not list the 6.2
+  generation keeps the models it had. The fallback catalog names both.
+
+- **The catalog is fetched again every six hours.** It used to be fetched
+  only at the start and on a switch of account, so a daemon running when a
+  model was released did not offer it until a restart. A refetch that finds a
+  changed list puts the tier mapping back in force against it.
+
+- **A status line no longer clears the provider's word on a quota window.**
+  `usage.record` keeps a held window's `status` while the new figure is for
+  the same window, since the client's payload states none. A window the
+  endpoint had marked near its limit read as one with nothing to say each
+  time a session drew its status line.
+
+- **A Claude account's plan is the name the provider's client shows.** The
+  profile's `plan_display_name` is read first, so an account the provider
+  now calls Ultra reads `ultra` where it read `max 20x`. Without the field,
+  the plan is built from the type and the tier as before.
+
 ## [0.38.1]
 
 - **The curated relay list names `claude-fable-5-2`,** at a 1,000,000-token
