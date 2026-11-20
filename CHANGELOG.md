@@ -6,6 +6,8 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.39.2]
+
 - **The GPT-6.2 models get the system prompt as a `developer` message.** For
   `gpt-6.2-astra` and `gpt-6.2-sol` the system prompt opens `input` and
   `instructions` is absent, the way the provider's own Codex client sends it,
