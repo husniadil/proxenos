@@ -6,6 +6,8 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.39.3]
+
 - **The GPT-6.2 models cache the system prompt.** 0.39.2 built the
   `developer` message into the conversation, so every later turn failed to
   match the session before it and opened a new one, and nothing was cached on
