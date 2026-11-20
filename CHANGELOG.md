@@ -6,6 +6,8 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.39.0]
+
 - **Opus defaults to `gpt-6.2-sol` and fable to `gpt-6.2-astra`.** A
   defaulted opus walks back through `gpt-6.1-sol`, and a defaulted fable
   through `gpt-6-astra`, so an account whose catalog does not list the 6.2
