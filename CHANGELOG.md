@@ -6,6 +6,8 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.39.1]
+
 - **Opus defaults to `gpt-6.1-sol` and fable to `gpt-6-astra` again.** The
   GPT-6.2 models place `instructions` after `input`, so the system prompt this
   proxy sends there is never cached: `gpt-6.2-sol` cached nothing across twelve
