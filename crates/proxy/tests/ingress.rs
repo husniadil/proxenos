@@ -1499,6 +1499,49 @@ async fn the_cache_key_is_stable_across_a_conversation() {
     );
 }
 
+/// §2.1 — a model whose system prompt is written as a `developer` item keeps
+/// one session, and so one cache key, across a conversation. Building that
+/// item into the translated input left every later turn unable to match the
+/// session before it, so each turn opened a new session and cached nothing.
+#[tokio::test]
+async fn a_developer_written_system_prompt_keeps_one_session() {
+    let harness = Harness::start(Behavior::Events(vec![
+        json!({ "type": "response.created", "response": { "id": "resp_1" } }),
+        completed(),
+    ]))
+    .await;
+
+    let first = json!({
+        "model": "gpt-6.2-sol",
+        "max_tokens": 512,
+        "system": "Be brief.",
+        "messages": [{ "role": "user", "content": "opening" }],
+    });
+    let _ = harness.post("/v1/messages", first).await.text().await;
+
+    let second = json!({
+        "model": "gpt-6.2-sol",
+        "max_tokens": 512,
+        "system": "Be brief.",
+        "messages": [
+            { "role": "user", "content": "opening" },
+            { "role": "assistant", "content": "reply" },
+            { "role": "user", "content": "next" },
+        ],
+    });
+    let _ = harness.post("/v1/messages", second).await.text().await;
+
+    let sent = harness.upstream.requests();
+    assert_eq!(
+        sent[0]["prompt_cache_key"], sent[1]["prompt_cache_key"],
+        "the second turn opened a new session"
+    );
+    for request in &sent {
+        assert_eq!(request["input"][0]["role"], json!("developer"), "{request}");
+        assert!(request.get("instructions").is_none(), "{request}");
+    }
+}
+
 /// §5 — `count_tokens` is an estimate, uncalibrated *before a session's first
 /// completed request* and calibrated after. Answering from a fresh estimator
 /// every time would leave it permanently uncalibrated however long the session

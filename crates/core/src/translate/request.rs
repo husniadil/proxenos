@@ -71,8 +71,9 @@ pub struct TranslateOptions {
     /// over the prompt above it has to come after it. Same stability
     /// requirement as the lead.
     pub instructions_trailer: Option<String>,
-    /// §2.1 — carry the system prompt as the first `input` item, a
-    /// `developer` message, rather than in `instructions`.
+    /// §2.1 — have the request written with the system prompt as the first
+    /// `input` item, a `developer` message, rather than in `instructions`
+    /// (`ResponsesRequest::on_the_wire`).
     ///
     /// For a model that places `instructions` after `input`, where it is never
     /// part of a cached prefix. Off for every other model, which caches it
@@ -104,19 +105,7 @@ pub fn translate_request(
     request: &MessagesRequest,
     options: &TranslateOptions,
 ) -> ResponsesRequest {
-    // §2.1 — a model that places `instructions` after `input` leaves the
-    // system prompt outside every cached prefix, so for one of those it opens
-    // `input` as a `developer` message instead.
-    let (instructions, system) = match build_instructions(request, options) {
-        Some(text) if options.system_as_developer => (
-            None,
-            Some(InputItem::Message {
-                role: ItemRole::Developer,
-                content: vec![ContentPart::InputText { text }],
-            }),
-        ),
-        text => (text, None),
-    };
+    let instructions = build_instructions(request, options);
 
     ResponsesRequest {
         model: options
@@ -124,9 +113,11 @@ pub fn translate_request(
             .clone()
             .unwrap_or_else(|| request.model.clone()),
         instructions,
-        input: system
-            .into_iter()
-            .chain(request.messages.iter().flat_map(translate_message))
+        system_as_developer: options.system_as_developer,
+        input: request
+            .messages
+            .iter()
+            .flat_map(translate_message)
             .collect(),
         tools: translate_tools(&request.tools, request.tool_choice.as_ref(), options),
         tool_choice: request

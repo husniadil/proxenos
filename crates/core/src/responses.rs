@@ -7,11 +7,16 @@ use serde::Serialize;
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ResponsesRequest {
     pub model: String,
-    /// The system prompt, for a model that keeps `instructions` ahead of
-    /// `input`. For one that places it after, the system prompt opens `input`
-    /// as a `developer` message instead and this is absent (§2.1).
+    /// The system prompt. Held here for every model, so session identity and
+    /// the delta's comparison of non-input fields never see where it is sent;
+    /// `on_the_wire` moves it into `input` for a model that asks (§2.1).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+    /// §2.1 — send `instructions` as the first `input` item, a `developer`
+    /// message, for a model that places `instructions` after `input`. Never
+    /// serialized: it says how this request is written, not what it asks.
+    #[serde(skip)]
+    pub system_as_developer: bool,
     pub input: Vec<InputItem>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolSpec>,
@@ -25,6 +30,37 @@ pub struct ResponsesRequest {
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
+}
+
+impl ResponsesRequest {
+    /// The request as it is written to the backend (§2.1).
+    ///
+    /// For a model that places `instructions` after `input`, a full send opens
+    /// `input` with the system prompt as a `developer` message, and a delta
+    /// carries no system prompt at all: the response it continues already
+    /// holds that message. Every other request is written as it is.
+    ///
+    /// Done here, at the last step, because everything before it (session
+    /// identity, the baseline, the delta's comparison) is defined over the
+    /// conversation with the system prompt outside `input`. Moved any earlier,
+    /// no turn matched the session before it, and every turn opened a new
+    /// session, socket and cache scope (measured: nothing cached).
+    pub fn on_the_wire(&self, delta: bool) -> Self {
+        let mut wire = self.clone();
+        if wire.system_as_developer
+            && let Some(text) = wire.instructions.take()
+            && !delta
+        {
+            wire.input.insert(
+                0,
+                InputItem::Message {
+                    role: ItemRole::Developer,
+                    content: vec![ContentPart::InputText { text }],
+                },
+            );
+        }
+        wire
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

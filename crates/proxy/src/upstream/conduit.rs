@@ -117,11 +117,11 @@ impl Conduit {
                     items,
                     previous_response_id,
                 } => {
-                    let mut delta = request.clone();
+                    let mut delta = request.on_the_wire(true);
                     delta.input = items.to_vec();
                     (delta, Some(previous_response_id.clone()), Sent::Delta)
                 }
-                Upload::Full => (request.clone(), None, Sent::Full),
+                Upload::Full => (request.on_the_wire(false), None, Sent::Full),
             };
 
             tracing::debug!(
@@ -147,7 +147,13 @@ impl Conduit {
                 Err(failure) if failure.reused => {
                     tracing::debug!(error = %failure.error, "the pooled connection had expired");
                     match self
-                        .send_over_websocket(websocket, request, None, None, account)
+                        .send_over_websocket(
+                            websocket,
+                            &request.on_the_wire(false),
+                            None,
+                            None,
+                            account,
+                        )
                         .await
                     {
                         Ok(events) => return Ok((events, Sent::Full)),
@@ -175,7 +181,7 @@ impl Conduit {
         // HTTP is stateless: it always carries the whole conversation.
         let events = self
             .http
-            .stream(request, Some(&self.session_id), account)
+            .stream(&request.on_the_wire(false), Some(&self.session_id), account)
             .await?;
         Ok((events, Sent::Full))
     }
@@ -278,7 +284,10 @@ impl Conduit {
 
         match websocket.connect(Some(&self.session_id), account).await {
             Ok(mut connection) => {
-                if connection.send(request, None, false).await.is_ok()
+                if connection
+                    .send(&request.on_the_wire(false), None, false)
+                    .await
+                    .is_ok()
                     && drained(&mut connection).await
                 {
                     // Re-checked under the lock: a turn may have started

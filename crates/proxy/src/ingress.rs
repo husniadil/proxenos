@@ -920,7 +920,11 @@ async fn messages(
         }
         None => match state
             .transport
-            .stream(&translated, Some(&session.cache_key), account.as_deref())
+            .stream(
+                &translated.on_the_wire(false),
+                Some(&session.cache_key),
+                account.as_deref(),
+            )
             .await
         {
             Ok(events) => {

@@ -23,11 +23,13 @@ fn translate(request: Value) -> Value {
     serde_json::to_value(translated).expect("translation should serialize")
 }
 
-/// §2.1 — for a model that places `instructions` after `input`, the system
-/// prompt opens `input` as a `developer` message, with the operator's own
-/// text around it, and `instructions` is absent.
+/// §2.1 — for a model that places `instructions` after `input`, the request
+/// is translated with the system prompt in `instructions` like any other, so
+/// session identity and the delta never see the difference, and is written to
+/// the backend with it opening `input` as a `developer` message. A delta
+/// carries no system prompt: the response it continues holds it.
 #[test]
-fn a_system_prompt_opens_input_as_a_developer_message_where_asked() {
+fn a_system_prompt_is_written_as_a_developer_message_where_asked() {
     let request: MessagesRequest = serde_json::from_value(json!({
         "model": "gpt-6.2-sol",
         "max_tokens": 1024,
@@ -40,11 +42,19 @@ fn a_system_prompt_opens_input_as_a_developer_message_where_asked() {
         system_as_developer: true,
         ..TranslateOptions::default()
     };
-    let out = serde_json::to_value(translate_request(&request, &options)).unwrap();
-
-    assert!(out.get("instructions").is_none(), "{out}");
+    let translated = translate_request(&request, &options);
     assert_eq!(
-        out["input"],
+        translated.instructions.as_deref(),
+        Some("You are gpt-6.2-sol.\n\nYou are Claude Code."),
+        "translated as any other model"
+    );
+    assert_eq!(translated.input.len(), 1);
+
+    let full = serde_json::to_value(translated.on_the_wire(false)).unwrap();
+    assert!(full.get("instructions").is_none(), "{full}");
+    assert!(full.get("system_as_developer").is_none(), "{full}");
+    assert_eq!(
+        full["input"],
         json!([
             {
                 "type": "message",
@@ -62,20 +72,15 @@ fn a_system_prompt_opens_input_as_a_developer_message_where_asked() {
         ])
     );
 
-    // No system prompt and no operator text is no developer message.
-    let bare: MessagesRequest = serde_json::from_value(json!({
-        "model": "gpt-6.2-sol",
-        "max_tokens": 1024,
-        "messages": [{ "role": "user", "content": "hello" }],
-    }))
-    .unwrap();
-    let options = TranslateOptions {
-        system_as_developer: true,
-        ..TranslateOptions::default()
-    };
-    let out = serde_json::to_value(translate_request(&bare, &options)).unwrap();
-    assert_eq!(out["input"].as_array().map(Vec::len), Some(1), "{out}");
-    assert_eq!(out["input"][0]["role"], json!("user"));
+    let delta = serde_json::to_value(translated.on_the_wire(true)).unwrap();
+    assert!(delta.get("instructions").is_none(), "{delta}");
+    assert_eq!(delta["input"][0]["role"], json!("user"), "{delta}");
+
+    // Any other model is written as it was translated.
+    let plain = translate_request(&request, &TranslateOptions::default());
+    let wire = serde_json::to_value(plain.on_the_wire(false)).unwrap();
+    assert_eq!(wire["instructions"], json!("You are Claude Code."));
+    assert_eq!(wire["input"][0]["role"], json!("user"));
 }
 
 /// §2.1 — the system prompt maps to `instructions`, never to an input item.

@@ -62,6 +62,11 @@ model measured to place `instructions` after `input` (`gpt-6.2-astra` and
 message, and `instructions` is absent. The operator's lead, budget and trailer
 go with it either way.
 
+The move happens as the request is written, after session identity, the
+baseline and the delta's comparison are settled with the system prompt in
+`instructions`. A full send carries the `developer` message. A delta carries
+no system prompt, since the response it continues holds that message.
+
 ##### Why
 
 The backend once rejected system-role and developer-role messages inside
@@ -71,6 +76,13 @@ own Codex client now sends its base instructions as a `developer` message
 opening `input`, to the same backend, and sends no `instructions` at all. Only
 the models that need it move, so a backend still refusing the role refuses a
 tier that names one of them and nothing a default serves.
+
+Built into the translated input, the `developer` message made every later turn
+fail to match the session before it, because session identity is derived from
+the input without the system prompt. Each turn then opened a new session,
+socket and cache scope, and measured over the daemon on 2026-11-20,
+`gpt-6.2-sol` cached nothing on any turn. Sent straight to the backend, the same
+`developer` message cached over HTTP and over a WebSocket delta alike.
 
 #### No tier defaults to a model that leaves `instructions` out of the cache
 

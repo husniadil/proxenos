@@ -6,6 +6,12 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **The GPT-6.2 models cache the system prompt.** 0.39.2 built the
+  `developer` message into the conversation, so every later turn failed to
+  match the session before it and opened a new one, and nothing was cached on
+  any turn. The message is now written only as the request goes out, on a full
+  send, and session matching works as for every other model.
+
 ## [0.39.2]
 
 - **The GPT-6.2 models get the system prompt as a `developer` message.** For
