@@ -23,6 +23,61 @@ fn translate(request: Value) -> Value {
     serde_json::to_value(translated).expect("translation should serialize")
 }
 
+/// §2.1 — for a model that places `instructions` after `input`, the system
+/// prompt opens `input` as a `developer` message, with the operator's own
+/// text around it, and `instructions` is absent.
+#[test]
+fn a_system_prompt_opens_input_as_a_developer_message_where_asked() {
+    let request: MessagesRequest = serde_json::from_value(json!({
+        "model": "gpt-6.2-sol",
+        "max_tokens": 1024,
+        "system": "You are Claude Code.",
+        "messages": [{ "role": "user", "content": "hello" }],
+    }))
+    .unwrap();
+    let options = TranslateOptions {
+        instructions_lead: Some("You are gpt-6.2-sol.".to_owned()),
+        system_as_developer: true,
+        ..TranslateOptions::default()
+    };
+    let out = serde_json::to_value(translate_request(&request, &options)).unwrap();
+
+    assert!(out.get("instructions").is_none(), "{out}");
+    assert_eq!(
+        out["input"],
+        json!([
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [{
+                    "type": "input_text",
+                    "text": "You are gpt-6.2-sol.\n\nYou are Claude Code.",
+                }],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{ "type": "input_text", "text": "hello" }],
+            },
+        ])
+    );
+
+    // No system prompt and no operator text is no developer message.
+    let bare: MessagesRequest = serde_json::from_value(json!({
+        "model": "gpt-6.2-sol",
+        "max_tokens": 1024,
+        "messages": [{ "role": "user", "content": "hello" }],
+    }))
+    .unwrap();
+    let options = TranslateOptions {
+        system_as_developer: true,
+        ..TranslateOptions::default()
+    };
+    let out = serde_json::to_value(translate_request(&bare, &options)).unwrap();
+    assert_eq!(out["input"].as_array().map(Vec::len), Some(1), "{out}");
+    assert_eq!(out["input"][0]["role"], json!("user"));
+}
+
 /// §2.1 — the system prompt maps to `instructions`, never to an input item.
 #[test]
 fn system_prompt_becomes_instructions() {

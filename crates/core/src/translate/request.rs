@@ -71,6 +71,13 @@ pub struct TranslateOptions {
     /// over the prompt above it has to come after it. Same stability
     /// requirement as the lead.
     pub instructions_trailer: Option<String>,
+    /// §2.1 — carry the system prompt as the first `input` item, a
+    /// `developer` message, rather than in `instructions`.
+    ///
+    /// For a model that places `instructions` after `input`, where it is never
+    /// part of a cached prefix. Off for every other model, which caches it
+    /// where it is.
+    pub system_as_developer: bool,
     /// §2.7 — the efforts this model accepts, from the catalog.
     ///
     /// Empty means unknown, and unknown means leave the request alone. A
@@ -97,7 +104,19 @@ pub fn translate_request(
     request: &MessagesRequest,
     options: &TranslateOptions,
 ) -> ResponsesRequest {
-    let instructions = build_instructions(request, options);
+    // §2.1 — a model that places `instructions` after `input` leaves the
+    // system prompt outside every cached prefix, so for one of those it opens
+    // `input` as a `developer` message instead.
+    let (instructions, system) = match build_instructions(request, options) {
+        Some(text) if options.system_as_developer => (
+            None,
+            Some(InputItem::Message {
+                role: ItemRole::Developer,
+                content: vec![ContentPart::InputText { text }],
+            }),
+        ),
+        text => (text, None),
+    };
 
     ResponsesRequest {
         model: options
@@ -105,10 +124,9 @@ pub fn translate_request(
             .clone()
             .unwrap_or_else(|| request.model.clone()),
         instructions,
-        input: request
-            .messages
-            .iter()
-            .flat_map(translate_message)
+        input: system
+            .into_iter()
+            .chain(request.messages.iter().flat_map(translate_message))
             .collect(),
         tools: translate_tools(&request.tools, request.tool_choice.as_ref(), options),
         tool_choice: request
@@ -174,7 +192,7 @@ fn nearest_supported(chosen: Effort, supported: &[Effort]) -> Effort {
 /// §2.1 — the system prompt, and nothing else.
 ///
 /// A message whose role is neither user nor assistant is *not* folded in here.
-/// It cannot be an input item under its own role — the backend rejects system
+/// It is not an input item under its own role — the backend once rejected system
 /// and developer roles there — so it is carried as a `user` item instead.
 /// Folding it here looked equivalent and was not: the client attaches per-turn
 /// content that way, so `instructions` changed every turn, and a delta requires
@@ -346,7 +364,9 @@ fn translate_message(message: &Message) -> Vec<InputItem> {
     for block in message.content.blocks() {
         match block {
             ContentBlock::Text { text } => match role {
-                ItemRole::User => parts.push(ContentPart::InputText { text }),
+                ItemRole::User | ItemRole::Developer => {
+                    parts.push(ContentPart::InputText { text });
+                }
                 // §3.3 — one text block is one upstream message, which is how
                 // the baseline holds it; joined, the replay never matches.
                 ItemRole::Assistant => {

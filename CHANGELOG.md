@@ -6,6 +6,12 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **The GPT-6.2 models get the system prompt as a `developer` message.** For
+  `gpt-6.2-astra` and `gpt-6.2-sol` the system prompt opens `input` and
+  `instructions` is absent, the way the provider's own Codex client sends it,
+  since those models place `instructions` after `input` and never cache it
+  there. Every other model keeps `instructions`. No tier defaults to 6.2 yet.
+
 ## [0.39.1]
 
 - **Opus defaults to `gpt-6.1-sol` and fable to `gpt-6-astra` again.** The

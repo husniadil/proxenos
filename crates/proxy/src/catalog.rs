@@ -722,3 +722,18 @@ impl CatalogSource {
         true
     }
 }
+
+/// The models measured to place `instructions` after `input` (§2.1).
+///
+/// For these the system prompt in `instructions` is never in a cached prefix:
+/// `gpt-6.2-sol` cached none of a 15,000-token system prompt across twelve
+/// turns, and cached the same text carried in `input` (measured 2026-11-20).
+/// Listed by id rather than inferred from a version, since only a measurement
+/// says which models do it.
+const INSTRUCTIONS_AFTER_INPUT: [&str; 2] = ["gpt-6.2-astra", "gpt-6.2-sol"];
+
+/// Whether this model's system prompt rides as a `developer` input item
+/// rather than in `instructions` (§2.1).
+pub fn system_as_developer(model: &str) -> bool {
+    INSTRUCTIONS_AFTER_INPUT.contains(&model)
+}

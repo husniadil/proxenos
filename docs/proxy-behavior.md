@@ -54,14 +54,23 @@ used the sonnet tier's model. An unmapped or unservable haiku tier breaks both.
 
 ### 2.1 Instructions
 
-#### The system prompt maps to `instructions`, never to `input`
+#### The system prompt maps to `instructions`, or opens `input` for a model that trails it
 
-The top-level `system` field becomes the Responses `instructions` field.
+The top-level `system` field becomes the Responses `instructions` field. For a
+model measured to place `instructions` after `input` (`gpt-6.2-astra` and
+`gpt-6.2-sol`), it becomes the first `input` item instead, a `developer`
+message, and `instructions` is absent. The operator's lead, budget and trailer
+go with it either way.
 
 ##### Why
 
-The backend rejects system-role and developer-role messages inside `input`
-(`400 System messages are not allowed`, observed verbatim).
+The backend once rejected system-role and developer-role messages inside
+`input` (`400 System messages are not allowed`, observed verbatim), which is
+why `instructions` carries the system prompt everywhere else. The provider's
+own Codex client now sends its base instructions as a `developer` message
+opening `input`, to the same backend, and sends no `instructions` at all. Only
+the models that need it move, so a backend still refusing the role refuses a
+tier that names one of them and nothing a default serves.
 
 #### No tier defaults to a model that leaves `instructions` out of the cache
 
@@ -76,9 +85,11 @@ three four-turn conversations each, a ~15,000-token constant prefix: with the
 prefix as the system prompt, `gpt-6.1-sol` read 14,848 tokens from the cache
 on seven of nine later turns and `gpt-6.2-sol` read none on any. With the same
 prefix as the first user message, `gpt-6.2-sol` read 14,720 on eight of nine.
-A default on 6.2 sends a whole system prompt uncached on every turn. Moving the
-system prompt into `input` as a `user` item would cache, and weakens it as an
-instruction, which is unmeasured (`roadmap.md`, Next).
+A default on 6.2 sends a whole system prompt uncached on every turn. The tools
+are cached on 6.2 where they are: a ~17,000-token tool list was read from the
+cache on five of six later turns. The `developer` carriage above is what 6.2
+gets instead, and a default moves to 6.2 once it is measured to cache there
+(`roadmap.md`, Next).
 
 #### A message with any other role is carried as a `user` item
 

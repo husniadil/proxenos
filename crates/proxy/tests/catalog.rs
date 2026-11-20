@@ -891,3 +891,15 @@ fn an_empty_catalog_explains_itself_when_it_marks() {
     let reason = tiers[0].missing.as_deref().expect("marked");
     assert!(reason.contains("client_version"), "{reason}");
 }
+
+/// §2.1 — only the models measured to place `instructions` after `input`
+/// carry the system prompt as a `developer` item. The shipped defaults keep
+/// `instructions`, which they cache.
+#[test]
+fn only_the_measured_models_carry_the_system_prompt_in_input() {
+    assert!(proxenos::catalog::system_as_developer("gpt-6.2-sol"));
+    assert!(proxenos::catalog::system_as_developer("gpt-6.2-astra"));
+    for model in ["gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-terra", "gpt-6-luna"] {
+        assert!(!proxenos::catalog::system_as_developer(model), "{model}");
+    }
+}

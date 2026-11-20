@@ -7,8 +7,9 @@ use serde::Serialize;
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ResponsesRequest {
     pub model: String,
-    /// The system prompt. It never appears as an input item — the backend
-    /// rejects system and developer roles inside `input`.
+    /// The system prompt, for a model that keeps `instructions` ahead of
+    /// `input`. For one that places it after, the system prompt opens `input`
+    /// as a `developer` message instead and this is absent (§2.1).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
     pub input: Vec<InputItem>,
@@ -214,6 +215,9 @@ impl CallOutput {
 pub enum ItemRole {
     User,
     Assistant,
+    /// The system prompt's role, for a model that places `instructions` after
+    /// `input`. Only the first item ever carries it (§2.1).
+    Developer,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]

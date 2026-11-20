@@ -807,6 +807,7 @@ async fn messages(
         instructions_lead: state.instructions.lead(&answering),
         instructions_budget: state.instructions.budget().map(str::to_owned),
         instructions_trailer: state.instructions.trailer(),
+        system_as_developer: crate::catalog::system_as_developer(&answering),
         model: upstream_model,
         discovered_tools: session.discovered(),
         prompt_cache_key: Some(session.cache_key.clone()),

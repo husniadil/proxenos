@@ -276,6 +276,46 @@ async fn the_request_is_translated_and_the_tier_is_mapped() {
     assert_eq!(sent[0]["stream"], json!(true));
 }
 
+/// §2.1 — a model that places `instructions` after `input` is sent the system
+/// prompt as the first input item, a `developer` message, and no
+/// `instructions`.
+#[tokio::test]
+async fn a_model_that_trails_instructions_gets_the_system_prompt_in_input() {
+    let harness = Harness::start(Behavior::Events(vec![
+        json!({ "type": "response.created", "response": { "id": "resp_1" } }),
+        completed(),
+    ]))
+    .await;
+
+    let response = harness
+        .post(
+            "/v1/messages",
+            json!({
+                "model": "gpt-6.2-sol",
+                "max_tokens": 512,
+                "stream": true,
+                "system": "Be brief.",
+                "messages": [{ "role": "user", "content": "hi" }],
+            }),
+        )
+        .await;
+    response.text().await.unwrap();
+
+    let sent = harness.upstream.requests();
+    assert_eq!(sent[0]["model"], json!("gpt-6.2-sol"));
+    assert!(sent[0].get("instructions").is_none(), "{}", sent[0]);
+    assert_eq!(sent[0]["input"][0]["role"], json!("developer"));
+    assert!(
+        sent[0]["input"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Be brief."),
+        "{}",
+        sent[0]
+    );
+    assert_eq!(sent[0]["input"][1]["role"], json!("user"));
+}
+
 /// A tool round trip end to end.
 #[tokio::test]
 async fn a_tool_call_survives_the_round_trip() {

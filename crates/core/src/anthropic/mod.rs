@@ -164,8 +164,8 @@ pub struct Message {
 pub enum Role {
     User,
     Assistant,
-    /// Anything else. The backend rejects system and developer roles inside
-    /// `input`, so these are carried as a `user` item rather than folded into
+    /// Anything else. The backend once rejected system and developer roles
+    /// inside `input`, so these are carried as a `user` item rather than folded into
     /// `instructions` — see `docs/proxy-behavior.md` §2.1.
     #[serde(other)]
     Other,
