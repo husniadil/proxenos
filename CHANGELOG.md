@@ -6,6 +6,8 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+## [0.40.0]
+
 - **Opus defaults to `gpt-6.2-sol` and fable to `gpt-6.2-astra`.** With the
   system prompt written as a `developer` message (0.39.3), both read it from the
   cache on every later turn measured over the daemon, a 32,000-token prompt and
