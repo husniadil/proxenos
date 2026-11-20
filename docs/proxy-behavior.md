@@ -63,6 +63,23 @@ The top-level `system` field becomes the Responses `instructions` field.
 The backend rejects system-role and developer-role messages inside `input`
 (`400 System messages are not allowed`, observed verbatim).
 
+#### No tier defaults to a model that leaves `instructions` out of the cache
+
+The GPT-6.2 models are served when a tier names them, and no tier defaults to
+them.
+
+##### Why
+
+From GPT-6.2 the backend places `instructions` after `input`, so the system
+prompt is never part of a cached prefix. Measured 2026-11-20 over this proxy,
+three four-turn conversations each, a ~15,000-token constant prefix: with the
+prefix as the system prompt, `gpt-6.1-sol` read 14,848 tokens from the cache
+on seven of nine later turns and `gpt-6.2-sol` read none on any. With the same
+prefix as the first user message, `gpt-6.2-sol` read 14,720 on eight of nine.
+A default on 6.2 sends a whole system prompt uncached on every turn. Moving the
+system prompt into `input` as a `user` item would cache, and weakens it as an
+instruction, which is unmeasured (`roadmap.md`, Next).
+
 #### A message with any other role is carried as a `user` item
 
 A conversation message whose role is neither `user` nor `assistant` becomes a

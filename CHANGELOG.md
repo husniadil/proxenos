@@ -6,6 +6,13 @@ in [`docs/api.md`](docs/api.md) §6.
 
 ## [Unreleased]
 
+- **Opus defaults to `gpt-6.1-sol` and fable to `gpt-6-astra` again.** The
+  GPT-6.2 models place `instructions` after `input`, so the system prompt this
+  proxy sends there is never cached: `gpt-6.2-sol` cached nothing across twelve
+  measured turns where `gpt-6.1-sol` cached a 15,000-token prefix. 0.39.0's
+  defaults sent a whole system prompt uncached on every turn. Both 6.2 models
+  stay in the catalog and are served when a tier names them.
+
 ## [0.39.0]
 
 - **Opus defaults to `gpt-6.2-sol` and fable to `gpt-6.2-astra`.** A

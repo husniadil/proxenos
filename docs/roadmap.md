@@ -51,6 +51,15 @@ Named, never numbered: twice a numbered intention shipped as something else,
 and a roadmap that misnames a released version is read as a record and is wrong
 as one. Intended, not committed.
 
+**A system prompt the GPT-6.2 models cache.** Those models place
+`instructions` after `input`, so the system prompt is never cached there
+(`proxy-behavior.md` §2.1), and no tier defaults to them. Carrying it as the
+first `user` item caches (measured), at an unmeasured cost to how firmly the
+model follows it, and whether `tools` moved as well is not measured. **Done
+when** a carriage for 6.2 caches the system prompt and the tools, an eval shows
+instruction following no worse than `instructions` on 6.1, and 6.2 can be a
+default again.
+
 **Package-manager routes.** There is no Homebrew tap and no container image;
 `install.sh`, the release archives and `cargo install` are the install routes. **Done when** either installs a release binary that `doctor`
 answers from.

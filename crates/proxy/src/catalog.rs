@@ -377,7 +377,7 @@ impl Catalog {
     /// Replace defaulted models this account cannot see.
     ///
     /// A shipped default is a guess about an account this proxy has never seen.
-    /// `gpt-6.2-sol` is plan-gated and absent from a free account's catalog, so
+    /// `gpt-6.1-sol` is plan-gated and absent from a free account's catalog, so
     /// a default naming it would refuse to start for most people — and a
     /// default that cannot start is worse than no default. The same happens
     /// whenever a model is renamed or retired out from under a released binary.

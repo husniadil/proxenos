@@ -631,13 +631,14 @@ fn a_defaulted_tier_falls_back_through_its_generations_then_the_tier_below() {
     without_newest_terra.substitute_unavailable_defaults(&mut tiers);
     assert_eq!(tiers[0].model, "gpt-5.6-terra", "the terra one step back");
 
-    // A paid account whose catalog has not listed the 6.2 generation keeps
-    // fable and opus on the astra and the sol it had.
-    let without_six_two = Catalog::parse(
+    // An account whose catalog lists the 6.2 generation is not moved onto it
+    // by default: those models leave `instructions` out of the cached prefix.
+    let with_six_two = Catalog::parse(
         r#"{"data":[
+            {"id":"gpt-6.2-astra","is_visible":true},
+            {"id":"gpt-6.2-sol","is_visible":true},
             {"id":"gpt-6-astra","is_visible":true},
-            {"id":"gpt-6.1-sol","is_visible":true},
-            {"id":"gpt-6-sol","is_visible":true}
+            {"id":"gpt-6.1-sol","is_visible":true}
         ]}"#,
         SHIPPING,
     )
@@ -646,7 +647,7 @@ fn a_defaulted_tier_falls_back_through_its_generations_then_the_tier_below() {
         .resolve(proxenos::config::CrossAccountTiers::Refused)
         .unwrap();
     tiers.retain(|tier| tier.tier == "fable" || tier.tier == "opus");
-    without_six_two.substitute_unavailable_defaults(&mut tiers);
+    with_six_two.substitute_unavailable_defaults(&mut tiers);
     let model = |name: &str| {
         tiers
             .iter()
@@ -654,8 +655,8 @@ fn a_defaulted_tier_falls_back_through_its_generations_then_the_tier_below() {
             .map(|tier| tier.model.clone())
             .unwrap()
     };
-    assert_eq!(model("fable"), "gpt-6-astra", "the astra one step back");
-    assert_eq!(model("opus"), "gpt-6.1-sol", "the sol one step back");
+    assert_eq!(model("fable"), "gpt-6-astra", "not the 6.2 astra");
+    assert_eq!(model("opus"), "gpt-6.1-sol", "not the 6.2 sol");
 }
 
 /// A model the operator stated is never substituted. They may know something
